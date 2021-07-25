@@ -1,8 +1,6 @@
-use byteorder::{BigEndian, WriteBytesExt};
 use eventio::fluentd::{Entry, ForwardMode};
 use serde_bytes::ByteBuf;
 use std::collections::HashMap;
-use std::mem::size_of;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -97,70 +95,6 @@ impl SizedForwardMode {
 
         let mut record = HashMap::new();
         record.insert(key.into(), ByteBuf::from(value));
-        let entry = Entry { time, record };
-        self.message.entries.push(entry);
-        Ok(())
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if there is no more space in `self.message` for the new
-    /// packet.
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_packet(
-        &mut self,
-        time: u64,
-        key: &str,
-        payload: &[u8],
-        src_ip: u32,
-        dst_ip: u32,
-        src_port: u16,
-        dst_port: u16,
-        proto: u8,
-    ) -> Result<(), SerializationError> {
-        if self.message.entries.len() == 15 || self.message.entries.len() == (1 << 16) - 1 {
-            self.size += 2;
-        } else if self.message.entries.len() == (1 << 32) - 1 {
-            return Err(SerializationError::TooLong);
-        }
-        let serialized_key_len = match msgpack_str_len(key.len()) {
-            Some(len) => len,
-            None => return Err(SerializationError::TooLong),
-        };
-        let serialized_payload_len = match msgpack_bin_len(payload.len()) {
-            Some(len) => len,
-            None => return Err(SerializationError::TooLong),
-        };
-        self.size += msgpack_uint_len(time) + 2 + serialized_key_len + serialized_payload_len;
-
-        let src_key = "src".to_string();
-        let dst_key = "dst".to_string();
-        let src_port_key = "sport".to_string();
-        let dst_port_key = "dport".to_string();
-        let proto_key = "proto".to_string();
-        self.size += 26 + 23;
-
-        let mut record = HashMap::new();
-        record.insert(key.into(), ByteBuf::from(payload));
-        let mut buf = Vec::with_capacity(size_of::<u32>());
-        buf.write_u32::<BigEndian>(src_ip)
-            .expect("no I/O error from Vec");
-        record.insert(src_key, ByteBuf::from(buf));
-        let mut buf = Vec::with_capacity(size_of::<u32>());
-        buf.write_u32::<BigEndian>(dst_ip)
-            .expect("no I/O error from Vec");
-        record.insert(dst_key, ByteBuf::from(buf));
-        let mut buf = Vec::with_capacity(size_of::<u16>());
-        buf.write_u16::<BigEndian>(src_port)
-            .expect("no I/O error from Vec");
-        record.insert(src_port_key, ByteBuf::from(buf));
-        let mut buf = Vec::with_capacity(size_of::<u16>());
-        buf.write_u16::<BigEndian>(dst_port)
-            .expect("no I/O error from Vec");
-        record.insert(dst_port_key, ByteBuf::from(buf));
-        let mut buf = Vec::with_capacity(size_of::<u8>());
-        buf.write_u8(proto).expect("no I/O error from Vec");
-        record.insert(proto_key, ByteBuf::from(buf));
         let entry = Entry { time, record };
         self.message.entries.push(entry);
         Ok(())
@@ -269,16 +203,6 @@ mod tests {
         assert_eq!(m.serialized_len(), buf.len());
 
         m.push_raw(2, "raw", b"1234567890").unwrap();
-        let mut buf = Vec::new();
-        m.message.serialize(&mut Serializer::new(&mut buf)).unwrap();
-        assert_eq!(m.serialized_len(), buf.len());
-    }
-
-    #[test]
-    fn len_packet() {
-        let mut m = SizedForwardMode::default();
-        m.push_packet(1, "raw", b"1234567890", 1, 2, 3, 4, 5)
-            .unwrap();
         let mut buf = Vec::new();
         m.message.serialize(&mut Serializer::new(&mut buf)).unwrap();
         assert_eq!(m.serialized_len(), buf.len());
