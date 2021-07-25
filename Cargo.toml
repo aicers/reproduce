@@ -1,7 +1,6 @@
 [package]
 name = "reproduce"
 version = "0.10.0"
-authors = ["Min Kim <msk@dolbo.net>"]
 edition = "2018"
 
 [dependencies]
