@@ -140,6 +140,7 @@ impl Controller {
                             break;
                         }
                         msg.clear();
+                        buf.clear();
                         msg.set_tag("REproduce".to_string())?;
                     }
 
