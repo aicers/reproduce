@@ -230,13 +230,13 @@ dependencies = [
 
 [[package]]
 name = "eventio"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4da9a7dde9f62b9bee61e7183c626087ee4fdbcd3fa4531a3909108ee9c7c68"
+checksum = "8761f059d67843081657ccee7d10148f59aeddb932f8aea6281a76fa1505979a"
 dependencies = [
  "crossbeam-channel",
  "kafka",
- "nom",
+ "nom 7.0.0",
  "pcap-parser",
  "rmp-serde",
  "serde",
@@ -355,6 +355,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "minimal-lexical"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6595bb28ed34f43c3fe088e48f6cfb2e033cab45f25a5384d5fdf564fbc8c4b2"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -391,6 +397,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nom"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ffd9d26838a953b4af82cbeb9f1592c6798916983959be223a7124e992742c1"
+dependencies = [
+ "memchr",
+ "minimal-lexical",
+ "version_check",
+]
+
+[[package]]
 name = "num-integer"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -423,7 +440,7 @@ checksum = "b02dbff869a341d90be2efb64dd4d61681f7e981e07c5f1483d5e72ce4d5cf9a"
 dependencies = [
  "circular",
  "cookie-factory",
- "nom",
+ "nom 6.2.1",
  "rusticata-macros",
 ]
 
@@ -574,7 +591,7 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8db3e42c9a4a9479e121c66d4925d15a87734f6fa37f1df0434708718d316ce"
 dependencies = [
- "nom",
+ "nom 6.2.1",
 ]
 
 [[package]]
