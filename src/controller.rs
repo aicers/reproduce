@@ -6,6 +6,7 @@ use serde::Serialize;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::str;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -13,6 +14,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{error, info};
 use walkdir::WalkDir;
 
 const KAFKA_BUFFER_SAFETY_GAP: usize = 1024;
@@ -49,22 +51,22 @@ impl Controller {
             let mut files = files_in_dir(&self.config.input, &self.config.file_prefix, &processed);
 
             if files.is_empty() {
-                if self.config.mode_polling_dir {
+                if self.config.mode_polling_dir.is_set() {
                     thread::sleep(Duration::from_millis(10_000));
                     continue;
                 }
-                eprintln!("ERROR: no input file");
+                error!("ERROR: no input file");
                 break;
             }
 
             files.sort_unstable();
             for file in files {
-                println!("{:?}", file);
+                info!("{:?}", file);
                 self.run_single(file.as_path(), producer)?;
                 processed.push(file);
             }
 
-            if !self.config.mode_polling_dir {
+            if !self.config.mode_polling_dir.is_set() {
                 break;
             }
         }
@@ -112,53 +114,83 @@ impl Controller {
         let mut buf: Vec<u8> = Vec::new();
         let pattern_file = self.config.pattern_file.to_string();
 
-        match input_type {
-            InputType::Log => {
-                let (mut converter, log_file) = log_converter(filename, &pattern_file)
-                    .map_err(|e| anyhow!("failed to set the converter: {}", e))?;
-                let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(offset);
-                while running.load(Ordering::SeqCst) {
-                    let line = match lines.next() {
-                        Some(Ok(line)) => line,
-                        Some(Err(e)) => {
-                            eprintln!("ERROR: failed to convert input data: {}", e);
-                            break;
-                        }
-                        None => {
-                            if self.config.mode_grow && !self.config.mode_polling_dir {
-                                thread::sleep(Duration::from_millis(3_000));
-                                continue;
+        loop {
+            match input_type {
+                InputType::Log => {
+                    let (mut converter, log_file) = log_converter(filename, &pattern_file)
+                        .map_err(|e| anyhow!("failed to set the converter: {}", e))?;
+                    let created = log_file.metadata().map_or(SystemTime::now(), |m| {
+                        m.created().unwrap_or_else(|_| SystemTime::now())
+                    });
+                    let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(offset);
+                    while running.load(Ordering::SeqCst) {
+                        let line = match lines.next() {
+                            Some(Ok(line)) => {
+                                if self.config.zeek_flag.is_set() {
+                                    if let Ok(s) = str::from_utf8(&line) {
+                                        if s.starts_with('#') {
+                                            continue;
+                                        }
+                                        s.replace(',', ";").replace('\t', ",").into_bytes()
+                                    } else {
+                                        line
+                                    }
+                                } else {
+                                    line
+                                }
                             }
-                            break;
+                            Some(Err(e)) => {
+                                error!("ERROR: failed to convert input data: {}", e);
+                                break;
+                            }
+                            // if the file is rotated, lines.next() will return None infintely
+                            None => {
+                                if is_rotated(filename, created) {
+                                    break;
+                                }
+                                if self.config.mode_grow.is_set()
+                                    && !self.config.mode_polling_dir.is_set()
+                                {
+                                    thread::sleep(Duration::from_millis(3_000));
+                                    continue;
+                                }
+                                break;
+                            }
+                        };
+                        if msg.serialized_len() + line.len()
+                            >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
+                        {
+                            msg.message.serialize(&mut Serializer::new(&mut buf))?;
+                            if producer.produce(buf.as_slice(), true).is_err() {
+                                break;
+                            }
+                            msg.clear();
+                            buf.clear();
+                            msg.set_tag("REproduce".to_string())?;
                         }
-                    };
-                    if msg.serialized_len() + line.len()
-                        >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
-                    {
-                        msg.message.serialize(&mut Serializer::new(&mut buf))?;
-                        if producer.produce(buf.as_slice(), true).is_err() {
-                            break;
-                        }
-                        msg.clear();
-                        buf.clear();
-                        msg.set_tag("REproduce".to_string())?;
-                    }
 
-                    self.seq_no += 1;
-                    if converter.convert(self.event_id(), &line, &mut msg).is_err() {
-                        // TODO: error handling for conversion failure
-                        report.skip(line.len());
-                    }
-                    conv_cnt += 1;
-                    report.process(line.len());
-                    if self.config.count_sent != 0 && conv_cnt >= self.config.count_sent {
-                        break;
+                        self.seq_no += 1;
+                        if converter.convert(self.event_id(), &line, &mut msg).is_err() {
+                            // TODO: error handling for conversion failure
+                            report.skip(line.len());
+                        }
+                        conv_cnt += 1;
+                        report.process(line.len());
+                        if self.config.count_sent != 0 && conv_cnt >= self.config.count_sent {
+                            break;
+                        }
                     }
                 }
+                InputType::Dir => {
+                    error!("ERROR: invalide input type: {:?}", input_type);
+                }
             }
-            InputType::Dir => {
-                eprintln!("ERROR: invalide input type: {:?}", input_type);
+            if self.config.mode_grow.is_set() {
+                error!("ERROR: file not found. Waiting ...");
+                thread::sleep(Duration::from_millis(3_000));
+                continue;
             }
+            break;
         }
 
         if !msg.is_empty() {
@@ -169,12 +201,12 @@ impl Controller {
             &(self.config.input.clone() + "_" + &self.config.offset_prefix),
             offset + conv_cnt,
         ) {
-            eprintln!("WARNING: cannot write to offset file: {}", e);
+            error!("WARNING: cannot write to offset file: {}", e);
         }
 
         #[allow(clippy::cast_possible_truncation)] // value never exceeds 0x00ff_ffff
         if let Err(e) = report.end(((self.seq_no - 1) & 0x00ff_ffff) as u32) {
-            eprintln!("WARNING: cannot write report: {}", e);
+            error!("WARNING: cannot write report: {}", e);
         }
         Ok(())
     }
@@ -196,6 +228,27 @@ impl Controller {
     fn get_seq_no(&self, num: usize) -> usize {
         (self.seq_no + num) & 0x00ff_ffff
     }
+}
+
+/// This function can not detect following replacement:
+///     cp <another-file> <target-file>
+/// The target file is replaced buf it preserve inode number.
+fn is_rotated(path: &Path, created: SystemTime) -> bool {
+    /*
+    use metadata() to detect if file is removed:
+    - lines.next() will return None at the end of file.
+      And also when it removed by log rotator, it still returns None.
+
+    use created() to detect if file is replaced.
+    - metadata() will return error if it's not exist. But the file is replaced in the sleep duration,
+      metadata() function can not detect it too.
+    */
+    if let Ok(meta) = Path::new(path).metadata() {
+        if created == meta.created().expect("created") {
+            return false;
+        }
+    }
+    true
 }
 
 fn files_in_dir(path: &str, prefix: &str, skip: &[PathBuf]) -> Vec<PathBuf> {
@@ -251,7 +304,7 @@ fn read_offset(filename: &str) -> usize {
         let mut content = String::new();
         if f.read_to_string(&mut content).is_ok() {
             if let Ok(offset) = content.parse() {
-                println!("Offset file exists. Skipping {} entries.", offset);
+                info!("Offset file exists. Skipping {} entries.", offset);
                 return offset;
             }
         }
@@ -281,44 +334,54 @@ fn matcher(pattern_file: &str) -> Option<Matcher> {
 
 fn log_converter<P: AsRef<Path>>(input: P, pattern_file: &str) -> Result<(Converter, File)> {
     let matcher = matcher(pattern_file);
-    let log_file = File::open(input.as_ref())?;
-    println!("input={:?}, input type=LOG", input.as_ref());
-    if matcher.is_some() {
-        println!("pattern file={}", pattern_file);
+    loop {
+        match File::open(input.as_ref()) {
+            Ok(log_file) => {
+                info!("input={:?}, input type=LOG", input.as_ref());
+                if matcher.is_some() {
+                    info!("pattern file={}", pattern_file);
+                }
+                return Ok((Converter::new(matcher), log_file));
+            }
+            Err(e) => {
+                error!("ERROR: {}", e);
+                thread::sleep(Duration::from_millis(10_000));
+                continue;
+            }
+        }
     }
-    Ok((Converter::new(matcher), log_file))
 }
 
 fn producer(config: &Config) -> Producer {
     match output_type(&config.output) {
         OutputType::File => {
-            println!("output={}, output type=FILE", &config.output);
+            info!("output={}, output type=FILE", &config.output);
             match Producer::new_file(&config.output) {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Kafka producer: {}", e);
+                    error!("cannot create Kafka producer: {}", e);
                     std::process::exit(1);
                 }
             }
         }
         OutputType::Kafka => {
-            println!("output={}, output type=KAFKA", &config.output);
+            info!("output={}, output type=KAFKA", &config.output);
             match Producer::new_kafka(
                 &config.kafka_broker,
                 &config.kafka_topic,
                 config.queue_size,
                 config.queue_period,
-                config.mode_grow,
+                config.mode_grow.is_set(),
             ) {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Kafka producer: {}", e);
+                    error!("cannot create Kafka producer: {}", e);
                     std::process::exit(1);
                 }
             }
         }
         OutputType::None => {
-            println!("output={}, output type=NONE", &config.output);
+            info!("output={}, output type=NONE", &config.output);
             Producer::new_null()
         }
     }

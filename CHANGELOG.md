@@ -10,6 +10,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Support for x86_64-unknown-linux-musl.
+- Add an option for zeek log: `--zeek`. This option will filter out comments like `#...`, and convert `,` -> `;` then `\t` -> `,`.
+
+### Changed
+
+- If the input file is not exist, REproduce will sleep and wait until it's created.
+- In `grow(continuous) mode`, if the target file is replaced by log-rotator, REproduce will detect and continue job with the replaced file.
 
 ### Removed
 

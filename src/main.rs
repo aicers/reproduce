@@ -1,18 +1,22 @@
 use clap::{App, Arg};
-use reproduce::{Config, Controller};
+use reproduce::{Config, Controller, OperationMode};
 use std::num::{NonZeroI64, NonZeroU8};
+use tracing::{error, info};
 
 pub fn main() {
+    tracing_subscriber::fmt::init();
+    info!("Version {}", env!("CARGO_PKG_VERSION"));
+
     let config = parse();
-    println!("{}", config);
+    info!("config:\n{}", config);
 
     let mut controller = Controller::new(config);
-    println!("reproduce start");
+    info!("reproduce start");
     if let Err(e) = controller.run() {
-        eprintln!("ERROR: {}", e);
+        error!("ERROR: {}", e);
         std::process::exit(1);
     }
-    println!("reproduce end");
+    info!("reproduce end");
 }
 
 #[allow(clippy::too_many_lines)]
@@ -24,7 +28,7 @@ pub fn parse() -> Config {
         Arg::with_name("broker")
             .short("b")
             .takes_value(true)
-	    .value_name("host1:port1,host2:port2,..")
+	        .value_name("host1:port1,host2:port2,..")
             .help("Kafka broker list"),
     )
     .arg(
@@ -122,6 +126,12 @@ pub fn parse() -> Config {
             .short("v")
             .help("Polls the input directory")
     )
+    .arg(
+        Arg::with_name("zeek")
+            .short("z")
+            .takes_value(false)
+            .help("Convert zeek log")
+    )
     .get_matches();
 
     let kafka_broker = m.value_of("broker").unwrap_or_default();
@@ -132,8 +142,8 @@ pub fn parse() -> Config {
             match result {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("ERROR: invalid count: {}", v);
-                    eprintln!("\t{}", e);
+                    error!("ERROR: invalid count: {}", v);
+                    error!("\t{}", e);
                     std::process::exit(1);
                 }
             }
@@ -144,14 +154,14 @@ pub fn parse() -> Config {
         match result {
             Ok(v) => v.get(),
             Err(e) => {
-                eprintln!("ERROR: invalid data source ID: {}", v);
-                eprintln!("\t{}", e);
+                error!("ERROR: invalid data source ID: {}", v);
+                error!("\t{}", e);
                 std::process::exit(1);
             }
         }
     });
-    let mode_eval = m.is_present("eval");
-    let mode_grow = m.is_present("continuous");
+    let mode_eval = OperationMode::Reporting(m.is_present("eval"));
+    let mode_grow = OperationMode::Continuous(m.is_present("continuous"));
     let input = m.value_of("input").unwrap_or_default();
     let initial_seq_no = m
         .value_of("seq")
@@ -160,8 +170,8 @@ pub fn parse() -> Config {
             match result {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("ERROR: invalid sequence number: {}", v);
-                    eprintln!("\t{}", e);
+                    error!("ERROR: invalid sequence number: {}", v);
+                    error!("\t{}", e);
                     std::process::exit(1);
                 }
             }
@@ -175,8 +185,8 @@ pub fn parse() -> Config {
         match result {
             Ok(v) => v.get(),
             Err(e) => {
-                eprintln!("ERROR: invalid queue period: {}", v);
-                eprintln!("\t{}", e);
+                error!("ERROR: invalid queue period: {}", v);
+                error!("\t{}", e);
                 std::process::exit(1);
             }
         }
@@ -186,14 +196,14 @@ pub fn parse() -> Config {
         match result {
             Ok(v) => {
                 if v > 900_000 {
-                    eprintln!("ERROR: queue size is too large (should be no larger than 900,000");
+                    error!("ERROR: queue size is too large (should be no larger than 900,000");
                     std::process::exit(1);
                 }
                 v
             }
             Err(e) => {
-                eprintln!("ERROR: invalid queue size: {}", v);
-                eprintln!("\t{}", e);
+                error!("ERROR: invalid queue size: {}", v);
+                error!("\t{}", e);
                 std::process::exit(1);
             }
         }
@@ -206,27 +216,29 @@ pub fn parse() -> Config {
             match result {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("ERROR: invalid queue size: {}", v);
-                    eprintln!("\t{}", e);
+                    error!("ERROR: invalid queue size: {}", v);
+                    error!("\t{}", e);
                     std::process::exit(1);
                 }
             }
         })
         .unwrap_or_default();
     let kafka_topic = m.value_of("topic").unwrap_or_default();
-    let mode_polling_dir = m.is_present("polling");
+    let mode_polling_dir = OperationMode::Polling(m.is_present("polling"));
     if output.is_empty() && kafka_broker.is_empty() {
-        eprintln!("ERROR: Kafka broker (-b) required");
+        error!("ERROR: Kafka broker (-b) required");
         std::process::exit(1);
     }
     if output.is_empty() && kafka_topic.is_empty() {
-        eprintln!("ERROR: Kafka topic (-t) required");
+        error!("ERROR: Kafka topic (-t) required");
         std::process::exit(1);
     }
     if input.is_empty() && output == "none" {
-        eprintln!("ERROR: input (-i) required if output (-o) is \"none\"");
+        error!("ERROR: input (-i) required if output (-o) is \"none\"");
         std::process::exit(1);
     }
+    let zeek_flag = OperationMode::ZeekConverting(m.is_present("zeek"));
+
     Config {
         mode_eval,
         mode_grow,
@@ -241,6 +253,7 @@ pub fn parse() -> Config {
         kafka_topic: kafka_topic.to_string(),
         pattern_file: pattern_file.to_string(),
         file_prefix: file_prefix.to_string(),
+        zeek_flag,
         datasource_id,
         initial_seq_no,
         count_sent,

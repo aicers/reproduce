@@ -42,7 +42,7 @@ impl Report {
     }
 
     pub fn start(&mut self, id: usize) {
-        if !self.config.mode_eval {
+        if !self.config.mode_eval.is_set() {
             return;
         }
 
@@ -51,7 +51,7 @@ impl Report {
     }
 
     pub fn process(&mut self, bytes: usize) {
-        if !self.config.mode_eval {
+        if !self.config.mode_eval.is_set() {
             return;
         }
 
@@ -65,7 +65,7 @@ impl Report {
     }
 
     pub fn skip(&mut self, bytes: usize) {
-        if !self.config.mode_eval {
+        if !self.config.mode_eval.is_set() {
             return;
         }
         self.skip_bytes += bytes;
@@ -79,7 +79,7 @@ impl Report {
     pub fn end(&mut self, id: u32) -> io::Result<()> {
         const ARRANGE_VAR: usize = 28;
 
-        if !self.config.mode_eval {
+        if !self.config.mode_eval.is_set() {
             return Ok(());
         }
 

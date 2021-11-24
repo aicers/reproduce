@@ -6,7 +6,7 @@ mod matcher;
 mod producer;
 mod report;
 
-pub use config::{Config, InputType, OutputType};
+pub use config::{Config, InputType, OperationMode, OutputType};
 pub use controller::Controller;
 pub use converter::Converter;
 pub use fluentd::SizedForwardMode;
