@@ -10,6 +10,8 @@ pub fn main() {
     let config = parse();
     info!("config:\n{}", config);
 
+    create_pid_file();
+
     let mut controller = Controller::new(config);
     info!("reproduce start");
     if let Err(e) = controller.run() {
@@ -17,6 +19,20 @@ pub fn main() {
         std::process::exit(1);
     }
     info!("reproduce end");
+}
+
+fn create_pid_file() {
+    let pid_dir = if env!("HOME").trim().is_empty() {
+        "/tmp/.aice".to_string()
+    } else {
+        format!("{}/.aice", env!("HOME"))
+    };
+    if std::fs::create_dir_all(&pid_dir).is_ok() {
+        let pid = format!("{}/{}.pid", pid_dir, env!("CARGO_PKG_NAME"));
+        if let Err(e) = std::fs::write(&pid, &format!("{}\n", std::process::id())) {
+            info!("failed to create pid file {}. {}", pid, e);
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
