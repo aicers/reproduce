@@ -125,7 +125,7 @@ impl Report {
             "{:width$}{} ({})\n",
             header,
             input,
-            ByteSize(processed_bytes).to_string(),
+            ByteSize(processed_bytes),
             width = ARRANGE_VAR,
         ))?;
         report_file.write_fmt(format_args!(
@@ -185,14 +185,14 @@ impl Report {
             "{:width$}{} ({})\n",
             "Process Count:",
             self.process_cnt,
-            ByteSize(processed_bytes).to_string(),
+            ByteSize(processed_bytes),
             width = ARRANGE_VAR,
         ))?;
         report_file.write_fmt(format_args!(
             "{:width$}{} ({})\n",
             "Skip Count:",
             self.skip_cnt,
-            ByteSize(self.skip_cnt as u64).to_string(),
+            ByteSize(self.skip_cnt as u64),
             width = ARRANGE_VAR,
         ))?;
         #[allow(clippy::cast_precision_loss)] // approximation is okay
@@ -211,8 +211,7 @@ impl Report {
             ByteSize(
                 (processed_bytes as f64 / (self.time_diff.num_milliseconds() as f64 / 1_000.))
                     .round() as u64
-            )
-            .to_string(),
+            ),
             width = ARRANGE_VAR,
         ))?;
         Ok(())
