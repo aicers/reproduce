@@ -184,6 +184,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49fc9a695bca7f35f5f4c15cddc84415f66a74ea78eef08e90c5024f2b540e23"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccaeedb56da03b09f598226e25e80088cb4cd25f316e6e4df7d695f0feeb1403"
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -229,7 +244,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8761f059d67843081657ccee7d10148f59aeddb932f8aea6281a76fa1505979a"
 dependencies = [
  "crossbeam-channel",
- "kafka",
+ "kafka 0.8.0",
  "nom 7.1.1",
  "pcap-parser",
  "rmp-serde 0.15.5",
@@ -298,11 +313,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f37f068eb07305e1141453ea2dccfb4f278153a4261bb9a519f10d1eb13d25a8"
 dependencies = [
  "byteorder 0.5.3",
- "crc",
+ "crc 1.8.1",
  "error-chain",
  "fnv",
  "log 0.3.9",
  "ref_slice",
+ "twox-hash",
+]
+
+[[package]]
+name = "kafka"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b11c86b0c0c9a9d89b136b2938a5b46a35c40f66eced2f09c76458b17dadfc2a"
+dependencies = [
+ "byteorder 1.4.3",
+ "crc 2.1.0",
+ "fnv",
+ "ref_slice",
+ "thiserror",
+ "tracing",
  "twox-hash",
 ]
 
@@ -457,6 +487,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-project-lite"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0a7ae3ac2f1173085d398531c705756c94a4c56843785df85a60c1a0afac116"
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -550,7 +586,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "eventio",
- "kafka",
+ "kafka 0.9.0",
  "regex",
  "rmp-serde 1.1.0",
  "serde",
@@ -737,6 +773,38 @@ dependencies = [
  "libc",
  "wasi",
  "winapi",
+]
+
+[[package]]
+name = "tracing"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d0ecdcb44a79f0fe9844f0c4f33a342cbcbb5117de8001e6ba0dc2351327d09"
+dependencies = [
+ "cfg-if",
+ "pin-project-lite",
+ "tracing-attributes",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc6b8ad3567499f98a1db7a752b07a7c8c7c7c34c332ec00effb2b0027974b7c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "tracing-core"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f54c8ca710e81886d498c2fd3331b56c93aa248d49de2222ad2742247c60072f"
+dependencies = [
+ "lazy_static",
 ]
 
 [[package]]
