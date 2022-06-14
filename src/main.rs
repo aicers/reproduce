@@ -1,4 +1,4 @@
-use clap::{Arg, Command};
+use clap::{value_parser, Arg, Command};
 use reproduce::{Config, Controller};
 use std::num::{NonZeroI64, NonZeroU8};
 
@@ -23,20 +23,21 @@ pub fn parse() -> Config {
     .arg(
         Arg::new("broker")
             .short('b')
-            .takes_value(true)
-	    .value_name("host1:port1,host2:port2,..")
+            .default_value("")
+	        .value_name("host1:port1,host2:port2,..")
             .help("Kafka broker list"),
     )
     .arg(
         Arg::new("count")
             .short('c')
-            .takes_value(true)
+            .value_parser(value_parser!(usize))
+            .default_value("0")
             .help("Send count"),
     )
     .arg(
         Arg::new("source")
             .short('d')
-            .takes_value(true)
+            .value_parser(value_parser!(NonZeroU8))
             .default_value("1")
             .help("Data source ID (1-255)"),
     )
@@ -53,54 +54,55 @@ pub fn parse() -> Config {
     .arg(
         Arg::new("input")
             .short('i')
-            .takes_value(true)
+            .default_value("")
             .help("Input [LOGFILE/DIR] \
 	    	   If not given, internal sample data will be used.")
     )
     .arg(
         Arg::new("seq")
             .short('j')
-            .takes_value(true)
+            .value_parser(value_parser!(usize))
+            .default_value("0")
             .help("Sets the initial sequence number (0-16777215).")
     )
     .arg(
         Arg::new("pattern")
             .short('m')
-            .takes_value(true)
+            .default_value("")
             .value_name("FILE")
             .help("Pattern filename")
     )
     .arg(
         Arg::new("prefix")
             .short('n')
-            .takes_value(true)
+            .default_value("")
             .help("Prefix of file names to send multiple files or a directory")
     )
     .arg(
         Arg::new("output")
             .short('o')
-            .takes_value(true)
+            .default_value(""  )
             .help("Output type [TEXTFILE/none]. \
                    If not given, the output is sent to Kafka.")
     )
     .arg(
         Arg::new("period")
             .short('p')
-            .takes_value(true)
+            .value_parser(value_parser!(NonZeroI64))
             .default_value("3")
             .help("Sepcifies how long data may be kept in the queue.")
     )
     .arg(
         Arg::new("size")
             .short('q')
-            .takes_value(true)
+            .value_parser(value_parser!(usize))
             .default_value("900000")
             .help("Specifies the maximum number of bytes to be sent to Kafka in a single message.")
     )
     .arg(
         Arg::new("offset")
             .short('r')
-            .takes_value(true)
+            .default_value("")
             .help("Record (prefix of offset file). Using this option will start the conversation \
                    after the previous conversation. The offset file name is managed by \
                    <input_file>_<prefix>.")
@@ -108,13 +110,14 @@ pub fn parse() -> Config {
     .arg(
         Arg::new("skip")
             .short('s')
-            .takes_value(true)
+            .value_parser(value_parser!(usize))
+            .default_value("0")
             .help("Skip count")
     )
     .arg(
         Arg::new("topic")
             .short('t')
-            .takes_value(true)
+            .default_value("")
             .help("Kafka topic name. The topic should be available on the broker.")
     )
     .arg(
@@ -124,97 +127,32 @@ pub fn parse() -> Config {
     )
     .get_matches();
 
-    let kafka_broker = m.value_of("broker").unwrap_or_default();
-    let count_sent = m
-        .value_of("count")
-        .map(|v| {
-            let result = v.parse::<usize>();
-            match result {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("ERROR: invalid count: {}", v);
-                    eprintln!("\t{}", e);
-                    std::process::exit(1);
-                }
-            }
-        })
-        .unwrap_or_default();
-    let datasource_id = m.value_of("source").map_or(1, |v| {
-        let result = v.parse::<NonZeroU8>();
-        match result {
-            Ok(v) => v.get(),
-            Err(e) => {
-                eprintln!("ERROR: invalid data source ID: {}", v);
-                eprintln!("\t{}", e);
-                std::process::exit(1);
-            }
-        }
-    });
-    let mode_eval = m.is_present("eval");
-    let mode_grow = m.is_present("continuous");
-    let input = m.value_of("input").unwrap_or_default();
-    let initial_seq_no = m
-        .value_of("seq")
-        .map(|v| {
-            let result = v.parse::<usize>();
-            match result {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("ERROR: invalid sequence number: {}", v);
-                    eprintln!("\t{}", e);
-                    std::process::exit(1);
-                }
-            }
-        })
-        .unwrap_or_default();
-    let pattern_file = m.value_of("pattern").unwrap_or_default();
-    let file_prefix = m.value_of("prefix").unwrap_or_default();
-    let output = m.value_of("output").unwrap_or_default();
-    let queue_period = m.value_of("period").map_or(3, |v| {
-        let result = v.parse::<NonZeroI64>();
-        match result {
-            Ok(v) => v.get(),
-            Err(e) => {
-                eprintln!("ERROR: invalid queue period: {}", v);
-                eprintln!("\t{}", e);
-                std::process::exit(1);
-            }
-        }
-    });
-    let queue_size = m.value_of("size").map_or(900_000, |v| {
-        let result = v.parse::<usize>();
-        match result {
-            Ok(v) => {
-                if v > 900_000 {
-                    eprintln!("ERROR: queue size is too large (should be no larger than 900,000");
-                    std::process::exit(1);
-                }
-                v
-            }
-            Err(e) => {
-                eprintln!("ERROR: invalid queue size: {}", v);
-                eprintln!("\t{}", e);
-                std::process::exit(1);
-            }
-        }
-    });
-    let offset_prefix = m.value_of("offset").unwrap_or_default();
-    let count_skip = m
-        .value_of("skip")
-        .map(|v| {
-            let result = v.parse::<usize>();
-            match result {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("ERROR: invalid queue size: {}", v);
-                    eprintln!("\t{}", e);
-                    std::process::exit(1);
-                }
-            }
-        })
-        .unwrap_or_default();
-    let kafka_topic = m.value_of("topic").unwrap_or_default();
-    let mode_polling_dir = m.is_present("polling");
+    let kafka_broker = m.get_one::<String>("broker").expect("has `default_value`");
+    let count_sent = *m.get_one::<usize>("count").expect("has `default_value`");
+    let datasource_id = m
+        .get_one::<NonZeroU8>("source")
+        .expect("has `default_value`")
+        .get();
+    let mode_eval = m.contains_id("eval");
+    let mode_grow = m.contains_id("continuous");
+    let input = m.get_one::<String>("input").expect("has `default_value`");
+    let initial_seq_no = *m.get_one::<usize>("seq").expect("has `default_value`");
+    let pattern_file = m.get_one::<String>("pattern").expect("has `default_value`");
+    let file_prefix = m.get_one::<String>("prefix").expect("has `default_value`");
+    let output = m.get_one::<String>("output").expect("has `default_value`");
+    let queue_period = m
+        .get_one::<NonZeroI64>("period")
+        .expect("has `default_value`")
+        .get();
+    let queue_size = *m.get_one::<usize>("size").expect("has `default_value`");
+    if queue_size > 900_000 {
+        eprintln!("ERROR: queue size is too large (should be no larger than 900,000");
+        std::process::exit(1);
+    }
+    let offset_prefix = m.get_one::<String>("offset").expect("has `default_value`");
+    let count_skip = *m.get_one::<usize>("skip").expect("has `default_value`");
+    let kafka_topic = m.get_one::<String>("topic").expect("has `default_value`");
+    let mode_polling_dir = m.contains_id("polling");
     if output.is_empty() && kafka_broker.is_empty() {
         eprintln!("ERROR: Kafka broker (-b) required");
         std::process::exit(1);
