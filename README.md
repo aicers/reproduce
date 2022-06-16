@@ -38,24 +38,29 @@ reproduce -h
 ## Examples
 
 * Convert a log file and send it to the kafka server:
+
     ```sh
     reproduce -i LOG_20180906 -b 192.168.10.1:9092 -t sample_topic
     ```
+
 * Send all log files whose names starting with `msg` in the `/data/LOG`
   directory recursively:
+
     ```sh
     reproduce -i /data/LOG -n msg -b 192.168.4.5:9092 -t syslog -e
     ```
+
 * Send all log files in the `/data/LOG` directory recursively. The directory
   will be polled periodically (every 3 seconds by default). A new file will be
   sent as well.
+
     ```sh
     reproduce -i /data/LOG -v -b 192.168.4.5:9092 -t syslog -e
     ```
 
 ## License
 
-Copyright 2018-2021 Petabi, Inc.
+Copyright 2021-2022 EINSIS, Inc.
 
 Licensed under [Apache License, Version 2.0][apache-license] (the "License");
 you may not use this crate except in compliance with the License.
