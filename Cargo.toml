@@ -10,7 +10,7 @@ bytesize = "1"
 chrono = "0.4"
 clap = { version = "3.2", features = ["wrap_help"] }
 ctrlc = { version = "3", features = ["termination"] }
-eventio = "0.6"
+eventio = "0.7"
 kafka = { version = "0.9", default-features = false }
 regex = "1"
 rmp-serde = "1.1"
