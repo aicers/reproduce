@@ -26,13 +26,13 @@ pub struct Config {
     pub output_type: OutputType,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputType {
     Log,
     Dir,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputType {
     None,
     Kafka,
