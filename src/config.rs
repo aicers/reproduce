@@ -16,6 +16,9 @@ pub struct Config {
     pub kafka_topic: String,
     pub pattern_file: String,
     pub file_prefix: String, // file name prefix when sending multiple files or a directory
+    pub certs_toml: String,
+    pub giganto_name: String,
+    pub giganto_addr: String,
 
     pub datasource_id: u8,
     pub initial_seq_no: usize,
@@ -37,6 +40,7 @@ pub enum OutputType {
     None,
     Kafka,
     File,
+    Giganto,
 }
 
 impl Default for Config {
@@ -60,6 +64,9 @@ impl Default for Config {
             count_sent: 0,
             input_type: InputType::Log,
             output_type: OutputType::None,
+            certs_toml: String::new(),
+            giganto_name: String::new(),
+            giganto_addr: String::new(),
         }
     }
 }
@@ -77,6 +84,9 @@ impl fmt::Display for Config {
         writeln!(f, "kafka_broker={}", self.kafka_broker)?;
         writeln!(f, "kafka_topic={}", self.kafka_topic)?;
         writeln!(f, "file_prefix={}", self.file_prefix.clone())?;
-        writeln!(f, "datasource_id={}", self.datasource_id)
+        writeln!(f, "datasource_id={}", self.datasource_id)?;
+        writeln!(f, "certs_toml={}", self.certs_toml)?;
+        writeln!(f, "giganto_name={}", self.giganto_name)?;
+        writeln!(f, "giganto_addr={}", self.giganto_addr)
     }
 }

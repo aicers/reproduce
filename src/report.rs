@@ -172,6 +172,9 @@ impl Report {
                     width = ARRANGE_VAR,
                 ))?;
             }
+            OutputType::Giganto => {
+                report_file.write_all(b"Output(Giganto):\n")?;
+            }
         }
         report_file.write_fmt(format_args!(
             "{:width$}{}/{}/{:.2} bytes\n",
