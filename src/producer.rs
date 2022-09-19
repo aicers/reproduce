@@ -1,13 +1,19 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::{DateTime, Duration, Utc};
 use kafka::error::Error as KafkaError;
 use kafka::producer::Record;
-use std::fs::File;
-use std::io::Write;
+use quinn::{Connection, Endpoint};
+use serde::Deserialize;
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
 
 #[allow(clippy::large_enum_variant)]
 pub enum Producer {
     File(File),
+    Giganto(Giganto),
     Kafka(Kafka),
     Null,
 }
@@ -19,6 +25,35 @@ impl Producer {
     pub fn new_file(filename: &str) -> Result<Self> {
         let output = File::create(filename)?;
         Ok(Producer::File(output))
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if it fails to set up Giganto.
+    pub async fn new_giganto(addr: &str, name: &str, certs_toml: &str) -> Result<Self> {
+        let endpoint = match init_giganto(certs_toml) {
+            Ok(ret) => ret,
+            Err(e) => {
+                bail!("Failed to create giganto producer: {:?}", e);
+            }
+        };
+        let remote = match addr.parse::<SocketAddr>() {
+            Ok(ret) => ret,
+            Err(e) => {
+                bail!("Failed to parse giganto server: {:?}", e);
+            }
+        };
+
+        let new_connection = endpoint
+            .connect(remote, name)
+            .expect("Failed to connect giganto, please check setting is correct")
+            .await
+            .expect("Failed to connect giganto, Please make sure giganto alive");
+        let quinn::NewConnection {
+            connection: conn, ..
+        } = new_connection;
+
+        Ok(Self::Giganto(Giganto { conn, endpoint }))
     }
 
     /// Constructs a new Kafka producer.
@@ -100,7 +135,7 @@ impl Producer {
                 }
                 Ok(())
             }
-            Producer::Null => Ok(()),
+            Producer::Giganto(_) | Producer::Null => Ok(()),
         }
     }
 }
@@ -134,6 +169,116 @@ impl Kafka {
     pub fn send(&mut self, msg: &[u8]) -> Result<(), KafkaError> {
         self.inner.send(&Record::from_value(&self.topic, msg))
     }
+}
+
+#[derive(Deserialize, Debug)]
+struct Config {
+    certification: Certification,
+}
+
+#[derive(Deserialize, Debug)]
+struct Certification {
+    cert: String,
+    key: String,
+    roots: Vec<String>,
+}
+
+#[allow(unused)]
+pub struct Giganto {
+    conn: Connection,
+    endpoint: Endpoint,
+}
+
+fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
+    let mut cfg_str = String::new();
+    if let Err(e) =
+        File::open(Path::new(certs_toml)).and_then(|mut f| f.read_to_string(&mut cfg_str))
+    {
+        bail!(
+            "Failed to open file, Please check certs_toml file name: {:?}",
+            e
+        );
+    }
+    let config = match toml::from_str::<Config>(&cfg_str) {
+        Ok(r) => r,
+        Err(e) => {
+            bail!("Failed to parse toml file, please check file: {:?}", e);
+        }
+    };
+
+    let (cert, key) = match fs::read(&config.certification.cert)
+        .and_then(|x| Ok((x, fs::read(&config.certification.key)?)))
+    {
+        Ok(r) => r,
+        Err(_) => {
+            bail!(
+                "Failed to read (cert, key) file, cert_path:{}, key_path:{}",
+                &config.certification.cert,
+                &config.certification.key
+            );
+        }
+    };
+
+    let pv_key = if Path::new(&config.certification.key)
+        .extension()
+        .map_or(false, |x| x == "der")
+    {
+        rustls::PrivateKey(key)
+    } else {
+        let pkcs8 =
+            rustls_pemfile::pkcs8_private_keys(&mut &*key).expect("malformed PKCS #8 private key");
+        match pkcs8.into_iter().next() {
+            Some(x) => rustls::PrivateKey(x),
+            None => {
+                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
+                    .expect("malformed PKCS #1 private key");
+                match rsa.into_iter().next() {
+                    Some(x) => rustls::PrivateKey(x),
+                    None => {
+                        bail!("No private key found");
+                    }
+                }
+            }
+        }
+    };
+
+    let cert_chain = if Path::new(&config.certification.cert)
+        .extension()
+        .map_or(false, |x| x == "der")
+    {
+        vec![rustls::Certificate(cert)]
+    } else {
+        rustls_pemfile::certs(&mut &*cert)
+            .expect("invalid PEM-encoded certificate")
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect()
+    };
+
+    let mut server_root = rustls::RootCertStore::empty();
+    for root in config.certification.roots {
+        let file = fs::read(&root).expect("Failed to read file");
+        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
+            .expect("invalid PEM-encoded certificate")
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect();
+        if let Some(cert) = root_cert.get(0) {
+            server_root.add(cert).expect("Failed to add cert");
+        }
+    }
+
+    let client_crypto = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(server_root)
+        .with_single_cert(cert_chain, pv_key)
+        .expect("the server root, cert chain or private key are not valid");
+
+    let mut endpoint =
+        quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
+            .expect("Failed to create endpoint");
+    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+    Ok(endpoint)
 }
 
 #[cfg(test)]

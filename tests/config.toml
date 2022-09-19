@@ -1,0 +1,4 @@
+[certification]
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+roots = ["tests/root.pem"]

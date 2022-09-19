@@ -10,6 +10,17 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Support for x86_64-unknown-linux-musl.
+- Support Giganto server.
+  `-o "giganto" -C "tests/config.toml"` to test
+  `-G` option to set giganto server address (default: 127.0.0.1:38370)
+  `-N` option is giganto server name, (default: localhost)
+  `-C` option is certificate path toml file
+  ```toml
+  [certification]
+  cert = "tests/cert.pem"
+  key = "tests/key.pem"
+  roots = ["tests/root.pem"]
+  ```
 
 ### Removed
 

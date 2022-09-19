@@ -1,17 +1,21 @@
 use clap::{value_parser, Arg, Command};
 use reproduce::{Config, Controller};
 use std::num::{NonZeroI64, NonZeroU8};
+use tokio::task;
 
-pub fn main() {
+#[tokio::main]
+pub async fn main() {
     let config = parse();
     println!("{}", config);
-
     let mut controller = Controller::new(config);
     println!("reproduce start");
-    if let Err(e) = controller.run() {
-        eprintln!("ERROR: {}", e);
-        std::process::exit(1);
-    }
+    let _handle = task::spawn(async move {
+        if let Err(e) = controller.run().await {
+            eprintln!("ERROR: {}", e);
+            std::process::exit(1);
+        }
+    })
+    .await;
     println!("reproduce end");
 }
 
@@ -125,6 +129,24 @@ pub fn parse() -> Config {
             .short('v')
             .help("Polls the input directory")
     )
+    .arg(
+        Arg::new("giganto")
+            .short('G')
+            .default_value("127.0.0.1:38370")
+            .help("Giganto server address")
+    )
+    .arg(
+        Arg::new("name")
+            .short('N')
+            .default_value("localhost")
+            .help("Giganto server hostname.")
+    )
+    .arg(
+        Arg::new("certs")
+            .short('C')
+            .default_value("config.toml")
+            .help("config.toml file with cert, key, roots path")
+    )
     .get_matches();
 
     let kafka_broker = m.get_one::<String>("broker").expect("has `default_value`");
@@ -152,6 +174,9 @@ pub fn parse() -> Config {
     let offset_prefix = m.get_one::<String>("offset").expect("has `default_value`");
     let count_skip = *m.get_one::<usize>("skip").expect("has `default_value`");
     let kafka_topic = m.get_one::<String>("topic").expect("has `default_value`");
+    let certs_toml = m.get_one::<String>("certs").expect("has `default_value`");
+    let giganto_name = m.get_one::<String>("name").expect("has `default_value`");
+    let giganto_addr = m.get_one::<String>("giganto").expect("has `default_name`");
     let mode_polling_dir = m.contains_id("polling");
     if output.is_empty() && kafka_broker.is_empty() {
         eprintln!("ERROR: Kafka broker (-b) required");
@@ -182,6 +207,9 @@ pub fn parse() -> Config {
         datasource_id,
         initial_seq_no,
         count_sent,
+        certs_toml: certs_toml.to_string(),
+        giganto_name: giganto_name.to_string(),
+        giganto_addr: giganto_addr.to_string(),
         ..Config::default()
     }
 }

@@ -31,9 +31,9 @@ impl Controller {
     /// # Errors
     ///
     /// Returns an error if creating a converter fails.
-    pub fn run(&mut self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
         let input_type = input_type(&self.config.input);
-        let mut producer = producer(&self.config);
+        let mut producer = producer(&self.config).await;
 
         if input_type == InputType::Dir {
             self.run_split(&mut producer)
@@ -241,6 +241,8 @@ fn output_type(output: &str) -> OutputType {
         OutputType::Kafka
     } else if output == "none" {
         OutputType::None
+    } else if output == "giganto" {
+        OutputType::Giganto
     } else {
         OutputType::File
     }
@@ -289,7 +291,7 @@ fn log_converter<P: AsRef<Path>>(input: P, pattern_file: &str) -> Result<(Conver
     Ok((Converter::new(matcher), log_file))
 }
 
-fn producer(config: &Config) -> Producer {
+async fn producer(config: &Config) -> Producer {
     match output_type(&config.output) {
         OutputType::File => {
             println!("output={}, output type=FILE", &config.output);
@@ -297,6 +299,22 @@ fn producer(config: &Config) -> Producer {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("cannot create Kafka producer: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        OutputType::Giganto => {
+            println!("output={}, output type=GIGANTO", &config.output);
+            match Producer::new_giganto(
+                &config.giganto_addr,
+                &config.giganto_name,
+                &config.certs_toml,
+            )
+            .await
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("cannot create Giganto producer: {}", e);
                     std::process::exit(1);
                 }
             }
