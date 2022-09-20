@@ -5,7 +5,7 @@ entries to a Kafka server. Each message to Kafka is assigned an event ID
 consisting of system time in seconds (32 bits), sequence number (24 bits), and
 data source ID (8 bits).
 
-[![Coverage Status](https://codecov.io/gh/petabi/reproduce/branch/main/graph/badge.svg?token=2P7VSZ1KFV)](https://codecov.io/gh/petabi/reproduce)
+[![Coverage Status](https://codecov.io/gh/aicers/reproduce/branch/main/graph/badge.svg?token=2P7VSZ1KFV)](https://codecov.io/gh/aicers/reproduce)
 
 ## Build
 
