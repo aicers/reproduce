@@ -85,7 +85,7 @@ pub fn parse() -> Config {
     .arg(
         Arg::new("output")
             .short('o')
-            .default_value(""  )
+            .default_value("")
             .help("Output type [TEXTFILE/none]. \
                    If not given, the output is sent to Kafka.")
     )
@@ -145,7 +145,13 @@ pub fn parse() -> Config {
         Arg::new("certs")
             .short('C')
             .default_value("config.toml")
-            .help("config.toml file with cert, key, roots path")
+            .help("config.toml file with cert, key, roots path.")
+    )
+    .arg(
+        Arg::new("kind")
+            .short('k')
+            .default_value("")
+            .help("Giganto log kind.")
     )
     .get_matches();
 
@@ -177,6 +183,7 @@ pub fn parse() -> Config {
     let certs_toml = m.get_one::<String>("certs").expect("has `default_value`");
     let giganto_name = m.get_one::<String>("name").expect("has `default_value`");
     let giganto_addr = m.get_one::<String>("giganto").expect("has `default_name`");
+    let giganto_kind = m.get_one::<String>("kind").expect("has `default_value`");
     let mode_polling_dir = m.contains_id("polling");
     if output.is_empty() && kafka_broker.is_empty() {
         eprintln!("ERROR: Kafka broker (-b) required");
@@ -210,6 +217,7 @@ pub fn parse() -> Config {
         certs_toml: certs_toml.to_string(),
         giganto_name: giganto_name.to_string(),
         giganto_addr: giganto_addr.to_string(),
+        giganto_kind: giganto_kind.to_string(),
         ..Config::default()
     }
 }

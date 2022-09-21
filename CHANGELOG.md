@@ -15,6 +15,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `-G` option to set giganto server address (default: 127.0.0.1:38370)
   `-N` option is giganto server name, (default: localhost)
   `-C` option is certificate path toml file
+  `-k` option to set log kind to giganto, like topic of Kafka
   ```toml
   [certification]
   cert = "tests/cert.pem"

@@ -19,6 +19,7 @@ pub struct Config {
     pub certs_toml: String,
     pub giganto_name: String,
     pub giganto_addr: String,
+    pub giganto_kind: String,
 
     pub datasource_id: u8,
     pub initial_seq_no: usize,
@@ -67,6 +68,7 @@ impl Default for Config {
             certs_toml: String::new(),
             giganto_name: String::new(),
             giganto_addr: String::new(),
+            giganto_kind: String::new(),
         }
     }
 }
@@ -87,6 +89,7 @@ impl fmt::Display for Config {
         writeln!(f, "datasource_id={}", self.datasource_id)?;
         writeln!(f, "certs_toml={}", self.certs_toml)?;
         writeln!(f, "giganto_name={}", self.giganto_name)?;
-        writeln!(f, "giganto_addr={}", self.giganto_addr)
+        writeln!(f, "giganto_addr={}", self.giganto_addr)?;
+        writeln!(f, "giganto_kind={}", self.giganto_kind)
     }
 }
