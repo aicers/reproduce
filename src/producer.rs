@@ -1,14 +1,21 @@
-use anyhow::{bail, Result};
-use chrono::{DateTime, Duration, Utc};
+use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Duration as CrnDuration, Utc};
 use kafka::error::Error as KafkaError;
 use kafka::producer::Record;
-use quinn::{Connection, Endpoint};
+use quinn::{Connection, Endpoint, SendStream, TransportConfig, WriteError};
 use serde::Deserialize;
+use std::convert::TryInto;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
+
+type GigantoLog = (String, Vec<u8>);
+
+const GIGANTO_TYPE: u32 = 0x02;
+const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
 pub enum Producer {
@@ -30,7 +37,11 @@ impl Producer {
     /// # Errors
     ///
     /// Returns an error if it fails to set up Giganto.
-    pub async fn new_giganto(addr: &str, name: &str, certs_toml: &str) -> Result<Self> {
+    ///
+    ///  # Panics
+    ///
+    /// Connection error, not `TimedOut`
+    pub async fn new_giganto(addr: &str, name: &str, certs_toml: &str, kind: &str) -> Result<Self> {
         let endpoint = match init_giganto(certs_toml) {
             Ok(ret) => ret,
             Err(e) => {
@@ -43,17 +54,40 @@ impl Producer {
                 bail!("Failed to parse giganto server: {:?}", e);
             }
         };
+        loop {
+            let new_connection = match endpoint
+                .connect(remote, name)
+                .expect("Failed to connect giganto, please check setting is correct")
+                .await
+            {
+                Ok(r) => r,
+                Err(quinn::ConnectionError::TimedOut) => {
+                    println!("Server TimedOut, reconnecting...");
+                    tokio::time::sleep(Duration::from_secs(INTERVAL)).await;
+                    continue;
+                }
+                Err(e) => panic!("{}", e),
+            };
 
-        let new_connection = endpoint
-            .connect(remote, name)
-            .expect("Failed to connect giganto, please check setting is correct")
-            .await
-            .expect("Failed to connect giganto, Please make sure giganto alive");
-        let quinn::NewConnection {
-            connection: conn, ..
-        } = new_connection;
+            let quinn::NewConnection {
+                connection: conn, ..
+            } = new_connection;
 
-        Ok(Self::Giganto(Giganto { conn, endpoint }))
+            let (giganto_send, _giganto_recv) =
+                conn.open_bi().await.expect("Failed to open giganto stream");
+
+            return Ok(Self::Giganto(Giganto {
+                giganto_endpoint: endpoint.clone(),
+                giganto_server: remote,
+                giganto_info: GigantoInfo {
+                    name: name.to_string(),
+                    kind: kind.to_string(),
+                },
+                giganto_conn: conn,
+                giganto_sender: giganto_send,
+                init_msg: true,
+            }));
+        }
     }
 
     /// Constructs a new Kafka producer.
@@ -71,7 +105,7 @@ impl Producer {
         const IDLE_TIMEOUT: u64 = 540;
         const ACK_TIMEOUT: u64 = 5;
         let producer = kafka::producer::Producer::from_hosts(vec![broker.to_string()])
-            .with_connection_idle_timeout(std::time::Duration::new(IDLE_TIMEOUT, 0))
+            .with_connection_idle_timeout(Duration::new(IDLE_TIMEOUT, 0))
             .with_ack_timeout(std::time::Duration::new(ACK_TIMEOUT, 0))
             .create()?;
         let last_time = Utc::now();
@@ -81,7 +115,7 @@ impl Producer {
             queue_data: Vec::new(),
             queue_data_cnt: 0,
             queue_size,
-            queue_period: Duration::seconds(queue_period),
+            queue_period: CrnDuration::seconds(queue_period),
             period_check: periodic,
             last_time,
         }))
@@ -101,7 +135,7 @@ impl Producer {
     /// # Errors
     ///
     /// Returns an error if any writing operation fails.
-    pub fn produce(&mut self, message: &[u8], flush: bool) -> Result<()> {
+    pub async fn produce(&mut self, message: &[u8], flush: bool) -> Result<()> {
         match self {
             Producer::File(f) => {
                 f.write_all(message)?;
@@ -135,7 +169,12 @@ impl Producer {
                 }
                 Ok(())
             }
-            Producer::Giganto(_) | Producer::Null => Ok(()),
+            Producer::Giganto(giganto) => {
+                giganto.send(message).await.context("Send fail")?;
+
+                Ok(())
+            }
+            Producer::Null => Ok(()),
         }
     }
 }
@@ -146,7 +185,7 @@ pub struct Kafka {
     queue_data: Vec<u8>,
     queue_data_cnt: usize,
     queue_size: usize,
-    queue_period: Duration,
+    queue_period: CrnDuration,
     period_check: bool,
     last_time: DateTime<Utc>,
 }
@@ -183,10 +222,88 @@ struct Certification {
     roots: Vec<String>,
 }
 
-#[allow(unused)]
+#[derive(Debug)]
 pub struct Giganto {
-    conn: Connection,
-    endpoint: Endpoint,
+    giganto_endpoint: Endpoint,
+    giganto_server: SocketAddr,
+    giganto_info: GigantoInfo,
+    giganto_conn: Connection,
+    giganto_sender: SendStream,
+    init_msg: bool,
+}
+
+#[derive(Debug)]
+struct GigantoInfo {
+    name: String,
+    kind: String,
+}
+
+impl Giganto {
+    async fn send(&mut self, msg: &[u8]) -> Result<(), WriteError> {
+        let mut giganto_data: Vec<u8> = Vec::new();
+        let body: GigantoLog = (self.giganto_info.kind.to_string(), msg.to_vec());
+        let mut serial_body = bincode::serialize(&body).expect("failed to serialize log");
+        if self.init_msg {
+            giganto_data.append(&mut GIGANTO_TYPE.to_le_bytes().to_vec());
+            self.init_msg = false;
+        }
+        let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
+        giganto_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
+        giganto_data.append(&mut body_len.to_le_bytes().to_vec());
+        giganto_data.append(&mut serial_body);
+
+        if self.giganto_sender.write_all(&giganto_data).await.is_err() {
+            self.reconnect().await.expect("reconnect giganto");
+        }
+        giganto_data.clear();
+
+        Ok(())
+    }
+
+    pub async fn finish(&mut self) -> Result<()> {
+        self.giganto_sender
+            .finish()
+            .await
+            .context("Failed to finish stream")?;
+        self.giganto_conn.close(0u32.into(), b"log_done");
+        self.giganto_endpoint.wait_idle().await;
+        println!("giganto end");
+
+        Ok(())
+    }
+
+    async fn reconnect(&mut self) -> Result<()> {
+        loop {
+            let new_connection = match self
+                .giganto_endpoint
+                .connect(self.giganto_server, &self.giganto_info.name)
+                .context("Failed to connect giganto, please check setting is correct")?
+                .await
+            {
+                Ok(r) => r,
+                Err(quinn::ConnectionError::TimedOut) => {
+                    println!("Server TimedOut, reconnecting...");
+                    tokio::time::sleep(Duration::from_secs(INTERVAL)).await;
+                    continue;
+                }
+                Err(e) => panic!("{}", e),
+            };
+            let quinn::NewConnection {
+                connection: conn, ..
+            } = new_connection;
+
+            let (giganto_send, _giganto_recv) = conn
+                .open_bi()
+                .await
+                .context("Failed to open giganto stream")?;
+
+            self.giganto_conn = conn;
+            self.giganto_sender = giganto_send;
+            self.init_msg = true;
+
+            return Ok(());
+        }
+    }
 }
 
 fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
@@ -273,10 +390,17 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
         .with_single_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
 
+    let mut transport = TransportConfig::default();
+    transport.keep_alive_interval(Some(Duration::from_secs(INTERVAL)));
+
+    let mut client_config = quinn::ClientConfig::new(Arc::new(client_crypto));
+    client_config.transport = Arc::new(transport);
+
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
             .expect("Failed to create endpoint");
-    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+    endpoint.set_default_client_config(client_config);
+
     Ok(endpoint)
 }
 
@@ -284,9 +408,9 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
 mod tests {
     use super::Producer;
 
-    #[test]
-    fn null() {
+    #[tokio::test]
+    async fn null() {
         let mut producer = Producer::new_null();
-        assert!(producer.produce(b"A message", true).is_ok());
+        assert!(producer.produce(b"A message", true).await.is_ok());
     }
 }

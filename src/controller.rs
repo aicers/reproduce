@@ -10,7 +10,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
@@ -36,21 +35,27 @@ impl Controller {
         let mut producer = producer(&self.config).await;
 
         if input_type == InputType::Dir {
-            self.run_split(&mut producer)
+            self.run_split(&mut producer).await?;
         } else {
             let filename = Path::new(&self.config.input).to_path_buf();
-            self.run_single(filename.as_ref(), &mut producer)
+            self.run_single(filename.as_ref(), &mut producer).await?;
         }
+
+        if let Producer::Giganto(mut giganto) = producer {
+            giganto.finish().await.expect("Failed to finish stream");
+        }
+
+        Ok(())
     }
 
-    fn run_split(&mut self, producer: &mut Producer) -> Result<()> {
+    async fn run_split(&mut self, producer: &mut Producer) -> Result<()> {
         let mut processed = Vec::new();
         loop {
             let mut files = files_in_dir(&self.config.input, &self.config.file_prefix, &processed);
 
             if files.is_empty() {
                 if self.config.mode_polling_dir {
-                    thread::sleep(Duration::from_millis(10_000));
+                    tokio::time::sleep(Duration::from_millis(10_000)).await;
                     continue;
                 }
                 eprintln!("ERROR: no input file");
@@ -60,7 +65,7 @@ impl Controller {
             files.sort_unstable();
             for file in files {
                 println!("{:?}", file);
-                self.run_single(file.as_path(), producer)?;
+                self.run_single(file.as_path(), producer).await?;
                 processed.push(file);
             }
 
@@ -72,7 +77,7 @@ impl Controller {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn run_single(&mut self, filename: &Path, producer: &mut Producer) -> Result<()> {
+    async fn run_single(&mut self, filename: &Path, producer: &mut Producer) -> Result<()> {
         let input_type = input_type(&filename.to_string_lossy());
         if input_type == InputType::Dir {
             return Err(anyhow!("invalid input type"));
@@ -126,7 +131,7 @@ impl Controller {
                         }
                         None => {
                             if self.config.mode_grow && !self.config.mode_polling_dir {
-                                thread::sleep(Duration::from_millis(3_000));
+                                tokio::time::sleep(Duration::from_millis(3_000)).await;
                                 continue;
                             }
                             break;
@@ -136,7 +141,7 @@ impl Controller {
                         >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
                     {
                         msg.message.serialize(&mut Serializer::new(&mut buf))?;
-                        if producer.produce(buf.as_slice(), true).is_err() {
+                        if producer.produce(buf.as_slice(), true).await.is_err() {
                             break;
                         }
                         msg.clear();
@@ -163,7 +168,7 @@ impl Controller {
 
         if !msg.is_empty() {
             msg.message.serialize(&mut Serializer::new(&mut buf))?;
-            producer.produce(buf.as_slice(), true)?;
+            producer.produce(buf.as_slice(), true).await?;
         }
         if let Err(e) = write_offset(
             &(self.config.input.clone() + "_" + &self.config.offset_prefix),
@@ -309,6 +314,7 @@ async fn producer(config: &Config) -> Producer {
                 &config.giganto_addr,
                 &config.giganto_name,
                 &config.certs_toml,
+                &config.giganto_kind,
             )
             .await
             {

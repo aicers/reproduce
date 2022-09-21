@@ -58,6 +58,12 @@ reproduce -h
     reproduce -i /data/LOG -v -b 192.168.4.5:9092 -t syslog -e
     ```
 
+* Convert a log file and send it to Giganto server:
+
+    ```sh
+    reproduce -i LOG_20220921 -o giganto -G 127.0.0.1:38370 -N server_name -C config.toml -k test_kind
+    ```
+
 ## License
 
 Copyright 2021-2022 EINSIS, Inc.
