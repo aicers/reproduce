@@ -227,16 +227,15 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     } else {
         let pkcs8 =
             rustls_pemfile::pkcs8_private_keys(&mut &*key).expect("malformed PKCS #8 private key");
-        match pkcs8.into_iter().next() {
-            Some(x) => rustls::PrivateKey(x),
-            None => {
-                let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
-                    .expect("malformed PKCS #1 private key");
-                match rsa.into_iter().next() {
-                    Some(x) => rustls::PrivateKey(x),
-                    None => {
-                        bail!("No private key found");
-                    }
+        if let Some(key) = pkcs8.into_iter().next() {
+            rustls::PrivateKey(key)
+        } else {
+            let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
+                .expect("malformed PKCS #1 private key");
+            match rsa.into_iter().next() {
+                Some(x) => rustls::PrivateKey(x),
+                None => {
+                    bail!("No private key found");
                 }
             }
         }
