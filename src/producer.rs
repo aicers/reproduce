@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration as CrnDuration, Utc};
 use kafka::error::Error as KafkaError;
 use kafka::producer::Record;
-use quinn::{Connection, Endpoint, SendStream, TransportConfig, WriteError};
+use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig, WriteError};
 use serde::Deserialize;
 use std::convert::TryInto;
 use std::fs::{self, File};
@@ -73,8 +73,10 @@ impl Producer {
                 connection: conn, ..
             } = new_connection;
 
-            let (giganto_send, _giganto_recv) =
+            let (giganto_send, giganto_recv) =
                 conn.open_bi().await.expect("Failed to open giganto stream");
+
+            tokio::spawn(async move { recv_ack(giganto_recv).await });
 
             return Ok(Self::Giganto(Giganto {
                 giganto_endpoint: endpoint.clone(),
@@ -252,6 +254,7 @@ impl Giganto {
         giganto_data.append(&mut body_len.to_le_bytes().to_vec());
         giganto_data.append(&mut serial_body);
 
+        // println!("Send"); // print console `Send` to test
         if self.giganto_sender.write_all(&giganto_data).await.is_err() {
             self.reconnect().await.expect("reconnect giganto");
         }
@@ -292,10 +295,11 @@ impl Giganto {
                 connection: conn, ..
             } = new_connection;
 
-            let (giganto_send, _giganto_recv) = conn
+            let (giganto_send, giganto_recv) = conn
                 .open_bi()
                 .await
                 .context("Failed to open giganto stream")?;
+            tokio::spawn(async move { recv_ack(giganto_recv).await });
 
             self.giganto_conn = conn;
             self.giganto_sender = giganto_send;
@@ -402,6 +406,24 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     endpoint.set_default_client_config(client_config);
 
     Ok(endpoint)
+}
+
+async fn recv_ack(mut recv: RecvStream) -> Result<()> {
+    let mut ack_buf = [0; std::mem::size_of::<u64>()];
+    loop {
+        match recv.read_exact(&mut ack_buf).await {
+            Ok(()) => {
+                let recv_ts = i64::from_be_bytes(ack_buf);
+                println!("ACK: {}", recv_ts);
+            }
+            Err(quinn::ReadExactError::FinishedEarly) => {
+                eprintln!("Finished Early");
+                break;
+            }
+            Err(e) => bail!("Receive ACK Err: {}", e),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
