@@ -15,6 +15,7 @@ use std::time::Duration;
 type GigantoLog = (String, Vec<u8>);
 
 const GIGANTO_TYPE: u32 = 0x02;
+const PROTOCOL_VERSION: &str = "0.2.0";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
@@ -72,6 +73,14 @@ impl Producer {
             let quinn::NewConnection {
                 connection: conn, ..
             } = new_connection;
+
+            let (check_send, check_recv) = conn
+                .open_bi()
+                .await
+                .context("Failed to open giganto handshake stream")?;
+            if check_stream(check_send, check_recv).await.is_err() {
+                bail!("Protocol Check fail, please check protocol version");
+            }
 
             let (giganto_send, giganto_recv) =
                 conn.open_bi().await.expect("Failed to open giganto stream");
@@ -295,6 +304,14 @@ impl Giganto {
                 connection: conn, ..
             } = new_connection;
 
+            let (check_send, check_recv) = conn
+                .open_bi()
+                .await
+                .context("Failed to open giganto handshake stream")?;
+            if check_stream(check_send, check_recv).await.is_err() {
+                bail!("Protocol Check fail, please check protocol version");
+            }
+
             let (giganto_send, giganto_recv) = conn
                 .open_bi()
                 .await
@@ -423,6 +440,29 @@ async fn recv_ack(mut recv: RecvStream) -> Result<()> {
             Err(e) => bail!("Receive ACK Err: {}", e),
         }
     }
+    Ok(())
+}
+
+async fn check_stream(mut send: SendStream, mut recv: RecvStream) -> Result<()> {
+    let mut handshake_vec = Vec::new();
+    let version = PROTOCOL_VERSION.as_bytes();
+    let len = version.len() as u64;
+    handshake_vec.extend(len.to_le_bytes());
+    handshake_vec.extend(version);
+    send.write_all(&handshake_vec).await?;
+    send.finish().await?;
+
+    let mut len_buf = [0; std::mem::size_of::<u64>()];
+    let mut recv_buf: Vec<u8> = Vec::new();
+    recv.read_exact(&mut len_buf).await?;
+    let len = u64::from_le_bytes(len_buf);
+    recv_buf.resize(len.try_into()?, 0);
+    recv.read_exact(&mut recv_buf).await?;
+
+    if bincode::deserialize::<Option<&str>>(&recv_buf)?.is_none() {
+        bail!("connection reject");
+    }
+
     Ok(())
 }
 
