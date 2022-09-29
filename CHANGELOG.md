@@ -22,6 +22,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   key = "tests/key.pem"
   roots = ["tests/root.pem"]
   ```
+- Protocol version check before send log.
 
 ### Removed
 
