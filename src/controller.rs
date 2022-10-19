@@ -112,6 +112,7 @@ impl Controller {
 
         let mut conv_cnt = 0;
         report.start(self.get_seq_no(0));
+        let mut giganto_msg: Vec<u8> = Vec::new();
         let mut msg = SizedForwardMode::default();
         msg.set_tag("REproduce".to_string()).expect("not too long");
         let mut buf: Vec<u8> = Vec::new();
@@ -137,16 +138,31 @@ impl Controller {
                             break;
                         }
                     };
-                    if msg.serialized_len() + line.len()
-                        >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
-                    {
-                        msg.message.serialize(&mut Serializer::new(&mut buf))?;
-                        if producer.produce(buf.as_slice(), true).await.is_err() {
-                            break;
+                    match producer {
+                        Producer::Giganto(_) => {
+                            giganto_msg.extend(&line);
+                            if producer
+                                .produce(giganto_msg.as_slice(), true)
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                            giganto_msg.clear();
                         }
-                        msg.clear();
-                        buf.clear();
-                        msg.set_tag("REproduce".to_string())?;
+                        _ => {
+                            if msg.serialized_len() + line.len()
+                                >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
+                            {
+                                msg.message.serialize(&mut Serializer::new(&mut buf))?;
+                                if producer.produce(buf.as_slice(), true).await.is_err() {
+                                    break;
+                                }
+                                msg.clear();
+                                buf.clear();
+                                msg.set_tag("REproduce".to_string())?;
+                            }
+                        }
                     }
 
                     self.seq_no += 1;
@@ -165,10 +181,14 @@ impl Controller {
                 eprintln!("ERROR: invalide input type: {:?}", input_type);
             }
         }
-
-        if !msg.is_empty() {
-            msg.message.serialize(&mut Serializer::new(&mut buf))?;
-            producer.produce(buf.as_slice(), true).await?;
+        match producer {
+            Producer::Giganto(_) => {}
+            _ => {
+                if !msg.is_empty() {
+                    msg.message.serialize(&mut Serializer::new(&mut buf))?;
+                    producer.produce(buf.as_slice(), true).await?;
+                }
+            }
         }
         if let Err(e) = write_offset(
             &(self.config.input.clone() + "_" + &self.config.offset_prefix),
