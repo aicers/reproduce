@@ -31,6 +31,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   ```
 
 - Protocol version check before send log.
+- Added termination logic for one-shot req/resp to giganto.
 
 ### Removed
 
@@ -50,7 +51,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - An invalid command-line option value is not converted into the default value;
   instead it results in an error.
 - No longer requires OpenSSL.
-  
+
 ## [0.9.10] - 2020-09-08
 
 ### Changed

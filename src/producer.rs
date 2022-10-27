@@ -1,19 +1,24 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration as CrnDuration, Utc};
-use kafka::error::Error as KafkaError;
-use kafka::producer::Record;
+use kafka::{error::Error as KafkaError, producer::Record};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig, WriteError};
 use serde::Deserialize;
-use std::convert::TryInto;
-use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    convert::TryInto,
+    fs::{self, File},
+    io::{Read, Write},
+    net::SocketAddr,
+    path::Path,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
+    time::Duration,
+};
 
 type GigantoLog = (String, Vec<u8>);
 
+const CHANNEL_CLOSE_COUNT: u8 = 150;
+const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
+const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const GIGANTO_TYPE: u32 = 0x02;
 const PROTOCOL_VERSION: &str = "0.2.0";
 const INTERVAL: u64 = 5;
@@ -85,7 +90,10 @@ impl Producer {
             let (giganto_send, giganto_recv) =
                 conn.open_bi().await.expect("Failed to open giganto stream");
 
-            tokio::spawn(async move { recv_ack(giganto_recv).await });
+            let finish_checker_send = Arc::new(AtomicBool::new(false));
+            let finish_checker_recv = finish_checker_send.clone();
+
+            tokio::spawn(async move { recv_ack(giganto_recv, finish_checker_recv).await });
 
             return Ok(Self::Giganto(Giganto {
                 giganto_endpoint: endpoint.clone(),
@@ -97,6 +105,7 @@ impl Producer {
                 giganto_conn: conn,
                 giganto_sender: giganto_send,
                 init_msg: true,
+                finish_checker: finish_checker_send,
             }));
         }
     }
@@ -241,6 +250,7 @@ pub struct Giganto {
     giganto_conn: Connection,
     giganto_sender: SendStream,
     init_msg: bool,
+    finish_checker: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -272,15 +282,48 @@ impl Giganto {
         Ok(())
     }
 
-    pub async fn finish(&mut self) -> Result<()> {
-        self.giganto_sender
-            .finish()
-            .await
-            .context("Failed to finish stream")?;
-        self.giganto_conn.close(0u32.into(), b"log_done");
-        self.giganto_endpoint.wait_idle().await;
-        println!("giganto end");
+    async fn send_finish(&mut self) -> Result<()> {
+        let mut finish_data: Vec<u8> = Vec::new();
+        let mut serial_body = CHANNEL_CLOSE_MESSAGE.to_vec();
+        if self.init_msg {
+            finish_data.append(&mut GIGANTO_TYPE.to_le_bytes().to_vec());
+            self.init_msg = false;
+        }
+        let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
+        finish_data.append(&mut CHANNEL_CLOSE_TIMESTAMP.to_le_bytes().to_vec());
+        finish_data.append(&mut body_len.to_le_bytes().to_vec());
+        finish_data.append(&mut serial_body);
 
+        self.giganto_sender
+            .write_all(&finish_data)
+            .await
+            .context("Failed to send channel done message")?;
+        Ok(())
+    }
+
+    pub async fn finish(&mut self) -> Result<()> {
+        self.send_finish().await?;
+        let mut force_finish_count = 0;
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if self.finish_checker.load(Ordering::SeqCst) {
+                self.giganto_sender
+                    .finish()
+                    .await
+                    .context("Failed to finish stream")?;
+                self.giganto_conn.close(0u32.into(), b"log_done");
+                self.giganto_endpoint.wait_idle().await;
+                break;
+            }
+
+            //Wait for a response for 15 seconds
+            //If there is no response, the program ends.
+            force_finish_count += 1;
+            if force_finish_count == CHANNEL_CLOSE_COUNT {
+                break;
+            }
+        }
+        println!("giganto end");
         Ok(())
     }
 
@@ -316,11 +359,15 @@ impl Giganto {
                 .open_bi()
                 .await
                 .context("Failed to open giganto stream")?;
-            tokio::spawn(async move { recv_ack(giganto_recv).await });
+            let finish_checker_send = Arc::new(AtomicBool::new(false));
+            let finish_checker_recv = finish_checker_send.clone();
+
+            tokio::spawn(async move { recv_ack(giganto_recv, finish_checker_recv).await });
 
             self.giganto_conn = conn;
             self.giganto_sender = giganto_send;
             self.init_msg = true;
+            self.finish_checker = finish_checker_send;
 
             return Ok(());
         }
@@ -425,13 +472,18 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     Ok(endpoint)
 }
 
-async fn recv_ack(mut recv: RecvStream) -> Result<()> {
+async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Result<()> {
     let mut ack_buf = [0; std::mem::size_of::<u64>()];
     loop {
         match recv.read_exact(&mut ack_buf).await {
             Ok(()) => {
                 let recv_ts = i64::from_be_bytes(ack_buf);
-                println!("ACK: {}", recv_ts);
+                if recv_ts == CHANNEL_CLOSE_TIMESTAMP {
+                    finish_checker.store(true, Ordering::SeqCst);
+                    println!("Finish ACK: {}", recv_ts);
+                } else {
+                    println!("ACK: {}", recv_ts);
+                }
             }
             Err(quinn::ReadExactError::FinishedEarly) => {
                 eprintln!("Finished Early");
