@@ -15,7 +15,7 @@ use std::time::Duration;
 type GigantoLog = (String, Vec<u8>);
 
 const GIGANTO_TYPE: u32 = 0x02;
-const PROTOCOL_VERSION: &str = "0.2.0";
+const GIGANTO_VERSION: &str = "0.4.0";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
@@ -56,11 +56,7 @@ impl Producer {
             }
         };
         loop {
-            let new_connection = match endpoint
-                .connect(remote, name)
-                .expect("Failed to connect giganto, please check setting is correct")
-                .await
-            {
+            let conn = match endpoint.connect(remote, name)?.await {
                 Ok(r) => r,
                 Err(quinn::ConnectionError::TimedOut) => {
                     println!("Server TimedOut, reconnecting...");
@@ -69,10 +65,6 @@ impl Producer {
                 }
                 Err(e) => panic!("{}", e),
             };
-
-            let quinn::NewConnection {
-                connection: conn, ..
-            } = new_connection;
 
             let (check_send, check_recv) = conn
                 .open_bi()
@@ -286,7 +278,7 @@ impl Giganto {
 
     async fn reconnect(&mut self) -> Result<()> {
         loop {
-            let new_connection = match self
+            let conn = match self
                 .giganto_endpoint
                 .connect(self.giganto_server, &self.giganto_info.name)
                 .context("Failed to connect giganto, please check setting is correct")?
@@ -300,10 +292,6 @@ impl Giganto {
                 }
                 Err(e) => panic!("{}", e),
             };
-            let quinn::NewConnection {
-                connection: conn, ..
-            } = new_connection;
-
             let (check_send, check_recv) = conn
                 .open_bi()
                 .await
@@ -415,7 +403,7 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     transport.keep_alive_interval(Some(Duration::from_secs(INTERVAL)));
 
     let mut client_config = quinn::ClientConfig::new(Arc::new(client_crypto));
-    client_config.transport = Arc::new(transport);
+    client_config.transport_config(Arc::new(transport));
 
     let mut endpoint =
         quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
@@ -445,7 +433,7 @@ async fn recv_ack(mut recv: RecvStream) -> Result<()> {
 
 async fn check_stream(mut send: SendStream, mut recv: RecvStream) -> Result<()> {
     let mut handshake_vec = Vec::new();
-    let version = PROTOCOL_VERSION.as_bytes();
+    let version = GIGANTO_VERSION.as_bytes();
     let len = version.len() as u64;
     handshake_vec.extend(len.to_le_bytes());
     handshake_vec.extend(version);

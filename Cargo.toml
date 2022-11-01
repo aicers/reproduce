@@ -14,7 +14,7 @@ ctrlc = { version = "3", features = ["termination"] }
 eventio = "0.7"
 futures = "0.3"
 kafka = { version = "0.9", default-features = false }
-quinn = "0.8"
+quinn = "0.9"
 regex = "1"
 rmp-serde = "1.1"
 rustls = "0.20"
