@@ -757,7 +757,7 @@ checksum = "a3f87b73ce11b1619a3c6332f45341e0047173771e8b8b73f87bfeefb7b56244"
 
 [[package]]
 name = "reproduce"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "bincode",
