@@ -645,9 +645,9 @@ dependencies = [
 
 [[package]]
 name = "quinn"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a5f2962a2f18666b1b690cbc33f528b4fcdfc6e51a84b47c7fb19b6a9fab753"
+checksum = "57659b2d8340fa1a8b9358d14597b0b62ea8b9f6cd77cde07895079d619d2d4e"
 dependencies = [
  "bytes",
  "pin-project-lite",
