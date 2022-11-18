@@ -86,7 +86,7 @@ pub fn parse() -> Config {
         Arg::new("output")
             .short('o')
             .default_value("")
-            .help("Output type [TEXTFILE/none]. \
+            .help("Output type [TEXTFILE/none/giganto]. \
                    If not given, the output is sent to Kafka.")
     )
     .arg(

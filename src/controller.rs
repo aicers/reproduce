@@ -125,7 +125,12 @@ impl Controller {
                 let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(offset);
                 while running.load(Ordering::SeqCst) {
                     let line = match lines.next() {
-                        Some(Ok(line)) => line,
+                        Some(Ok(line)) => {
+                            if line.is_empty() {
+                                continue;
+                            }
+                            line
+                        }
                         Some(Err(e)) => {
                             eprintln!("ERROR: failed to convert input data: {}", e);
                             break;
