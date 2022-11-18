@@ -82,10 +82,18 @@ impl fmt::Display for Config {
         writeln!(f, "queue_size={}", self.queue_size)?;
         writeln!(f, "input={}", self.input)?;
         writeln!(f, "output={}", self.output)?;
-        writeln!(f, "offset_prefix={}", self.offset_prefix)?;
-        writeln!(f, "kafka_broker={}", self.kafka_broker)?;
-        writeln!(f, "kafka_topic={}", self.kafka_topic)?;
-        writeln!(f, "file_prefix={}", self.file_prefix.clone())?;
+        if !self.offset_prefix.is_empty() {
+            writeln!(f, "offset_prefix={}", self.offset_prefix)?;
+        }
+        if !self.kafka_broker.is_empty() {
+            writeln!(f, "kafka_broker={}", self.kafka_broker)?;
+        }
+        if !self.kafka_topic.is_empty() {
+            writeln!(f, "kafka_topic={}", self.kafka_topic)?;
+        }
+        if !self.file_prefix.is_empty() {
+            writeln!(f, "file_prefix={}", self.file_prefix.clone())?;
+        }
         writeln!(f, "datasource_id={}", self.datasource_id)?;
         writeln!(f, "certs_toml={}", self.certs_toml)?;
         writeln!(f, "giganto_name={}", self.giganto_name)?;
