@@ -1,10 +1,13 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration as CrnDuration, Utc};
+use csv::{Position, StringRecordsIter};
 use kafka::{error::Error as KafkaError, producer::Record};
+use num_enum::IntoPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig, WriteError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     convert::TryInto,
+    fmt::Debug,
     fs::{self, File},
     io::{Read, Write},
     net::SocketAddr,
@@ -14,13 +17,14 @@ use std::{
     time::Duration,
 };
 
+use crate::zeek::{self, TryFromZeekRecord};
+
 type GigantoLog = (String, Vec<u8>);
 
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_TYPE: u32 = 0x02;
-const GIGANTO_VERSION: &str = "0.4.0";
+const GIGANTO_VERSION: &str = "0.6.0";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
@@ -189,6 +193,67 @@ impl Producer {
             Producer::Null => Ok(()),
         }
     }
+
+    /// # Errors
+    ///
+    /// Returns an error if any writing operation fails.
+    pub async fn send_zeek_to_giganto(
+        &mut self,
+        iter: StringRecordsIter<'_, File>,
+        from: u64,
+    ) -> Result<()> {
+        if let Producer::Giganto(giganto) = self {
+            match giganto.giganto_info.kind.as_str() {
+                "conn" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekConn>(iter, GigantoLogType::Conn, from)
+                        .await?;
+                }
+                "http" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekHttp>(iter, GigantoLogType::Http, from)
+                        .await?;
+                }
+                "rdp" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekRdp>(iter, GigantoLogType::Rdp, from)
+                        .await?;
+                }
+                "smtp" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekSmtp>(iter, GigantoLogType::Smtp, from)
+                        .await?;
+                }
+                "dns" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekDns>(iter, GigantoLogType::Dns, from)
+                        .await?;
+                }
+                "ntlm" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekNtlm>(iter, GigantoLogType::Ntlm, from)
+                        .await?;
+                }
+                "kerberos" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekKerberos>(iter, GigantoLogType::Kerberos, from)
+                        .await?;
+                }
+                "ssh" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekSsh>(iter, GigantoLogType::Ssh, from)
+                        .await?;
+                }
+                "dce_rpc" => {
+                    giganto
+                        .send_zeek::<zeek::ZeekDceRpc>(iter, GigantoLogType::DceRpc, from)
+                        .await?;
+                }
+                _ => eprintln!("zeek kind error"),
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct Kafka {
@@ -251,13 +316,97 @@ struct GigantoInfo {
     kind: String,
 }
 
+#[derive(Debug, IntoPrimitive, Clone, Copy)]
+#[repr(u32)]
+enum GigantoLogType {
+    Conn = 0,
+    Dns = 1,
+    Log = 2,
+    Http = 3,
+    Rdp = 4,
+    Smtp = 6,
+    Ntlm = 7,
+    Kerberos = 8,
+    Ssh = 9,
+    DceRpc = 10,
+}
+
 impl Giganto {
+    async fn send_zeek<T>(
+        &mut self,
+        mut zeek_iter: StringRecordsIter<'_, File>,
+        protocol: GigantoLogType,
+        from: u64,
+    ) -> Result<()>
+    where
+        T: Serialize + TryFromZeekRecord + Unpin + Debug,
+    {
+        let mut success_cnt = 0u32;
+        let mut failed_cnt = 0u32;
+        let mut pos = Position::new();
+        loop {
+            let next_pos = zeek_iter.reader().position().clone();
+            if let Some(result) = zeek_iter.next() {
+                if next_pos.line() < from {
+                    continue;
+                }
+                match result {
+                    Ok(record) => {
+                        let mut zeek_data: Vec<u8> = Vec::new();
+                        match T::try_from_zeek_record(&record) {
+                            Ok((event, timestamp)) => {
+                                let mut serial_body = bincode::serialize(&event)?;
+                                if self.init_msg {
+                                    let data_type: u32 = protocol.into();
+                                    zeek_data.extend(data_type.to_le_bytes());
+                                    self.init_msg = false;
+                                }
+                                let body_len: u32 =
+                                    serial_body.len().try_into().expect("conversion as `u32`");
+
+                                zeek_data.extend(timestamp.to_le_bytes());
+                                zeek_data.extend(body_len.to_le_bytes());
+                                zeek_data.append(&mut serial_body);
+
+                                if self.giganto_sender.write_all(&zeek_data).await.is_err() {
+                                    self.reconnect().await?;
+                                }
+                                success_cnt += 1;
+                                zeek_data.clear();
+                            }
+                            Err(e) => {
+                                failed_cnt += 1;
+                                eprintln!("failed to convert data: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        failed_cnt += 1;
+                        eprintln!("invalid record: {}", e);
+                    }
+                }
+            } else {
+                break;
+            }
+            pos = next_pos;
+        }
+
+        println!(
+            "last line: {}, success line: {}, failed line: {} ",
+            pos.line(),
+            success_cnt,
+            failed_cnt
+        );
+
+        Ok(())
+    }
+
     async fn send(&mut self, msg: &[u8]) -> Result<(), WriteError> {
         let mut giganto_data: Vec<u8> = Vec::new();
         let body: GigantoLog = (self.giganto_info.kind.to_string(), msg.to_vec());
         let mut serial_body = bincode::serialize(&body).expect("failed to serialize log");
         if self.init_msg {
-            giganto_data.append(&mut GIGANTO_TYPE.to_le_bytes().to_vec());
+            giganto_data.append(&mut u32::from(GigantoLogType::Log).to_le_bytes().to_vec());
             self.init_msg = false;
         }
         let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
@@ -277,10 +426,6 @@ impl Giganto {
     async fn send_finish(&mut self) -> Result<()> {
         let mut finish_data: Vec<u8> = Vec::new();
         let mut serial_body = CHANNEL_CLOSE_MESSAGE.to_vec();
-        if self.init_msg {
-            finish_data.append(&mut GIGANTO_TYPE.to_le_bytes().to_vec());
-            self.init_msg = false;
-        }
         let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
         finish_data.append(&mut CHANNEL_CLOSE_TIMESTAMP.to_le_bytes().to_vec());
         finish_data.append(&mut body_len.to_le_bytes().to_vec());

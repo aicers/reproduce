@@ -1,6 +1,6 @@
 use clap::{value_parser, Arg, Command};
 use reproduce::{Config, Controller};
-use std::num::{NonZeroI64, NonZeroU8};
+use std::num::{NonZeroI64, NonZeroU64, NonZeroU8};
 use tokio::task;
 
 #[tokio::main]
@@ -153,6 +153,13 @@ pub fn parse() -> Config {
             .default_value("")
             .help("Giganto log kind.")
     )
+    .arg(
+        Arg::new("from")
+            .short('f')
+            .value_parser(value_parser!(NonZeroU64))
+            .default_value("1")
+            .help("zeek log from line number(at least 1)")
+    )
     .get_matches();
 
     let kafka_broker = m.get_one::<String>("broker").expect("has `default_value`");
@@ -184,6 +191,10 @@ pub fn parse() -> Config {
     let giganto_name = m.get_one::<String>("name").expect("has `default_value`");
     let giganto_addr = m.get_one::<String>("giganto").expect("has `default_name`");
     let giganto_kind = m.get_one::<String>("kind").expect("has `default_value`");
+    let zeek_from = m
+        .get_one::<NonZeroU64>("from")
+        .expect("has `default_value`")
+        .get();
     let mode_polling_dir = m.contains_id("polling");
     if output.is_empty() && kafka_broker.is_empty() {
         eprintln!("ERROR: Kafka broker (-b) required");
@@ -218,6 +229,7 @@ pub fn parse() -> Config {
         giganto_name: giganto_name.to_string(),
         giganto_addr: giganto_addr.to_string(),
         giganto_kind: giganto_kind.to_string(),
+        zeek_from,
         ..Config::default()
     }
 }
