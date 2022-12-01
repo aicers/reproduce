@@ -1,6 +1,8 @@
 use crate::config::{Config, InputType, OutputType};
+use crate::zeek::open_log_file;
 use crate::{Converter, Matcher, Producer, Report, SizedForwardMode};
 use anyhow::{anyhow, Result};
+use csv::Position;
 use rmp_serde::Serializer;
 use serde::Serialize;
 use std::fs::File;
@@ -15,6 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 const KAFKA_BUFFER_SAFETY_GAP: usize = 1024;
+const GIGANTO_ZEEK_KINDS: [&str; 9] = [
+    "conn", "http", "rdp", "smtp", "dns", "ntlm", "kerberos", "ssh", "dce_rpc",
+];
 
 pub struct Controller {
     config: Config,
@@ -120,70 +125,82 @@ impl Controller {
 
         match input_type {
             InputType::Log => {
-                let (mut converter, log_file) = log_converter(filename, &pattern_file)
-                    .map_err(|e| anyhow!("failed to set the converter: {}", e))?;
-                let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(offset);
-                while running.load(Ordering::SeqCst) {
-                    let line = match lines.next() {
-                        Some(Ok(line)) => {
-                            if line.is_empty() {
-                                continue;
+                if self.config.output.as_str() == "giganto"
+                    && GIGANTO_ZEEK_KINDS.contains(&self.config.giganto_kind.as_str())
+                {
+                    let mut rdr = open_log_file(filename)?;
+                    let pos = Position::new();
+                    rdr.seek(pos)?;
+                    let zeek_iter = rdr.records();
+                    producer
+                        .send_zeek_to_giganto(zeek_iter, self.config.zeek_from)
+                        .await?;
+                } else {
+                    let (mut converter, log_file) = log_converter(filename, &pattern_file)
+                        .map_err(|e| anyhow!("failed to set the converter: {}", e))?;
+                    let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(offset);
+                    while running.load(Ordering::SeqCst) {
+                        let line = match lines.next() {
+                            Some(Ok(line)) => {
+                                if line.is_empty() {
+                                    continue;
+                                }
+                                line
                             }
-                            line
-                        }
-                        Some(Err(e)) => {
-                            eprintln!("ERROR: failed to convert input data: {}", e);
-                            break;
-                        }
-                        None => {
-                            if self.config.mode_grow && !self.config.mode_polling_dir {
-                                tokio::time::sleep(Duration::from_millis(3_000)).await;
-                                continue;
-                            }
-                            break;
-                        }
-                    };
-                    match producer {
-                        Producer::Giganto(_) => {
-                            giganto_msg.extend(&line);
-                            if producer
-                                .produce(giganto_msg.as_slice(), true)
-                                .await
-                                .is_err()
-                            {
+                            Some(Err(e)) => {
+                                eprintln!("ERROR: failed to convert input data: {}", e);
                                 break;
                             }
-                            giganto_msg.clear();
-                        }
-                        _ => {
-                            if msg.serialized_len() + line.len()
-                                >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
-                            {
-                                msg.message.serialize(&mut Serializer::new(&mut buf))?;
-                                if producer.produce(buf.as_slice(), true).await.is_err() {
+                            None => {
+                                if self.config.mode_grow && !self.config.mode_polling_dir {
+                                    tokio::time::sleep(Duration::from_millis(3_000)).await;
+                                    continue;
+                                }
+                                break;
+                            }
+                        };
+                        match producer {
+                            Producer::Giganto(_) => {
+                                giganto_msg.extend(&line);
+                                if producer
+                                    .produce(giganto_msg.as_slice(), true)
+                                    .await
+                                    .is_err()
+                                {
                                     break;
                                 }
-                                msg.clear();
-                                buf.clear();
-                                msg.set_tag("REproduce".to_string())?;
+                                giganto_msg.clear();
+                            }
+                            _ => {
+                                if msg.serialized_len() + line.len()
+                                    >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
+                                {
+                                    msg.message.serialize(&mut Serializer::new(&mut buf))?;
+                                    if producer.produce(buf.as_slice(), true).await.is_err() {
+                                        break;
+                                    }
+                                    msg.clear();
+                                    buf.clear();
+                                    msg.set_tag("REproduce".to_string())?;
+                                }
                             }
                         }
-                    }
 
-                    self.seq_no += 1;
-                    if converter.convert(self.event_id(), &line, &mut msg).is_err() {
-                        // TODO: error handling for conversion failure
-                        report.skip(line.len());
-                    }
-                    conv_cnt += 1;
-                    report.process(line.len());
-                    if self.config.count_sent != 0 && conv_cnt >= self.config.count_sent {
-                        break;
+                        self.seq_no += 1;
+                        if converter.convert(self.event_id(), &line, &mut msg).is_err() {
+                            // TODO: error handling for conversion failure
+                            report.skip(line.len());
+                        }
+                        conv_cnt += 1;
+                        report.process(line.len());
+                        if self.config.count_sent != 0 && conv_cnt >= self.config.count_sent {
+                            break;
+                        }
                     }
                 }
             }
             InputType::Dir => {
-                eprintln!("ERROR: invalide input type: {:?}", input_type);
+                eprintln!("ERROR: invalid input type: {:?}", input_type);
             }
         }
         match producer {

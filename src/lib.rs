@@ -5,6 +5,7 @@ mod fluentd;
 mod matcher;
 mod producer;
 mod report;
+mod zeek;
 
 pub use config::{Config, InputType, OutputType};
 pub use controller::Controller;

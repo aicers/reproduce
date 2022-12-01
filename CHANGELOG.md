@@ -5,6 +5,16 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Send zeek conn, http, rdp, smtp to giganto with kind option
+  `"conn", "http", "rdp", "smtp", "ntlm", "kerberos"`
+  `"ssh", "dce_rpc"`
+- Add zeeklog skip option
+  `-f` option read line from given line number (at least 1),
+
 ## [0.12.0] - 2022-11-02
 
 ### Changed
@@ -141,6 +151,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.12.0...main
 [0.12.0]: https://github.com/aicers/reproduce/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/aicers/reproduce/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/aicers/reproduce/compare/0.9.10...0.10.0

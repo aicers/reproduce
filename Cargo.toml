@@ -10,10 +10,13 @@ byteorder = "1.3"
 bytesize = "1"
 chrono = "0.4"
 clap = { version = "4.0", features = ["wrap_help"] }
+csv = "1.1"
 ctrlc = { version = "3", features = ["termination"] }
 eventio = "0.7"
 futures = "0.3"
 kafka = { version = "0.9", default-features = false }
+num_enum = "0.5"
+num-traits = "0.2"
 quinn = "0.9"
 regex = "1"
 rmp-serde = "1.1"
