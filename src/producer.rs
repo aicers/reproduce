@@ -376,13 +376,13 @@ impl Giganto {
                             }
                             Err(e) => {
                                 failed_cnt += 1;
-                                eprintln!("failed to convert data: {}", e);
+                                eprintln!("failed to convert data: {e}");
                             }
                         }
                     }
                     Err(e) => {
                         failed_cnt += 1;
-                        eprintln!("invalid record: {}", e);
+                        eprintln!("invalid record: {e}");
                     }
                 }
             } else {
@@ -574,7 +574,7 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
 
     let mut server_root = rustls::RootCertStore::empty();
     for root in config.certification.roots {
-        let file = fs::read(&root).expect("Failed to read file");
+        let file = fs::read(root).expect("Failed to read file");
         let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
             .expect("invalid PEM-encoded certificate")
             .into_iter()
@@ -613,9 +613,9 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
                 let recv_ts = i64::from_be_bytes(ack_buf);
                 if recv_ts == CHANNEL_CLOSE_TIMESTAMP {
                     finish_checker.store(true, Ordering::SeqCst);
-                    println!("Finish ACK: {}", recv_ts);
+                    println!("Finish ACK: {recv_ts}");
                 } else {
-                    println!("ACK: {}", recv_ts);
+                    println!("ACK: {recv_ts}");
                 }
             }
             Err(quinn::ReadExactError::FinishedEarly) => {

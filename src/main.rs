@@ -6,12 +6,12 @@ use tokio::task;
 #[tokio::main]
 pub async fn main() {
     let config = parse();
-    println!("{}", config);
+    println!("{config}");
     let mut controller = Controller::new(config);
     println!("reproduce start");
     let _handle = task::spawn(async move {
         if let Err(e) = controller.run().await {
-            eprintln!("ERROR: {}", e);
+            eprintln!("ERROR: {e}");
             std::process::exit(1);
         }
     })

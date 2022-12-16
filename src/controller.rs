@@ -69,7 +69,7 @@ impl Controller {
 
             files.sort_unstable();
             for file in files {
-                println!("{:?}", file);
+                println!("{file:?}");
                 self.run_single(file.as_path(), producer).await?;
                 processed.push(file);
             }
@@ -148,7 +148,7 @@ impl Controller {
                                 line
                             }
                             Some(Err(e)) => {
-                                eprintln!("ERROR: failed to convert input data: {}", e);
+                                eprintln!("ERROR: failed to convert input data: {e}");
                                 break;
                             }
                             None => {
@@ -200,7 +200,7 @@ impl Controller {
                 }
             }
             InputType::Dir => {
-                eprintln!("ERROR: invalid input type: {:?}", input_type);
+                eprintln!("ERROR: invalid input type: {input_type:?}");
             }
         }
         match producer {
@@ -216,12 +216,12 @@ impl Controller {
             &(self.config.input.clone() + "_" + &self.config.offset_prefix),
             offset + conv_cnt,
         ) {
-            eprintln!("WARNING: cannot write to offset file: {}", e);
+            eprintln!("WARNING: cannot write to offset file: {e}");
         }
 
         #[allow(clippy::cast_possible_truncation)] // value never exceeds 0x00ff_ffff
         if let Err(e) = report.end(((self.seq_no - 1) & 0x00ff_ffff) as u32) {
-            eprintln!("WARNING: cannot write report: {}", e);
+            eprintln!("WARNING: cannot write report: {e}");
         }
         Ok(())
     }
@@ -300,7 +300,7 @@ fn read_offset(filename: &str) -> usize {
         let mut content = String::new();
         if f.read_to_string(&mut content).is_ok() {
             if let Ok(offset) = content.parse() {
-                println!("Offset file exists. Skipping {} entries.", offset);
+                println!("Offset file exists. Skipping {offset} entries.");
                 return offset;
             }
         }
@@ -333,7 +333,7 @@ fn log_converter<P: AsRef<Path>>(input: P, pattern_file: &str) -> Result<(Conver
     let log_file = File::open(input.as_ref())?;
     println!("input={:?}, input type=LOG", input.as_ref());
     if matcher.is_some() {
-        println!("pattern file={}", pattern_file);
+        println!("pattern file={pattern_file}");
     }
     Ok((Converter::new(matcher), log_file))
 }
@@ -345,7 +345,7 @@ async fn producer(config: &Config) -> Producer {
             match Producer::new_file(&config.output) {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Kafka producer: {}", e);
+                    eprintln!("cannot create Kafka producer: {e}");
                     std::process::exit(1);
                 }
             }
@@ -362,7 +362,7 @@ async fn producer(config: &Config) -> Producer {
             {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Giganto producer: {}", e);
+                    eprintln!("cannot create Giganto producer: {e}");
                     std::process::exit(1);
                 }
             }
@@ -378,7 +378,7 @@ async fn producer(config: &Config) -> Producer {
             ) {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Kafka producer: {}", e);
+                    eprintln!("cannot create Kafka producer: {e}");
                     std::process::exit(1);
                 }
             }
