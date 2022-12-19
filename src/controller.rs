@@ -14,6 +14,7 @@ use std::sync::{
 };
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{error, info, warn};
 use walkdir::WalkDir;
 
 const KAFKA_BUFFER_SAFETY_GAP: usize = 1024;
@@ -47,7 +48,7 @@ impl Controller {
         }
 
         if let Producer::Giganto(mut giganto) = producer {
-            giganto.finish().await.expect("Failed to finish stream");
+            giganto.finish().await.expect("failed to finish stream");
         }
 
         Ok(())
@@ -63,13 +64,13 @@ impl Controller {
                     tokio::time::sleep(Duration::from_millis(10_000)).await;
                     continue;
                 }
-                eprintln!("ERROR: no input file");
+                error!("no input file");
                 break;
             }
 
             files.sort_unstable();
             for file in files {
-                println!("{file:?}");
+                info!("{file:?}");
                 self.run_single(file.as_path(), producer).await?;
                 processed.push(file);
             }
@@ -148,7 +149,7 @@ impl Controller {
                                 line
                             }
                             Some(Err(e)) => {
-                                eprintln!("ERROR: failed to convert input data: {e}");
+                                error!("failed to convert input data: {e}");
                                 break;
                             }
                             None => {
@@ -162,11 +163,9 @@ impl Controller {
                         match producer {
                             Producer::Giganto(_) => {
                                 giganto_msg.extend(&line);
-                                if producer
-                                    .produce(giganto_msg.as_slice(), true)
-                                    .await
-                                    .is_err()
+                                if let Err(e) = producer.produce(giganto_msg.as_slice(), true).await
                                 {
+                                    error!("failed to produce message to Giganto. {e}");
                                     break;
                                 }
                                 giganto_msg.clear();
@@ -200,7 +199,7 @@ impl Controller {
                 }
             }
             InputType::Dir => {
-                eprintln!("ERROR: invalid input type: {input_type:?}");
+                error!("invalid input type: {input_type:?}");
             }
         }
         match producer {
@@ -216,12 +215,12 @@ impl Controller {
             &(self.config.input.clone() + "_" + &self.config.offset_prefix),
             offset + conv_cnt,
         ) {
-            eprintln!("WARNING: cannot write to offset file: {e}");
+            warn!("cannot write to offset file: {e}");
         }
 
         #[allow(clippy::cast_possible_truncation)] // value never exceeds 0x00ff_ffff
         if let Err(e) = report.end(((self.seq_no - 1) & 0x00ff_ffff) as u32) {
-            eprintln!("WARNING: cannot write report: {e}");
+            warn!("cannot write report: {e}");
         }
         Ok(())
     }
@@ -300,7 +299,7 @@ fn read_offset(filename: &str) -> usize {
         let mut content = String::new();
         if f.read_to_string(&mut content).is_ok() {
             if let Ok(offset) = content.parse() {
-                println!("Offset file exists. Skipping {offset} entries.");
+                info!("offset file found. Skipping {offset} entries.");
                 return offset;
             }
         }
@@ -331,9 +330,9 @@ fn matcher(pattern_file: &str) -> Option<Matcher> {
 fn log_converter<P: AsRef<Path>>(input: P, pattern_file: &str) -> Result<(Converter, File)> {
     let matcher = matcher(pattern_file);
     let log_file = File::open(input.as_ref())?;
-    println!("input={:?}, input type=LOG", input.as_ref());
+    info!("input={:?}, input type=LOG", input.as_ref());
     if matcher.is_some() {
-        println!("pattern file={pattern_file}");
+        info!("pattern file={pattern_file}");
     }
     Ok((Converter::new(matcher), log_file))
 }
@@ -341,17 +340,17 @@ fn log_converter<P: AsRef<Path>>(input: P, pattern_file: &str) -> Result<(Conver
 async fn producer(config: &Config) -> Producer {
     match output_type(&config.output) {
         OutputType::File => {
-            println!("output={}, output type=FILE", &config.output);
+            info!("output={}, output type=FILE", &config.output);
             match Producer::new_file(&config.output) {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Kafka producer: {e}");
+                    error!("cannot create Kafka producer: {e}");
                     std::process::exit(1);
                 }
             }
         }
         OutputType::Giganto => {
-            println!("output={}, output type=GIGANTO", &config.output);
+            info!("output={}, output type=GIGANTO", &config.output);
             match Producer::new_giganto(
                 &config.giganto_addr,
                 &config.giganto_name,
@@ -362,13 +361,13 @@ async fn producer(config: &Config) -> Producer {
             {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Giganto producer: {e}");
+                    error!("cannot create Giganto producer: {e}");
                     std::process::exit(1);
                 }
             }
         }
         OutputType::Kafka => {
-            println!("output={}, output type=KAFKA", &config.output);
+            info!("output={}, output type=KAFKA", &config.output);
             match Producer::new_kafka(
                 &config.kafka_broker,
                 &config.kafka_topic,
@@ -378,13 +377,13 @@ async fn producer(config: &Config) -> Producer {
             ) {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("cannot create Kafka producer: {e}");
+                    error!("cannot create Kafka producer: {e}");
                     std::process::exit(1);
                 }
             }
         }
         OutputType::None => {
-            println!("output={}, output type=NONE", &config.output);
+            info!("output={}, output type=NONE", &config.output);
             Producer::new_null()
         }
     }
