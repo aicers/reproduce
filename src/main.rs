@@ -2,21 +2,23 @@ use clap::{value_parser, Arg, Command};
 use reproduce::{Config, Controller};
 use std::num::{NonZeroI64, NonZeroU64, NonZeroU8};
 use tokio::task;
+use tracing::{error, info};
 
 #[tokio::main]
 pub async fn main() {
+    tracing_subscriber::fmt::init();
     let config = parse();
-    println!("{config}");
+    info!("{config}");
     let mut controller = Controller::new(config);
-    println!("reproduce start");
+    info!("reproduce start");
     let _handle = task::spawn(async move {
         if let Err(e) = controller.run().await {
-            eprintln!("ERROR: {e}");
+            error!("ERROR: {e}");
             std::process::exit(1);
         }
     })
     .await;
-    println!("reproduce end");
+    info!("reproduce end");
 }
 
 #[allow(clippy::too_many_lines)]
@@ -53,6 +55,7 @@ pub fn parse() -> Config {
     .arg(
         Arg::new("continuous")
             .short('g')
+            .default_value("false")
             .help("Continues to read from a growing input file")
     )
     .arg(
@@ -181,7 +184,7 @@ pub fn parse() -> Config {
         .get();
     let queue_size = *m.get_one::<usize>("size").expect("has `default_value`");
     if queue_size > 900_000 {
-        eprintln!("ERROR: queue size is too large (should be no larger than 900,000");
+        error!("queue size is too large (should be no larger than 900,000");
         std::process::exit(1);
     }
     let offset_prefix = m.get_one::<String>("offset").expect("has `default_value`");
@@ -197,15 +200,15 @@ pub fn parse() -> Config {
         .get();
     let mode_polling_dir = m.contains_id("polling");
     if output.is_empty() && kafka_broker.is_empty() {
-        eprintln!("ERROR: Kafka broker (-b) required");
+        error!("Kafka broker (-b) required");
         std::process::exit(1);
     }
     if output.is_empty() && kafka_topic.is_empty() {
-        eprintln!("ERROR: Kafka topic (-t) required");
+        error!("Kafka topic (-t) required");
         std::process::exit(1);
     }
     if input.is_empty() && output == "none" {
-        eprintln!("ERROR: input (-i) required if output (-o) is \"none\"");
+        error!("input (-i) required if output (-o) is \"none\"");
         std::process::exit(1);
     }
     Config {

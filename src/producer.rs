@@ -16,6 +16,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tracing::{error, info, warn};
 
 use crate::zeek::{self, TryFromZeekRecord};
 
@@ -55,20 +56,20 @@ impl Producer {
         let endpoint = match init_giganto(certs_toml) {
             Ok(ret) => ret,
             Err(e) => {
-                bail!("Failed to create giganto producer: {:?}", e);
+                bail!("failed to create Giganto producer: {:?}", e);
             }
         };
         let remote = match addr.parse::<SocketAddr>() {
             Ok(ret) => ret,
             Err(e) => {
-                bail!("Failed to parse giganto server: {:?}", e);
+                bail!("failed to parse Giganto server: {:?}", e);
             }
         };
         loop {
             let conn = match endpoint.connect(remote, name)?.await {
                 Ok(r) => r,
                 Err(quinn::ConnectionError::TimedOut) => {
-                    println!("Server TimedOut, reconnecting...");
+                    info!("server timeout, reconnecting...");
                     tokio::time::sleep(Duration::from_secs(INTERVAL)).await;
                     continue;
                 }
@@ -78,13 +79,15 @@ impl Producer {
             let (check_send, check_recv) = conn
                 .open_bi()
                 .await
-                .context("Failed to open giganto handshake stream")?;
+                .context("failed to open stream to handshake with Giganto")?;
             if check_stream(check_send, check_recv).await.is_err() {
-                bail!("Protocol Check fail, please check protocol version");
+                bail!("failed to check protocol version");
             }
 
-            let (giganto_send, giganto_recv) =
-                conn.open_bi().await.expect("Failed to open giganto stream");
+            let (giganto_send, giganto_recv) = conn
+                .open_bi()
+                .await
+                .expect("failed to open stream to Giganto");
 
             let finish_checker_send = Arc::new(AtomicBool::new(false));
             let finish_checker_recv = finish_checker_send.clone();
@@ -186,7 +189,10 @@ impl Producer {
                 Ok(())
             }
             Producer::Giganto(giganto) => {
-                giganto.send(message).await.context("Send fail")?;
+                giganto
+                    .send(message)
+                    .await
+                    .context("failed to send message")?;
 
                 Ok(())
             }
@@ -249,7 +255,7 @@ impl Producer {
                         .send_zeek::<zeek::ZeekDceRpc>(iter, GigantoLogType::DceRpc, from)
                         .await?;
                 }
-                _ => eprintln!("zeek kind error"),
+                _ => error!("unknown zeek kind"),
             }
         }
         Ok(())
@@ -376,13 +382,13 @@ impl Giganto {
                             }
                             Err(e) => {
                                 failed_cnt += 1;
-                                eprintln!("failed to convert data: {e}");
+                                error!("failed to convert data: {e}");
                             }
                         }
                     }
                     Err(e) => {
                         failed_cnt += 1;
-                        eprintln!("invalid record: {e}");
+                        error!("invalid record: {e}");
                     }
                 }
             } else {
@@ -391,7 +397,7 @@ impl Giganto {
             pos = next_pos;
         }
 
-        println!(
+        info!(
             "last line: {}, success line: {}, failed line: {} ",
             pos.line(),
             success_cnt,
@@ -414,7 +420,6 @@ impl Giganto {
         giganto_data.append(&mut body_len.to_le_bytes().to_vec());
         giganto_data.append(&mut serial_body);
 
-        // println!("Send"); // print console `Send` to test
         if self.giganto_sender.write_all(&giganto_data).await.is_err() {
             self.reconnect().await.expect("reconnect giganto");
         }
@@ -434,7 +439,7 @@ impl Giganto {
         self.giganto_sender
             .write_all(&finish_data)
             .await
-            .context("Failed to send channel done message")?;
+            .context("failed to send channel done message")?;
         Ok(())
     }
 
@@ -447,7 +452,7 @@ impl Giganto {
                 self.giganto_sender
                     .finish()
                     .await
-                    .context("Failed to finish stream")?;
+                    .context("failed to finish stream")?;
                 self.giganto_conn.close(0u32.into(), b"log_done");
                 self.giganto_endpoint.wait_idle().await;
                 break;
@@ -460,7 +465,7 @@ impl Giganto {
                 break;
             }
         }
-        println!("giganto end");
+        info!("Giganto end");
         Ok(())
     }
 
@@ -469,12 +474,12 @@ impl Giganto {
             let conn = match self
                 .giganto_endpoint
                 .connect(self.giganto_server, &self.giganto_info.name)
-                .context("Failed to connect giganto, please check setting is correct")?
+                .context("failed to connect Giganto")?
                 .await
             {
                 Ok(r) => r,
                 Err(quinn::ConnectionError::TimedOut) => {
-                    println!("Server TimedOut, reconnecting...");
+                    info!("server timeout, reconnecting...");
                     tokio::time::sleep(Duration::from_secs(INTERVAL)).await;
                     continue;
                 }
@@ -483,15 +488,15 @@ impl Giganto {
             let (check_send, check_recv) = conn
                 .open_bi()
                 .await
-                .context("Failed to open giganto handshake stream")?;
+                .context("failed to open Giganto handshake stream")?;
             if check_stream(check_send, check_recv).await.is_err() {
-                bail!("Protocol Check fail, please check protocol version");
+                bail!("failed to check protocol version");
             }
 
             let (giganto_send, giganto_recv) = conn
                 .open_bi()
                 .await
-                .context("Failed to open giganto stream")?;
+                .context("failed to open stream to Giganto")?;
             let finish_checker_send = Arc::new(AtomicBool::new(false));
             let finish_checker_recv = finish_checker_send.clone();
 
@@ -512,15 +517,12 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     if let Err(e) =
         File::open(Path::new(certs_toml)).and_then(|mut f| f.read_to_string(&mut cfg_str))
     {
-        bail!(
-            "Failed to open file, Please check certs_toml file name: {:?}",
-            e
-        );
+        bail!("failed to open cert file{:?}", e);
     }
     let config = match toml::from_str::<Config>(&cfg_str) {
         Ok(r) => r,
         Err(e) => {
-            bail!("Failed to parse toml file, please check file: {:?}", e);
+            bail!("failed to parse config file. {:?}", e);
         }
     };
 
@@ -530,7 +532,7 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
         Ok(r) => r,
         Err(_) => {
             bail!(
-                "Failed to read (cert, key) file, cert_path:{}, key_path:{}",
+                "failed to read (cert, key) file. cert_path:{}, key_path:{}",
                 &config.certification.cert,
                 &config.certification.key
             );
@@ -553,7 +555,7 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
             match rsa.into_iter().next() {
                 Some(x) => rustls::PrivateKey(x),
                 None => {
-                    bail!("No private key found");
+                    bail!("no private key found");
                 }
             }
         }
@@ -574,14 +576,14 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
 
     let mut server_root = rustls::RootCertStore::empty();
     for root in config.certification.roots {
-        let file = fs::read(root).expect("Failed to read file");
+        let file = fs::read(root).expect("failed to read file");
         let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
             .expect("invalid PEM-encoded certificate")
             .into_iter()
             .map(rustls::Certificate)
             .collect();
         if let Some(cert) = root_cert.get(0) {
-            server_root.add(cert).expect("Failed to add cert");
+            server_root.add(cert).expect("failed to add cert");
         }
     }
 
@@ -598,8 +600,8 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     client_config.transport_config(Arc::new(transport));
 
     let mut endpoint =
-        quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
-            .expect("Failed to create endpoint");
+        quinn::Endpoint::client("[::]:0".parse().expect("failed to parse Endpoint addr"))
+            .expect("failed to create endpoint");
     endpoint.set_default_client_config(client_config);
 
     Ok(endpoint)
@@ -613,16 +615,16 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
                 let recv_ts = i64::from_be_bytes(ack_buf);
                 if recv_ts == CHANNEL_CLOSE_TIMESTAMP {
                     finish_checker.store(true, Ordering::SeqCst);
-                    println!("Finish ACK: {recv_ts}");
+                    info!("finish ACK: {recv_ts}");
                 } else {
-                    println!("ACK: {recv_ts}");
+                    info!("ACK: {recv_ts}");
                 }
             }
             Err(quinn::ReadExactError::FinishedEarly) => {
-                eprintln!("Finished Early");
+                warn!("finished early");
                 break;
             }
-            Err(e) => bail!("Receive ACK Err: {}", e),
+            Err(e) => bail!("receive ACK err: {}", e),
         }
     }
     Ok(())
