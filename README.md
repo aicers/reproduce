@@ -65,6 +65,12 @@ reproduce -h
         -C config.toml -k test_kind
     ```
 
+* Send Operation log to Giganto server:
+
+    ```sh
+    reproduce -i AGENT_NAME.log -o giganto -G 127.0.0.1:38370 -N server_name \
+      -C config.toml -k oplog
+
 ## License
 
 Copyright 2021-2022 EINSIS, Inc.

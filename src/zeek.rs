@@ -41,8 +41,7 @@ fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
     }
 }
 
-pub fn open_log_file(path: &Path) -> Result<Reader<File>> {
-    // let file = File::open(path)?;
+pub fn open_zeek_log_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
         .delimiter(b'\t')

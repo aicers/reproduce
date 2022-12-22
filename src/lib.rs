@@ -3,6 +3,7 @@ mod controller;
 mod converter;
 mod fluentd;
 mod matcher;
+mod operation_log;
 mod producer;
 mod report;
 mod zeek;
