@@ -1,7 +1,7 @@
 use crate::config::{Config, InputType, OutputType};
-use crate::zeek::open_log_file;
+use crate::zeek::open_zeek_log_file;
 use crate::{Converter, Matcher, Producer, Report, SizedForwardMode};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use rmp_serde::Serializer;
 use serde::Serialize;
 use std::fs::File;
@@ -20,6 +20,16 @@ const KAFKA_BUFFER_SAFETY_GAP: usize = 1024;
 const GIGANTO_ZEEK_KINDS: [&str; 9] = [
     "conn", "http", "rdp", "smtp", "dns", "ntlm", "kerberos", "ssh", "dce_rpc",
 ];
+const AGENTS_LIST: [&str; 7] = [
+    "review",
+    "giganto",
+    "piglet",
+    "hog",
+    "crusher",
+    "reconverge",
+    "tivan",
+];
+const OPERATION_LOG: &str = "oplog";
 
 pub struct Controller {
     config: Config,
@@ -128,13 +138,37 @@ impl Controller {
                 if self.config.output.as_str() == "giganto"
                     && GIGANTO_ZEEK_KINDS.contains(&self.config.giganto_kind.as_str())
                 {
-                    let rdr = open_log_file(filename)?;
+                    let rdr = open_zeek_log_file(filename)?;
                     let zeek_iter = rdr.into_records();
                     producer
                         .send_zeek_to_giganto(
                             zeek_iter,
-                            self.config.zeek_from,
+                            self.config.send_from,
                             self.config.mode_grow,
+                        )
+                        .await?;
+                } else if self.config.output.as_str() == "giganto"
+                    && self.config.giganto_kind.as_str() == OPERATION_LOG
+                {
+                    let agent = filename
+                        .file_name()
+                        .expect("input file name")
+                        .to_str()
+                        .expect("tostr")
+                        .split_once('.')
+                        .expect("agent.log")
+                        .0;
+                    if !AGENTS_LIST.contains(&agent) {
+                        bail!("invalid agent name `{}.log`", agent);
+                    }
+                    let oplog = File::open(filename)?;
+                    let rdr = BufReader::new(oplog);
+                    producer
+                        .send_oplog_to_giganto(
+                            rdr,
+                            agent,
+                            self.config.mode_grow,
+                            self.config.send_from,
                         )
                         .await?;
                 } else {

@@ -194,7 +194,7 @@ pub fn parse() -> Config {
     let giganto_name = m.get_one::<String>("name").expect("has `default_value`");
     let giganto_addr = m.get_one::<String>("giganto").expect("has `default_name`");
     let giganto_kind = m.get_one::<String>("kind").expect("has `default_value`");
-    let zeek_from = m
+    let send_from = m
         .get_one::<NonZeroU64>("from")
         .expect("has `default_value`")
         .get();
@@ -232,7 +232,7 @@ pub fn parse() -> Config {
         giganto_name: giganto_name.to_string(),
         giganto_addr: giganto_addr.to_string(),
         giganto_kind: giganto_kind.to_string(),
-        zeek_from,
+        send_from,
         ..Config::default()
     }
 }

@@ -14,6 +14,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `"ssh", "dce_rpc"`
 - Add zeeklog skip option
   `-f` option read line from given line number (at least 1),
+- Send operation log to giganto with kind option
+  `"oplog"`
+
+### Changed
+
+- `-g` grow option uses alone; doesn't take true or false
 
 ## [0.12.0] - 2022-11-02
 

@@ -20,7 +20,7 @@ pub struct Config {
     pub giganto_name: String,
     pub giganto_addr: String,
     pub giganto_kind: String,
-    pub zeek_from: u64,
+    pub send_from: u64,
 
     pub datasource_id: u8,
     pub initial_seq_no: usize,
@@ -70,7 +70,7 @@ impl Default for Config {
             giganto_name: String::new(),
             giganto_addr: String::new(),
             giganto_kind: String::new(),
-            zeek_from: 1,
+            send_from: 1,
         }
     }
 }

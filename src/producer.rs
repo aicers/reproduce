@@ -9,7 +9,7 @@ use std::{
     convert::TryInto,
     fmt::Debug,
     fs::{self, File},
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::SocketAddr,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
@@ -18,7 +18,10 @@ use std::{
 };
 use tracing::{error, info, warn};
 
-use crate::zeek::{self, TryFromZeekRecord};
+use crate::{
+    operation_log,
+    zeek::{self, TryFromZeekRecord},
+};
 
 type GigantoLog = (String, Vec<u8>);
 
@@ -261,6 +264,24 @@ impl Producer {
         }
         Ok(())
     }
+
+    /// # Errors
+    ///
+    /// Returns an error if any writing operation fails.
+    pub async fn send_oplog_to_giganto(
+        &mut self,
+        reader: BufReader<File>,
+        agent: &str,
+        grow: bool,
+        from: u64,
+    ) -> Result<()> {
+        if let Producer::Giganto(giganto) = self {
+            if giganto.giganto_info.kind.as_str() == "oplog" {
+                giganto.send_oplog(reader, agent, grow, from).await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct Kafka {
@@ -336,6 +357,7 @@ enum GigantoLogType {
     Kerberos = 8,
     Ssh = 9,
     DceRpc = 10,
+    Oplog = 12,
 }
 
 impl Giganto {
@@ -380,6 +402,7 @@ impl Giganto {
 
                                 if self.giganto_sender.write_all(&zeek_data).await.is_err() {
                                     self.reconnect().await?;
+                                    continue;
                                 }
                                 success_cnt += 1;
                                 zeek_data.clear();
@@ -415,6 +438,64 @@ impl Giganto {
             pos.line(),
             success_cnt,
             failed_cnt
+        );
+
+        Ok(())
+    }
+
+    async fn send_oplog(
+        &mut self,
+        reader: BufReader<File>,
+        agent: &str,
+        grow: bool,
+        from: u64,
+    ) -> Result<()> {
+        let mut lines = reader.lines();
+        let mut cnt = 0;
+        let mut success_cnt = 0u32;
+        let mut failed_cnt = 0u32;
+        loop {
+            if let Some(Ok(line)) = lines.next() {
+                cnt += 1;
+                if cnt < from {
+                    continue;
+                }
+                let mut op_log: Vec<u8> = Vec::new();
+                let (body, timestamp) = if let Ok(r) = operation_log::log_regex(&line, agent) {
+                    success_cnt += 1;
+                    r
+                } else {
+                    failed_cnt += 1;
+                    continue;
+                };
+
+                let mut serial_body = bincode::serialize(&body)?;
+                if self.init_msg {
+                    op_log.extend(u32::from(GigantoLogType::Oplog).to_le_bytes());
+                    self.init_msg = false;
+                }
+                let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
+
+                op_log.extend(timestamp.to_le_bytes());
+                op_log.extend(body_len.to_le_bytes());
+                op_log.append(&mut serial_body);
+
+                if self.giganto_sender.write_all(&op_log).await.is_err() {
+                    self.reconnect().await?;
+                }
+
+                op_log.clear();
+            } else {
+                if grow {
+                    tokio::time::sleep(Duration::from_millis(3_000)).await;
+                    continue;
+                }
+                break;
+            }
+        }
+        info!(
+            "last line: {}, success: {}, failed: {}",
+            cnt, success_cnt, failed_cnt
         );
 
         Ok(())
