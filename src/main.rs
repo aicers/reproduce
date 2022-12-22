@@ -55,8 +55,8 @@ pub fn parse() -> Config {
     .arg(
         Arg::new("continuous")
             .short('g')
-            .default_value("false")
-            .help("Continues to read from a growing input file")
+            .action(clap::ArgAction::SetTrue)
+            .help("If option exists, continues to read from a growing input file")
     )
     .arg(
         Arg::new("input")
@@ -172,7 +172,7 @@ pub fn parse() -> Config {
         .expect("has `default_value`")
         .get();
     let mode_eval = m.contains_id("eval");
-    let mode_grow = m.contains_id("continuous");
+    let mode_grow = m.get_flag("continuous");
     let input = m.get_one::<String>("input").expect("has `default_value`");
     let initial_seq_no = *m.get_one::<usize>("seq").expect("has `default_value`");
     let pattern_file = m.get_one::<String>("pattern").expect("has `default_value`");
