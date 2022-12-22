@@ -2,7 +2,6 @@ use crate::config::{Config, InputType, OutputType};
 use crate::zeek::open_log_file;
 use crate::{Converter, Matcher, Producer, Report, SizedForwardMode};
 use anyhow::{anyhow, Result};
-use csv::Position;
 use rmp_serde::Serializer;
 use serde::Serialize;
 use std::fs::File;
@@ -129,12 +128,14 @@ impl Controller {
                 if self.config.output.as_str() == "giganto"
                     && GIGANTO_ZEEK_KINDS.contains(&self.config.giganto_kind.as_str())
                 {
-                    let mut rdr = open_log_file(filename)?;
-                    let pos = Position::new();
-                    rdr.seek(pos)?;
-                    let zeek_iter = rdr.records();
+                    let rdr = open_log_file(filename)?;
+                    let zeek_iter = rdr.into_records();
                     producer
-                        .send_zeek_to_giganto(zeek_iter, self.config.zeek_from)
+                        .send_zeek_to_giganto(
+                            zeek_iter,
+                            self.config.zeek_from,
+                            self.config.mode_grow,
+                        )
                         .await?;
                 } else {
                     let (mut converter, log_file) = log_converter(filename, &pattern_file)

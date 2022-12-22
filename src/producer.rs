@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration as CrnDuration, Utc};
-use csv::{Position, StringRecordsIter};
+use csv::{Position, StringRecord, StringRecordsIntoIter};
 use kafka::{error::Error as KafkaError, producer::Record};
 use num_enum::IntoPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig, WriteError};
@@ -205,54 +205,55 @@ impl Producer {
     /// Returns an error if any writing operation fails.
     pub async fn send_zeek_to_giganto(
         &mut self,
-        iter: StringRecordsIter<'_, File>,
+        iter: StringRecordsIntoIter<File>,
         from: u64,
+        grow: bool,
     ) -> Result<()> {
         if let Producer::Giganto(giganto) = self {
             match giganto.giganto_info.kind.as_str() {
                 "conn" => {
                     giganto
-                        .send_zeek::<zeek::ZeekConn>(iter, GigantoLogType::Conn, from)
+                        .send_zeek::<zeek::ZeekConn>(iter, GigantoLogType::Conn, from, grow)
                         .await?;
                 }
                 "http" => {
                     giganto
-                        .send_zeek::<zeek::ZeekHttp>(iter, GigantoLogType::Http, from)
+                        .send_zeek::<zeek::ZeekHttp>(iter, GigantoLogType::Http, from, grow)
                         .await?;
                 }
                 "rdp" => {
                     giganto
-                        .send_zeek::<zeek::ZeekRdp>(iter, GigantoLogType::Rdp, from)
+                        .send_zeek::<zeek::ZeekRdp>(iter, GigantoLogType::Rdp, from, grow)
                         .await?;
                 }
                 "smtp" => {
                     giganto
-                        .send_zeek::<zeek::ZeekSmtp>(iter, GigantoLogType::Smtp, from)
+                        .send_zeek::<zeek::ZeekSmtp>(iter, GigantoLogType::Smtp, from, grow)
                         .await?;
                 }
                 "dns" => {
                     giganto
-                        .send_zeek::<zeek::ZeekDns>(iter, GigantoLogType::Dns, from)
+                        .send_zeek::<zeek::ZeekDns>(iter, GigantoLogType::Dns, from, grow)
                         .await?;
                 }
                 "ntlm" => {
                     giganto
-                        .send_zeek::<zeek::ZeekNtlm>(iter, GigantoLogType::Ntlm, from)
+                        .send_zeek::<zeek::ZeekNtlm>(iter, GigantoLogType::Ntlm, from, grow)
                         .await?;
                 }
                 "kerberos" => {
                     giganto
-                        .send_zeek::<zeek::ZeekKerberos>(iter, GigantoLogType::Kerberos, from)
+                        .send_zeek::<zeek::ZeekKerberos>(iter, GigantoLogType::Kerberos, from, grow)
                         .await?;
                 }
                 "ssh" => {
                     giganto
-                        .send_zeek::<zeek::ZeekSsh>(iter, GigantoLogType::Ssh, from)
+                        .send_zeek::<zeek::ZeekSsh>(iter, GigantoLogType::Ssh, from, grow)
                         .await?;
                 }
                 "dce_rpc" => {
                     giganto
-                        .send_zeek::<zeek::ZeekDceRpc>(iter, GigantoLogType::DceRpc, from)
+                        .send_zeek::<zeek::ZeekDceRpc>(iter, GigantoLogType::DceRpc, from, grow)
                         .await?;
                 }
                 _ => error!("unknown zeek kind"),
@@ -340,9 +341,10 @@ enum GigantoLogType {
 impl Giganto {
     async fn send_zeek<T>(
         &mut self,
-        mut zeek_iter: StringRecordsIter<'_, File>,
+        mut zeek_iter: StringRecordsIntoIter<File>,
         protocol: GigantoLogType,
         from: u64,
+        grow: bool,
     ) -> Result<()>
     where
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
@@ -350,6 +352,7 @@ impl Giganto {
         let mut success_cnt = 0u32;
         let mut failed_cnt = 0u32;
         let mut pos = Position::new();
+        let mut last_record = StringRecord::new();
         loop {
             let next_pos = zeek_iter.reader().position().clone();
             if let Some(result) = zeek_iter.next() {
@@ -357,7 +360,8 @@ impl Giganto {
                     continue;
                 }
                 match result {
-                    Ok(record) => {
+                    Ok(record) if record != last_record => {
+                        last_record = record.clone();
                         let mut zeek_data: Vec<u8> = Vec::new();
                         match T::try_from_zeek_record(&record) {
                             Ok((event, timestamp)) => {
@@ -386,12 +390,21 @@ impl Giganto {
                             }
                         }
                     }
+                    Ok(_) => {
+                        continue;
+                    }
                     Err(e) => {
                         failed_cnt += 1;
                         error!("invalid record: {e}");
                     }
                 }
             } else {
+                if grow {
+                    tokio::time::sleep(Duration::from_millis(3_000)).await;
+                    zeek_iter.reader_mut().seek(pos.clone())?;
+                    zeek_iter = zeek_iter.into_reader().into_records();
+                    continue;
+                }
                 break;
             }
             pos = next_pos;
