@@ -1,9 +1,7 @@
 # REproduce
 
 REproduce monitors a log file or a directory of log files, and sends appended
-entries to a Kafka server. Each message to Kafka is assigned an event ID
-consisting of system time in seconds (32 bits), sequence number (24 bits), and
-data source ID (8 bits).
+entries to a Giganto server.
 
 [![Coverage Status](https://codecov.io/gh/aicers/reproduce/branch/main/graph/badge.svg?token=2P7VSZ1KFV)](https://codecov.io/gh/aicers/reproduce)
 
@@ -37,32 +35,11 @@ reproduce -h
 
 ## Examples
 
-* Convert a log file and send it to the kafka server:
-
-    ```sh
-    reproduce -i LOG_20180906 -b 192.168.10.1:9092 -t sample_topic
-    ```
-
-* Send all log files whose names starting with `msg` in the `/data/LOG`
-  directory recursively:
-
-    ```sh
-    reproduce -i /data/LOG -n msg -b 192.168.4.5:9092 -t syslog -e
-    ```
-
-* Send all log files in the `/data/LOG` directory recursively. The directory
-  will be polled periodically (every 3 seconds by default). A new file will be
-  sent as well.
-
-    ```sh
-    reproduce -i /data/LOG -v -b 192.168.4.5:9092 -t syslog -e
-    ```
-
-* Convert a log file and send it to Giganto server:
+* Convert a zeek log file and send it to Giganto server from specific line:
 
     ```sh
     reproduce -i LOG_20220921 -o giganto -G 127.0.0.1:38370 -N server_name \
-        -C config.toml -k test_kind
+        -C config.toml -k protocol -f 10
     ```
 
 * Send Operation log to Giganto server:
@@ -70,6 +47,7 @@ reproduce -h
     ```sh
     reproduce -i AGENT_NAME.log -o giganto -G 127.0.0.1:38370 -N server_name \
       -C config.toml -k oplog
+    ```
 
 ## License
 
