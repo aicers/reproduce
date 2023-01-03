@@ -1,9 +1,7 @@
 use crate::config::{Config, InputType, OutputType};
 use crate::zeek::open_zeek_log_file;
-use crate::{Converter, Matcher, Producer, Report, SizedForwardMode};
+use crate::{Producer, Report};
 use anyhow::{anyhow, bail, Result};
-use rmp_serde::Serializer;
-use serde::Serialize;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,11 +10,9 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 use walkdir::WalkDir;
 
-const KAFKA_BUFFER_SAFETY_GAP: usize = 1024;
 const GIGANTO_ZEEK_KINDS: [&str; 9] = [
     "conn", "http", "rdp", "smtp", "dns", "ntlm", "kerberos", "ssh", "dce_rpc",
 ];
@@ -33,13 +29,12 @@ const OPERATION_LOG: &str = "oplog";
 
 pub struct Controller {
     config: Config,
-    seq_no: usize,
 }
 
 impl Controller {
     #[must_use]
     pub fn new(config: Config) -> Self {
-        Self { config, seq_no: 1 }
+        Self { config }
     }
 
     /// # Errors
@@ -117,21 +112,9 @@ impl Controller {
             read_offset(&filename)
         };
 
-        if self.seq_no == 1 {
-            if self.config.initial_seq_no > 0 {
-                self.seq_no = self.config.initial_seq_no;
-            } else if offset > 0 {
-                self.seq_no = offset + 1;
-            }
-        }
-
         let mut conv_cnt = 0;
-        report.start(self.get_seq_no(0));
+        report.start();
         let mut giganto_msg: Vec<u8> = Vec::new();
-        let mut msg = SizedForwardMode::default();
-        msg.set_tag("REproduce".to_string()).expect("not too long");
-        let mut buf: Vec<u8> = Vec::new();
-        let pattern_file = self.config.pattern_file.to_string();
 
         match input_type {
             InputType::Log => {
@@ -174,8 +157,8 @@ impl Controller {
                         )
                         .await?;
                 } else {
-                    let (mut converter, log_file) = log_converter(filename, &pattern_file)
-                        .map_err(|e| anyhow!("failed to set the converter: {}", e))?;
+                    let log_file =
+                        open_log(filename).map_err(|e| anyhow!("failed to open: {}", e))?;
                     let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(offset);
                     while running.load(Ordering::SeqCst) {
                         let line = match lines.next() {
@@ -197,35 +180,13 @@ impl Controller {
                                 break;
                             }
                         };
-                        match producer {
-                            Producer::Giganto(_) => {
-                                giganto_msg.extend(&line);
-                                if let Err(e) = producer.produce(giganto_msg.as_slice(), true).await
-                                {
-                                    error!("failed to produce message to Giganto. {e}");
-                                    break;
-                                }
-                                giganto_msg.clear();
+                        if let Producer::Giganto(_) = producer {
+                            giganto_msg.extend(&line);
+                            if let Err(e) = producer.produce(giganto_msg.as_slice(), true).await {
+                                error!("failed to produce message to Giganto. {e}");
+                                break;
                             }
-                            _ => {
-                                if msg.serialized_len() + line.len()
-                                    >= Producer::max_bytes() - KAFKA_BUFFER_SAFETY_GAP
-                                {
-                                    msg.message.serialize(&mut Serializer::new(&mut buf))?;
-                                    if producer.produce(buf.as_slice(), true).await.is_err() {
-                                        break;
-                                    }
-                                    msg.clear();
-                                    buf.clear();
-                                    msg.set_tag("REproduce".to_string())?;
-                                }
-                            }
-                        }
-
-                        self.seq_no += 1;
-                        if converter.convert(self.event_id(), &line, &mut msg).is_err() {
-                            // TODO: error handling for conversion failure
-                            report.skip(line.len());
+                            giganto_msg.clear();
                         }
                         conv_cnt += 1;
                         report.process(line.len());
@@ -239,15 +200,6 @@ impl Controller {
                 error!("invalid input type: {input_type:?}");
             }
         }
-        match producer {
-            Producer::Giganto(_) => {}
-            _ => {
-                if !msg.is_empty() {
-                    msg.message.serialize(&mut Serializer::new(&mut buf))?;
-                    producer.produce(buf.as_slice(), true).await?;
-                }
-            }
-        }
         if let Err(e) = write_offset(
             &(self.config.input.clone() + "_" + &self.config.offset_prefix),
             offset + conv_cnt,
@@ -255,29 +207,10 @@ impl Controller {
             warn!("cannot write to offset file: {e}");
         }
 
-        #[allow(clippy::cast_possible_truncation)] // value never exceeds 0x00ff_ffff
-        if let Err(e) = report.end(((self.seq_no - 1) & 0x00ff_ffff) as u32) {
+        if let Err(e) = report.end() {
             warn!("cannot write report: {e}");
         }
         Ok(())
-    }
-
-    fn event_id(&self) -> u64 {
-        let mut base_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("after UNIX EPOCH")
-            .as_secs();
-        if self.seq_no.trailing_zeros() >= 24 {
-            base_time += 1;
-        }
-
-        (base_time << 32)
-            | ((self.seq_no & 0x00ff_ffff) << 8) as u64
-            | u64::from(self.config.datasource_id)
-    }
-
-    fn get_seq_no(&self, num: usize) -> usize {
-        (self.seq_no + num) & 0x00ff_ffff
     }
 }
 
@@ -320,9 +253,7 @@ fn input_type(input: &str) -> InputType {
 }
 
 fn output_type(output: &str) -> OutputType {
-    if output.is_empty() {
-        OutputType::Kafka
-    } else if output == "none" {
+    if output == "none" {
         OutputType::None
     } else if output == "giganto" {
         OutputType::Giganto
@@ -350,28 +281,11 @@ fn write_offset(filename: &str, offset: usize) -> Result<()> {
     Ok(())
 }
 
-fn matcher(pattern_file: &str) -> Option<Matcher> {
-    if pattern_file.is_empty() {
-        None
-    } else if let Ok(f) = File::open(pattern_file) {
-        if let Ok(m) = Matcher::from_read(f) {
-            Some(m)
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
-fn log_converter<P: AsRef<Path>>(input: P, pattern_file: &str) -> Result<(Converter, File)> {
-    let matcher = matcher(pattern_file);
+fn open_log<P: AsRef<Path>>(input: P) -> Result<File> {
     let log_file = File::open(input.as_ref())?;
     info!("input={:?}, input type=LOG", input.as_ref());
-    if matcher.is_some() {
-        info!("pattern file={pattern_file}");
-    }
-    Ok((Converter::new(matcher), log_file))
+
+    Ok(log_file)
 }
 
 async fn producer(config: &Config) -> Producer {
@@ -381,7 +295,7 @@ async fn producer(config: &Config) -> Producer {
             match Producer::new_file(&config.output) {
                 Ok(p) => p,
                 Err(e) => {
-                    error!("cannot create Kafka producer: {e}");
+                    error!("cannot create File producer: {e}");
                     std::process::exit(1);
                 }
             }
@@ -399,22 +313,6 @@ async fn producer(config: &Config) -> Producer {
                 Ok(p) => p,
                 Err(e) => {
                     error!("cannot create Giganto producer: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        OutputType::Kafka => {
-            info!("output={}, output type=KAFKA", &config.output);
-            match Producer::new_kafka(
-                &config.kafka_broker,
-                &config.kafka_topic,
-                config.queue_size,
-                config.queue_period,
-                config.mode_grow,
-            ) {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("cannot create Kafka producer: {e}");
                     std::process::exit(1);
                 }
             }

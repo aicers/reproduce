@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Duration as CrnDuration, Utc};
+use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
-use kafka::{error::Error as KafkaError, producer::Record};
 use num_enum::IntoPrimitive;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig, WriteError};
 use serde::{Deserialize, Serialize};
@@ -35,7 +34,6 @@ const INTERVAL: u64 = 5;
 pub enum Producer {
     File(File),
     Giganto(Giganto),
-    Kafka(Kafka),
     Null,
 }
 
@@ -112,37 +110,6 @@ impl Producer {
         }
     }
 
-    /// Constructs a new Kafka producer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if it fails to create the underlying Kafka producer.
-    pub fn new_kafka(
-        broker: &str,
-        topic: &str,
-        queue_size: usize,
-        queue_period: i64,
-        periodic: bool,
-    ) -> Result<Self, KafkaError> {
-        const IDLE_TIMEOUT: u64 = 540;
-        const ACK_TIMEOUT: u64 = 5;
-        let producer = kafka::producer::Producer::from_hosts(vec![broker.to_string()])
-            .with_connection_idle_timeout(Duration::new(IDLE_TIMEOUT, 0))
-            .with_ack_timeout(std::time::Duration::new(ACK_TIMEOUT, 0))
-            .create()?;
-        let last_time = Utc::now();
-        Ok(Self::Kafka(Kafka {
-            inner: producer,
-            topic: topic.to_string(),
-            queue_data: Vec::new(),
-            queue_data_cnt: 0,
-            queue_size,
-            queue_period: CrnDuration::seconds(queue_period),
-            period_check: periodic,
-            last_time,
-        }))
-    }
-
     #[must_use]
     pub fn new_null() -> Self {
         Self::Null
@@ -164,30 +131,6 @@ impl Producer {
                 f.write_all(b"\n")?;
                 if flush {
                     f.flush()?;
-                }
-                Ok(())
-            }
-            Producer::Kafka(inner) => {
-                if !message.is_empty() {
-                    inner.queue_data.extend(message);
-                    if !flush {
-                        inner.queue_data_cnt += 1;
-                    }
-                }
-
-                if flush || inner.periodic_flush() || inner.queue_data.len() >= inner.queue_size {
-                    if let Err(e) = inner.send(message) {
-                        inner.queue_data.clear();
-                        inner.queue_data_cnt = 0;
-                        // TODO: error handling
-                        return Err(anyhow::Error::msg(e.to_string()));
-                    }
-                    inner.queue_data.clear();
-                    inner.queue_data_cnt = 0;
-
-                    inner.last_time = Utc::now();
-                } else {
-                    inner.queue_data.push(b'\n');
                 }
                 Ok(())
             }
@@ -321,37 +264,6 @@ impl Producer {
             }
         }
         Ok(())
-    }
-}
-
-pub struct Kafka {
-    inner: kafka::producer::Producer,
-    topic: String,
-    queue_data: Vec<u8>,
-    queue_data_cnt: usize,
-    queue_size: usize,
-    queue_period: CrnDuration,
-    period_check: bool,
-    last_time: DateTime<Utc>,
-}
-
-impl Kafka {
-    fn periodic_flush(&mut self) -> bool {
-        if !self.period_check {
-            return false;
-        }
-
-        let current = Utc::now();
-        current - self.last_time > self.queue_period
-    }
-
-    /// Sends a message to the Kafka server.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if transmission fails.
-    pub fn send(&mut self, msg: &[u8]) -> Result<(), KafkaError> {
-        self.inner.send(&Record::from_value(&self.topic, msg))
     }
 }
 

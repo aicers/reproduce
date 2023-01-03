@@ -11,6 +11,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add ctrlc for zeeklog and oplog when the grow option is given.
 
+### Removed
+
+- Dropped Kafka server support.
+
 ## [0.13.0] - 2023-01-04
 
 ### Added

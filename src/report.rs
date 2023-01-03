@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 
 pub struct Report {
     config: Config,
-    start_id: usize,
-    end_id: u32,
     sum_bytes: usize,
     min_bytes: usize,
     max_bytes: usize,
@@ -26,8 +24,6 @@ impl Report {
     pub fn new(config: Config) -> Self {
         Report {
             config,
-            start_id: 0,
-            end_id: 0,
             sum_bytes: 0,
             min_bytes: 0,
             max_bytes: 0,
@@ -41,12 +37,11 @@ impl Report {
         }
     }
 
-    pub fn start(&mut self, id: usize) {
+    pub fn start(&mut self) {
         if !self.config.mode_eval {
             return;
         }
 
-        self.start_id = id;
         self.time_start = Utc::now();
     }
 
@@ -76,7 +71,7 @@ impl Report {
     ///
     /// * `io::Error` when writing to the report file fails.
     #[allow(clippy::too_many_lines)]
-    pub fn end(&mut self, id: u32) -> io::Result<()> {
+    pub fn end(&mut self) -> io::Result<()> {
         const ARRANGE_VAR: usize = 28;
 
         if !self.config.mode_eval {
@@ -84,7 +79,7 @@ impl Report {
         }
 
         let report_dir = Path::new("/report");
-        let topic = &&self.config.kafka_topic;
+        let topic = &&self.config.giganto_kind;
         let report_path = if report_dir.is_dir() {
             report_dir.join(topic)
         } else {
@@ -95,7 +90,6 @@ impl Report {
             .create(true)
             .open(report_path)?;
 
-        self.end_id = id;
         self.time_now = Utc::now();
         self.time_diff = self.time_now - self.time_start;
 
@@ -128,34 +122,11 @@ impl Report {
             ByteSize(processed_bytes),
             width = ARRANGE_VAR,
         ))?;
-        report_file.write_fmt(format_args!(
-            "{:width$}{}\n",
-            "Data source ID:",
-            u32::from(self.config.datasource_id),
-            width = ARRANGE_VAR,
-        ))?;
-        report_file.write_fmt(format_args!(
-            "{:width$}{}-{}\n",
-            "Input ID:",
-            self.start_id,
-            self.end_id,
-            width = ARRANGE_VAR,
-        ))?;
 
         let output_type = self.config.output_type;
         match output_type {
             OutputType::None => {
                 report_file.write_all(b"Output(NONE):\n")?;
-            }
-            OutputType::Kafka => {
-                let broker = &&self.config.kafka_broker;
-                report_file.write_fmt(format_args!(
-                    "{:width$}{} ({})\n",
-                    "Output(KAFKA):",
-                    broker,
-                    topic,
-                    width = ARRANGE_VAR,
-                ))?;
             }
             OutputType::File => {
                 let output = &&self.config.output;
