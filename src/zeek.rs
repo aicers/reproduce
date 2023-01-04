@@ -7,6 +7,8 @@ mod ntlm;
 mod rdp;
 mod smtp;
 mod ssh;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use self::{
     conn::ZeekConn, dce_rpc::ZeekDceRpc, dns::ZeekDns, http::ZeekHttp, kerberos::ZeekKerberos,
