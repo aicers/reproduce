@@ -145,6 +145,7 @@ impl Controller {
                             zeek_iter,
                             self.config.send_from,
                             self.config.mode_grow,
+                            running.clone(),
                         )
                         .await?;
                 } else if self.config.output.as_str() == "giganto"
@@ -169,6 +170,7 @@ impl Controller {
                             agent,
                             self.config.mode_grow,
                             self.config.send_from,
+                            running.clone(),
                         )
                         .await?;
                 } else {

@@ -211,52 +211,89 @@ impl Producer {
         iter: StringRecordsIntoIter<File>,
         from: u64,
         grow: bool,
+        running: Arc<AtomicBool>,
     ) -> Result<()> {
         if let Producer::Giganto(giganto) = self {
             match giganto.giganto_info.kind.as_str() {
                 "conn" => {
                     giganto
-                        .send_zeek::<zeek::ZeekConn>(iter, GigantoLogType::Conn, from, grow)
+                        .send_zeek::<zeek::ZeekConn>(
+                            iter,
+                            GigantoLogType::Conn,
+                            from,
+                            grow,
+                            running,
+                        )
                         .await?;
                 }
                 "http" => {
                     giganto
-                        .send_zeek::<zeek::ZeekHttp>(iter, GigantoLogType::Http, from, grow)
+                        .send_zeek::<zeek::ZeekHttp>(
+                            iter,
+                            GigantoLogType::Http,
+                            from,
+                            grow,
+                            running,
+                        )
                         .await?;
                 }
                 "rdp" => {
                     giganto
-                        .send_zeek::<zeek::ZeekRdp>(iter, GigantoLogType::Rdp, from, grow)
+                        .send_zeek::<zeek::ZeekRdp>(iter, GigantoLogType::Rdp, from, grow, running)
                         .await?;
                 }
                 "smtp" => {
                     giganto
-                        .send_zeek::<zeek::ZeekSmtp>(iter, GigantoLogType::Smtp, from, grow)
+                        .send_zeek::<zeek::ZeekSmtp>(
+                            iter,
+                            GigantoLogType::Smtp,
+                            from,
+                            grow,
+                            running,
+                        )
                         .await?;
                 }
                 "dns" => {
                     giganto
-                        .send_zeek::<zeek::ZeekDns>(iter, GigantoLogType::Dns, from, grow)
+                        .send_zeek::<zeek::ZeekDns>(iter, GigantoLogType::Dns, from, grow, running)
                         .await?;
                 }
                 "ntlm" => {
                     giganto
-                        .send_zeek::<zeek::ZeekNtlm>(iter, GigantoLogType::Ntlm, from, grow)
+                        .send_zeek::<zeek::ZeekNtlm>(
+                            iter,
+                            GigantoLogType::Ntlm,
+                            from,
+                            grow,
+                            running,
+                        )
                         .await?;
                 }
                 "kerberos" => {
                     giganto
-                        .send_zeek::<zeek::ZeekKerberos>(iter, GigantoLogType::Kerberos, from, grow)
+                        .send_zeek::<zeek::ZeekKerberos>(
+                            iter,
+                            GigantoLogType::Kerberos,
+                            from,
+                            grow,
+                            running,
+                        )
                         .await?;
                 }
                 "ssh" => {
                     giganto
-                        .send_zeek::<zeek::ZeekSsh>(iter, GigantoLogType::Ssh, from, grow)
+                        .send_zeek::<zeek::ZeekSsh>(iter, GigantoLogType::Ssh, from, grow, running)
                         .await?;
                 }
                 "dce_rpc" => {
                     giganto
-                        .send_zeek::<zeek::ZeekDceRpc>(iter, GigantoLogType::DceRpc, from, grow)
+                        .send_zeek::<zeek::ZeekDceRpc>(
+                            iter,
+                            GigantoLogType::DceRpc,
+                            from,
+                            grow,
+                            running,
+                        )
                         .await?;
                 }
                 _ => error!("unknown zeek kind"),
@@ -274,10 +311,13 @@ impl Producer {
         agent: &str,
         grow: bool,
         from: u64,
+        running: Arc<AtomicBool>,
     ) -> Result<()> {
         if let Producer::Giganto(giganto) = self {
             if giganto.giganto_info.kind.as_str() == "oplog" {
-                giganto.send_oplog(reader, agent, grow, from).await?;
+                giganto
+                    .send_oplog(reader, agent, grow, from, running)
+                    .await?;
             }
         }
         Ok(())
@@ -367,6 +407,7 @@ impl Giganto {
         protocol: GigantoLogType,
         from: u64,
         grow: bool,
+        running: Arc<AtomicBool>,
     ) -> Result<()>
     where
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
@@ -375,7 +416,7 @@ impl Giganto {
         let mut failed_cnt = 0u32;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
-        loop {
+        while running.load(Ordering::SeqCst) {
             let next_pos = zeek_iter.reader().position().clone();
             if let Some(result) = zeek_iter.next() {
                 if next_pos.line() < from {
@@ -449,12 +490,13 @@ impl Giganto {
         agent: &str,
         grow: bool,
         from: u64,
+        running: Arc<AtomicBool>,
     ) -> Result<()> {
         let mut lines = reader.lines();
         let mut cnt = 0;
         let mut success_cnt = 0u32;
         let mut failed_cnt = 0u32;
-        loop {
+        while running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = lines.next() {
                 cnt += 1;
                 if cnt < from {
