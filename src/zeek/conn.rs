@@ -11,6 +11,7 @@ pub(crate) struct ZeekConn {
     src_port: u16,
     dst_port: u16,
     proto: u8,
+    service: String,
     duration: i64,
     orig_bytes: u64,
     resp_bytes: u64,
@@ -61,6 +62,11 @@ impl TryFromZeekRecord for ZeekConn {
             }
         } else {
             return Err(anyhow!("missing protocol"));
+        };
+        let service = if let Some(service) = rec.get(7) {
+            service.to_string()
+        } else {
+            return Err(anyhow!("missing service"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             if duration.eq("-") {
@@ -121,6 +127,7 @@ impl TryFromZeekRecord for ZeekConn {
                 src_port,
                 dst_port,
                 proto,
+                service,
                 duration,
                 orig_bytes,
                 resp_bytes,
