@@ -6,9 +6,11 @@ use std::net::IpAddr;
 #[derive(Debug, Serialize)]
 pub(crate) struct ZeekSsh {
     src_addr: IpAddr,
-    dst_addr: IpAddr,
     src_port: u16,
+    dst_addr: IpAddr,
     dst_port: u16,
+    proto: u8,
+    duration: i64,
     version: i64,
     auth_success: String,
     auth_attempts: i64,
@@ -131,9 +133,11 @@ impl TryFromZeekRecord for ZeekSsh {
         Ok((
             Self {
                 src_addr,
-                dst_addr,
                 src_port,
+                dst_addr,
                 dst_port,
+                proto: 0,
+                duration: 0,
                 version,
                 auth_success,
                 auth_attempts,

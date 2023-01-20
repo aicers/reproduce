@@ -7,10 +7,11 @@ use std::net::IpAddr;
 #[derive(Debug, Serialize)]
 pub(crate) struct ZeekDns {
     src_addr: IpAddr,
-    dst_addr: IpAddr,
     src_port: u16,
+    dst_addr: IpAddr,
     dst_port: u16,
     proto: u8,
+    duration: i64,
     query: String,
     answer: Vec<String>,
     trans_id: u16,
@@ -189,10 +190,11 @@ impl TryFromZeekRecord for ZeekDns {
         Ok((
             Self {
                 src_addr,
-                dst_addr,
                 src_port,
+                dst_addr,
                 dst_port,
                 proto,
+                duration: rtt,
                 query,
                 answer,
                 trans_id,
