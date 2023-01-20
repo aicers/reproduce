@@ -7,12 +7,12 @@ use std::net::IpAddr;
 #[derive(Debug, Serialize)]
 pub(crate) struct ZeekConn {
     src_addr: IpAddr,
-    dst_addr: IpAddr,
     src_port: u16,
+    dst_addr: IpAddr,
     dst_port: u16,
     proto: u8,
-    service: String,
     duration: i64,
+    service: String,
     orig_bytes: u64,
     resp_bytes: u64,
     orig_pkts: u64,
@@ -123,12 +123,12 @@ impl TryFromZeekRecord for ZeekConn {
         Ok((
             Self {
                 src_addr,
-                dst_addr,
                 src_port,
+                dst_addr,
                 dst_port,
                 proto,
-                service,
                 duration,
+                service,
                 orig_bytes,
                 resp_bytes,
                 orig_pkts,

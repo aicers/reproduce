@@ -10,6 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add ctrlc for zeeklog and oplog when the grow option is given.
+- Add common field (5-tuple + duration)
 
 ### Removed
 

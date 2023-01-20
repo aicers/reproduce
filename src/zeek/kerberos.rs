@@ -6,9 +6,11 @@ use std::net::IpAddr;
 #[derive(Debug, Serialize)]
 pub(crate) struct ZeekKerberos {
     src_addr: IpAddr,
-    dst_addr: IpAddr,
     src_port: u16,
+    dst_addr: IpAddr,
     dst_port: u16,
+    proto: u8,
+    duration: i64,
     request_type: String,
     client: String,
     service: String,
@@ -129,9 +131,11 @@ impl TryFromZeekRecord for ZeekKerberos {
         Ok((
             Self {
                 src_addr,
-                dst_addr,
                 src_port,
+                dst_addr,
                 dst_port,
+                proto: 0,
+                duration: 0,
                 request_type,
                 client,
                 service,
