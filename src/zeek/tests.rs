@@ -1,9 +1,7 @@
-use super::{
-    TryFromZeekRecord, ZeekConn, ZeekDceRpc, ZeekDns, ZeekHttp, ZeekKerberos, ZeekNtlm, ZeekRdp,
-    ZeekSmtp, ZeekSsh,
-};
+use crate::zeek::TryFromZeekRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
+use giganto_client::ingest::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
 
 // data from zeek log
 #[test]
@@ -13,7 +11,7 @@ fn zeek_conn() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekConn::try_from_zeek_record(&rec).is_ok());
+    assert!(Conn::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -23,7 +21,7 @@ fn zeek_http() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekHttp::try_from_zeek_record(&rec).is_ok());
+    assert!(Http::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -33,7 +31,7 @@ fn zeek_rdp() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekRdp::try_from_zeek_record(&rec).is_ok());
+    assert!(Rdp::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -43,7 +41,7 @@ fn zeek_smtp() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekSmtp::try_from_zeek_record(&rec).is_ok());
+    assert!(Smtp::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -53,7 +51,7 @@ fn zeek_dns() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekDns::try_from_zeek_record(&rec).is_ok());
+    assert!(Dns::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -63,7 +61,7 @@ fn zeek_ntlm() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekNtlm::try_from_zeek_record(&rec).is_ok());
+    assert!(Ntlm::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -73,7 +71,7 @@ fn zeek_kerberos() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekKerberos::try_from_zeek_record(&rec).is_ok());
+    assert!(Kerberos::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -83,7 +81,7 @@ fn zeek_ssh() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekSsh::try_from_zeek_record(&rec).is_ok());
+    assert!(Ssh::try_from_zeek_record(&rec).is_ok());
 }
 
 #[test]
@@ -93,7 +91,7 @@ fn zeek_dce_rpc() {
 
     let rec = stringrecord(data);
 
-    assert!(ZeekDceRpc::try_from_zeek_record(&rec).is_ok());
+    assert!(DceRpc::try_from_zeek_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {
