@@ -1,11 +1,18 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
-use num_enum::IntoPrimitive;
-use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig, WriteError};
+use giganto_client::{
+    connection::client_handshake,
+    frame::{RecvError, SendError},
+    ingest::{
+        log::Log,
+        network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        receive_ack_timestamp, send_event, send_record_header, RecordType,
+    },
+};
+use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use serde::{Deserialize, Serialize};
 use std::{
-    convert::TryInto,
     fmt::Debug,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
@@ -17,12 +24,7 @@ use std::{
 };
 use tracing::{error, info, warn};
 
-use crate::{
-    operation_log,
-    zeek::{self, TryFromZeekRecord},
-};
-
-type GigantoLog = (String, Vec<u8>);
+use crate::{operation_log, zeek::TryFromZeekRecord};
 
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
@@ -77,13 +79,7 @@ impl Producer {
                 Err(e) => panic!("{}", e),
             };
 
-            let (check_send, check_recv) = conn
-                .open_bi()
-                .await
-                .context("failed to open stream to handshake with Giganto")?;
-            if check_stream(check_send, check_recv).await.is_err() {
-                bail!("failed to check protocol version");
-            }
+            client_handshake(&conn, GIGANTO_VERSION).await?;
 
             let (giganto_send, giganto_recv) = conn
                 .open_bi()
@@ -160,83 +156,47 @@ impl Producer {
             match giganto.giganto_info.kind.as_str() {
                 "conn" => {
                     giganto
-                        .send_zeek::<zeek::ZeekConn>(
-                            iter,
-                            GigantoLogType::Conn,
-                            from,
-                            grow,
-                            running,
-                        )
+                        .send_zeek::<Conn>(iter, RecordType::Conn, from, grow, running)
                         .await?;
                 }
                 "http" => {
                     giganto
-                        .send_zeek::<zeek::ZeekHttp>(
-                            iter,
-                            GigantoLogType::Http,
-                            from,
-                            grow,
-                            running,
-                        )
+                        .send_zeek::<Http>(iter, RecordType::Http, from, grow, running)
                         .await?;
                 }
                 "rdp" => {
                     giganto
-                        .send_zeek::<zeek::ZeekRdp>(iter, GigantoLogType::Rdp, from, grow, running)
+                        .send_zeek::<Rdp>(iter, RecordType::Rdp, from, grow, running)
                         .await?;
                 }
                 "smtp" => {
                     giganto
-                        .send_zeek::<zeek::ZeekSmtp>(
-                            iter,
-                            GigantoLogType::Smtp,
-                            from,
-                            grow,
-                            running,
-                        )
+                        .send_zeek::<Smtp>(iter, RecordType::Smtp, from, grow, running)
                         .await?;
                 }
                 "dns" => {
                     giganto
-                        .send_zeek::<zeek::ZeekDns>(iter, GigantoLogType::Dns, from, grow, running)
+                        .send_zeek::<Dns>(iter, RecordType::Dns, from, grow, running)
                         .await?;
                 }
                 "ntlm" => {
                     giganto
-                        .send_zeek::<zeek::ZeekNtlm>(
-                            iter,
-                            GigantoLogType::Ntlm,
-                            from,
-                            grow,
-                            running,
-                        )
+                        .send_zeek::<Ntlm>(iter, RecordType::Ntlm, from, grow, running)
                         .await?;
                 }
                 "kerberos" => {
                     giganto
-                        .send_zeek::<zeek::ZeekKerberos>(
-                            iter,
-                            GigantoLogType::Kerberos,
-                            from,
-                            grow,
-                            running,
-                        )
+                        .send_zeek::<Kerberos>(iter, RecordType::Kerberos, from, grow, running)
                         .await?;
                 }
                 "ssh" => {
                     giganto
-                        .send_zeek::<zeek::ZeekSsh>(iter, GigantoLogType::Ssh, from, grow, running)
+                        .send_zeek::<Ssh>(iter, RecordType::Ssh, from, grow, running)
                         .await?;
                 }
                 "dce_rpc" => {
                     giganto
-                        .send_zeek::<zeek::ZeekDceRpc>(
-                            iter,
-                            GigantoLogType::DceRpc,
-                            from,
-                            grow,
-                            running,
-                        )
+                        .send_zeek::<DceRpc>(iter, RecordType::DceRpc, from, grow, running)
                         .await?;
                 }
                 _ => error!("unknown zeek kind"),
@@ -296,27 +256,11 @@ struct GigantoInfo {
     kind: String,
 }
 
-#[derive(Debug, IntoPrimitive, Clone, Copy)]
-#[repr(u32)]
-enum GigantoLogType {
-    Conn = 0,
-    Dns = 1,
-    Log = 2,
-    Http = 3,
-    Rdp = 4,
-    Smtp = 6,
-    Ntlm = 7,
-    Kerberos = 8,
-    Ssh = 9,
-    DceRpc = 10,
-    Oplog = 12,
-}
-
 impl Giganto {
     async fn send_zeek<T>(
         &mut self,
         mut zeek_iter: StringRecordsIntoIter<File>,
-        protocol: GigantoLogType,
+        protocol: RecordType,
         from: u64,
         grow: bool,
         running: Arc<AtomicBool>,
@@ -337,28 +281,23 @@ impl Giganto {
                 match result {
                     Ok(record) if record != last_record => {
                         last_record = record.clone();
-                        let mut zeek_data: Vec<u8> = Vec::new();
                         match T::try_from_zeek_record(&record) {
                             Ok((event, timestamp)) => {
-                                let mut serial_body = bincode::serialize(&event)?;
                                 if self.init_msg {
-                                    let data_type: u32 = protocol.into();
-                                    zeek_data.extend(data_type.to_le_bytes());
+                                    send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;
                                 }
-                                let body_len: u32 =
-                                    serial_body.len().try_into().expect("conversion as `u32`");
-
-                                zeek_data.extend(timestamp.to_le_bytes());
-                                zeek_data.extend(body_len.to_le_bytes());
-                                zeek_data.append(&mut serial_body);
-
-                                if self.giganto_sender.write_all(&zeek_data).await.is_err() {
-                                    self.reconnect().await?;
-                                    continue;
+                                match send_event(&mut self.giganto_sender, timestamp, event).await {
+                                    Err(SendError::WriteError(_)) => {
+                                        self.reconnect().await?;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        bail!("{e:?}");
+                                    }
+                                    Ok(_) => {}
                                 }
                                 success_cnt += 1;
-                                zeek_data.clear();
                             }
                             Err(e) => {
                                 failed_cnt += 1;
@@ -414,8 +353,8 @@ impl Giganto {
                 if cnt < from {
                     continue;
                 }
-                let mut op_log: Vec<u8> = Vec::new();
-                let (body, timestamp) = if let Ok(r) = operation_log::log_regex(&line, agent) {
+                let (oplog_data, timestamp) = if let Ok(r) = operation_log::log_regex(&line, agent)
+                {
                     success_cnt += 1;
                     r
                 } else {
@@ -423,22 +362,20 @@ impl Giganto {
                     continue;
                 };
 
-                let mut serial_body = bincode::serialize(&body)?;
                 if self.init_msg {
-                    op_log.extend(u32::from(GigantoLogType::Oplog).to_le_bytes());
+                    send_record_header(&mut self.giganto_sender, RecordType::Oplog).await?;
                     self.init_msg = false;
                 }
-                let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
 
-                op_log.extend(timestamp.to_le_bytes());
-                op_log.extend(body_len.to_le_bytes());
-                op_log.append(&mut serial_body);
-
-                if self.giganto_sender.write_all(&op_log).await.is_err() {
-                    self.reconnect().await?;
+                match send_event(&mut self.giganto_sender, timestamp, oplog_data).await {
+                    Err(SendError::WriteError(_)) => {
+                        self.reconnect().await?;
+                    }
+                    Err(e) => {
+                        bail!("{e:?}");
+                    }
+                    Ok(_) => {}
                 }
-
-                op_log.clear();
             } else {
                 if grow {
                     tokio::time::sleep(Duration::from_millis(3_000)).await;
@@ -455,39 +392,51 @@ impl Giganto {
         Ok(())
     }
 
-    async fn send(&mut self, msg: &[u8]) -> Result<(), WriteError> {
-        let mut giganto_data: Vec<u8> = Vec::new();
-        let body: GigantoLog = (self.giganto_info.kind.to_string(), msg.to_vec());
-        let mut serial_body = bincode::serialize(&body).expect("failed to serialize log");
+    async fn send(&mut self, msg: &[u8]) -> Result<()> {
+        let send_log: Log = Log {
+            kind: self.giganto_info.kind.to_string(),
+            log: msg.to_vec(),
+        };
+
         if self.init_msg {
-            giganto_data.append(&mut u32::from(GigantoLogType::Log).to_le_bytes().to_vec());
+            send_record_header(&mut self.giganto_sender, RecordType::Log).await?;
             self.init_msg = false;
         }
-        let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
-        giganto_data.append(&mut Utc::now().timestamp_nanos().to_le_bytes().to_vec());
-        giganto_data.append(&mut body_len.to_le_bytes().to_vec());
-        giganto_data.append(&mut serial_body);
 
-        if self.giganto_sender.write_all(&giganto_data).await.is_err() {
-            self.reconnect().await.expect("reconnect giganto");
+        match send_event(
+            &mut self.giganto_sender,
+            Utc::now().timestamp_nanos(),
+            send_log,
+        )
+        .await
+        {
+            Err(SendError::WriteError(_)) => {
+                self.reconnect().await?;
+            }
+            Err(e) => {
+                bail!("{e:?}");
+            }
+            Ok(_) => {}
         }
-        giganto_data.clear();
-
         Ok(())
     }
 
     async fn send_finish(&mut self) -> Result<()> {
-        let mut finish_data: Vec<u8> = Vec::new();
-        let mut serial_body = CHANNEL_CLOSE_MESSAGE.to_vec();
-        let body_len: u32 = serial_body.len().try_into().expect("conversion as `u32`");
-        finish_data.append(&mut CHANNEL_CLOSE_TIMESTAMP.to_le_bytes().to_vec());
-        finish_data.append(&mut body_len.to_le_bytes().to_vec());
-        finish_data.append(&mut serial_body);
-
-        self.giganto_sender
-            .write_all(&finish_data)
-            .await
-            .context("failed to send channel done message")?;
+        match send_event(
+            &mut self.giganto_sender,
+            CHANNEL_CLOSE_TIMESTAMP,
+            CHANNEL_CLOSE_MESSAGE,
+        )
+        .await
+        {
+            Err(SendError::WriteError(_)) => {
+                bail!("failed to send channel done message");
+            }
+            Err(e) => {
+                bail!("{e:?}");
+            }
+            Ok(_) => {}
+        }
         Ok(())
     }
 
@@ -533,13 +482,8 @@ impl Giganto {
                 }
                 Err(e) => panic!("{}", e),
             };
-            let (check_send, check_recv) = conn
-                .open_bi()
-                .await
-                .context("failed to open Giganto handshake stream")?;
-            if check_stream(check_send, check_recv).await.is_err() {
-                bail!("failed to check protocol version");
-            }
+
+            client_handshake(&conn, GIGANTO_VERSION).await?;
 
             let (giganto_send, giganto_recv) = conn
                 .open_bi()
@@ -652,48 +596,23 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
 }
 
 async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Result<()> {
-    let mut ack_buf = [0; std::mem::size_of::<u64>()];
     loop {
-        match recv.read_exact(&mut ack_buf).await {
-            Ok(()) => {
-                let recv_ts = i64::from_be_bytes(ack_buf);
-                if recv_ts == CHANNEL_CLOSE_TIMESTAMP {
+        match receive_ack_timestamp(&mut recv).await {
+            Ok(timestamp) => {
+                if timestamp == CHANNEL_CLOSE_TIMESTAMP {
                     finish_checker.store(true, Ordering::SeqCst);
-                    info!("finish ACK: {recv_ts}");
+                    info!("finish ACK: {timestamp}");
                 } else {
-                    info!("ACK: {recv_ts}");
+                    info!("ACK: {timestamp}");
                 }
             }
-            Err(quinn::ReadExactError::FinishedEarly) => {
+            Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly)) => {
                 warn!("finished early");
                 break;
             }
             Err(e) => bail!("receive ACK err: {}", e),
         }
     }
-    Ok(())
-}
-
-async fn check_stream(mut send: SendStream, mut recv: RecvStream) -> Result<()> {
-    let mut handshake_vec = Vec::new();
-    let version = GIGANTO_VERSION.as_bytes();
-    let len = version.len() as u64;
-    handshake_vec.extend(len.to_le_bytes());
-    handshake_vec.extend(version);
-    send.write_all(&handshake_vec).await?;
-    send.finish().await?;
-
-    let mut len_buf = [0; std::mem::size_of::<u64>()];
-    let mut recv_buf: Vec<u8> = Vec::new();
-    recv.read_exact(&mut len_buf).await?;
-    let len = u64::from_le_bytes(len_buf);
-    recv_buf.resize(len.try_into()?, 0);
-    recv.read_exact(&mut recv_buf).await?;
-
-    if bincode::deserialize::<Option<&str>>(&recv_buf)?.is_none() {
-        bail!("connection reject");
-    }
-
     Ok(())
 }
 

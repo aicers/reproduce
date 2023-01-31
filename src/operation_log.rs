@@ -1,34 +1,19 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
+use giganto_client::ingest::log::{OpLogLevel, Oplog};
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde::Serialize;
 use std::str::FromStr;
-
-#[derive(Debug, Serialize, PartialEq)]
-pub(crate) struct Oplog {
-    agent_id: String,
-    log_level: LogLevel,
-    log: String,
-    // log category, log id
-}
-
-#[derive(Debug, Serialize, PartialEq)]
-pub(crate) enum LogLevel {
-    Info,
-    Warn,
-    Error,
-}
 
 fn parse_oplog_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
     DateTime::from_str(datetime).map_err(|e| anyhow!("{:?}", e))
 }
 
-fn parse_log_level(level: &str) -> Result<LogLevel> {
+fn parse_log_level(level: &str) -> Result<OpLogLevel> {
     match level {
-        "INFO" => Ok(LogLevel::Info),
-        "WARN" => Ok(LogLevel::Warn),
-        "ERROR" => Ok(LogLevel::Error),
+        "INFO" => Ok(OpLogLevel::Info),
+        "WARN" => Ok(OpLogLevel::Warn),
+        "ERROR" => Ok(OpLogLevel::Error),
         _ => Err(anyhow!("invalid log level")),
     }
 }
@@ -60,9 +45,9 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(Oplog, i64)> {
 
     Ok((
         Oplog {
-            agent_id: agent.to_string(),
+            agent_name: agent.to_string(),
             log_level,
-            log: log.to_string(),
+            contents: log.to_string(),
         },
         timestamp,
     ))
@@ -72,7 +57,7 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(Oplog, i64)> {
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::{log_regex, LogLevel, Oplog};
+    use super::{log_regex, OpLogLevel};
 
     #[test]
     fn parse_oplog() {
@@ -98,29 +83,16 @@ mod tests {
                 .unwrap()
                 .timestamp_nanos()
         );
-        assert_eq!(
-            res_info,
-            Oplog {
-                agent_id: "agent".to_string(),
-                log_level: LogLevel::Info,
-                log: "infolog".to_string()
-            }
-        );
-        assert_eq!(
-            res_warn,
-            Oplog {
-                agent_id: "agent".to_string(),
-                log_level: LogLevel::Warn,
-                log: "warnlog".to_string()
-            }
-        );
-        assert_eq!(
-            res_error,
-            Oplog {
-                agent_id: "agent".to_string(),
-                log_level: LogLevel::Error,
-                log: "errorlog".to_string()
-            }
-        );
+        assert_eq!(res_info.agent_name, "agent".to_string());
+        assert!(matches!(res_info.log_level, OpLogLevel::Info));
+        assert_eq!(res_info.contents, "infolog".to_string());
+
+        assert_eq!(res_warn.agent_name, "agent".to_string());
+        assert!(matches!(res_warn.log_level, OpLogLevel::Warn));
+        assert_eq!(res_warn.contents, "warnlog".to_string());
+
+        assert_eq!(res_error.agent_name, "agent".to_string());
+        assert!(matches!(res_error.log_level, OpLogLevel::Error));
+        assert_eq!(res_error.contents, "errorlog".to_string());
     }
 }

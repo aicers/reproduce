@@ -1,19 +1,7 @@
-mod conn;
-mod dce_rpc;
-mod dns;
-mod http;
-mod kerberos;
-mod ntlm;
-mod rdp;
-mod smtp;
-mod ssh;
+mod network;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
-    conn::ZeekConn, dce_rpc::ZeekDceRpc, dns::ZeekDns, http::ZeekHttp, kerberos::ZeekKerberos,
-    ntlm::ZeekNtlm, rdp::ZeekRdp, smtp::ZeekSmtp, ssh::ZeekSsh,
-};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
