@@ -24,7 +24,7 @@ use std::{
 };
 use tracing::{error, info, warn};
 
-use crate::{operation_log, zeek::TryFromZeekRecord};
+use crate::{migration::TryFromGigantoRecord, operation_log, zeek::TryFromZeekRecord};
 
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
@@ -145,61 +145,117 @@ impl Producer {
     /// # Errors
     ///
     /// Returns an error if any writing operation fails.
-    pub async fn send_zeek_to_giganto(
+    #[allow(clippy::too_many_lines)]
+    pub async fn send_raw_to_giganto(
         &mut self,
         iter: StringRecordsIntoIter<File>,
         from: u64,
         grow: bool,
+        migration: bool,
         running: Arc<AtomicBool>,
     ) -> Result<()> {
         if let Producer::Giganto(giganto) = self {
             match giganto.giganto_info.kind.as_str() {
                 "conn" => {
-                    giganto
-                        .send_zeek::<Conn>(iter, RecordType::Conn, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Conn>(iter, RecordType::Conn, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Conn>(iter, RecordType::Conn, from, grow, running)
+                            .await?;
+                    }
                 }
                 "http" => {
-                    giganto
-                        .send_zeek::<Http>(iter, RecordType::Http, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Http>(iter, RecordType::Http, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Http>(iter, RecordType::Http, from, grow, running)
+                            .await?;
+                    }
                 }
                 "rdp" => {
-                    giganto
-                        .send_zeek::<Rdp>(iter, RecordType::Rdp, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Rdp>(iter, RecordType::Rdp, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Rdp>(iter, RecordType::Rdp, from, grow, running)
+                            .await?;
+                    }
                 }
                 "smtp" => {
-                    giganto
-                        .send_zeek::<Smtp>(iter, RecordType::Smtp, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Smtp>(iter, RecordType::Smtp, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Smtp>(iter, RecordType::Smtp, from, grow, running)
+                            .await?;
+                    }
                 }
                 "dns" => {
-                    giganto
-                        .send_zeek::<Dns>(iter, RecordType::Dns, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Dns>(iter, RecordType::Dns, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Dns>(iter, RecordType::Dns, from, grow, running)
+                            .await?;
+                    }
                 }
                 "ntlm" => {
-                    giganto
-                        .send_zeek::<Ntlm>(iter, RecordType::Ntlm, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Ntlm>(iter, RecordType::Ntlm, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Ntlm>(iter, RecordType::Ntlm, from, grow, running)
+                            .await?;
+                    }
                 }
                 "kerberos" => {
-                    giganto
-                        .send_zeek::<Kerberos>(iter, RecordType::Kerberos, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Kerberos>(iter, RecordType::Kerberos, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Kerberos>(iter, RecordType::Kerberos, from, grow, running)
+                            .await?;
+                    }
                 }
                 "ssh" => {
-                    giganto
-                        .send_zeek::<Ssh>(iter, RecordType::Ssh, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<Ssh>(iter, RecordType::Ssh, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Ssh>(iter, RecordType::Ssh, from, grow, running)
+                            .await?;
+                    }
                 }
                 "dce_rpc" => {
-                    giganto
-                        .send_zeek::<DceRpc>(iter, RecordType::DceRpc, from, grow, running)
-                        .await?;
+                    if migration {
+                        giganto
+                            .migration::<DceRpc>(iter, RecordType::DceRpc, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<DceRpc>(iter, RecordType::DceRpc, from, grow, running)
+                            .await?;
+                    }
                 }
-                _ => error!("unknown zeek kind"),
+                _ => error!("unknown zeek/migration kind"),
             }
         }
         Ok(())
@@ -268,6 +324,7 @@ impl Giganto {
     where
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
     {
+        info!("send zeek");
         let mut success_cnt = 0u32;
         let mut failed_cnt = 0u32;
         let mut pos = Position::new();
@@ -318,6 +375,85 @@ impl Giganto {
                     tokio::time::sleep(Duration::from_millis(3_000)).await;
                     zeek_iter.reader_mut().seek(pos.clone())?;
                     zeek_iter = zeek_iter.into_reader().into_records();
+                    continue;
+                }
+                break;
+            }
+            pos = next_pos;
+        }
+
+        info!(
+            "last line: {}, success line: {}, failed line: {} ",
+            pos.line(),
+            success_cnt,
+            failed_cnt
+        );
+
+        Ok(())
+    }
+
+    async fn migration<T>(
+        &mut self,
+        mut giganto_iter: StringRecordsIntoIter<File>,
+        protocol: RecordType,
+        from: u64,
+        grow: bool,
+        running: Arc<AtomicBool>,
+    ) -> Result<()>
+    where
+        T: Serialize + TryFromGigantoRecord + Unpin + Debug,
+    {
+        info!("migration");
+        let mut success_cnt = 0u32;
+        let mut failed_cnt = 0u32;
+        let mut pos = Position::new();
+        let mut last_record = StringRecord::new();
+        while running.load(Ordering::SeqCst) {
+            let next_pos = giganto_iter.reader().position().clone();
+            if let Some(result) = giganto_iter.next() {
+                if next_pos.line() < from {
+                    continue;
+                }
+                match result {
+                    Ok(record) if record != last_record => {
+                        last_record = record.clone();
+                        match T::try_from_giganto_record(&record) {
+                            Ok((event, timestamp)) => {
+                                if self.init_msg {
+                                    send_record_header(&mut self.giganto_sender, protocol).await?;
+                                    self.init_msg = false;
+                                }
+                                match send_event(&mut self.giganto_sender, timestamp, event).await {
+                                    Err(SendError::WriteError(_)) => {
+                                        self.reconnect().await?;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        bail!("{e:?}");
+                                    }
+                                    Ok(_) => {}
+                                }
+                                success_cnt += 1;
+                            }
+                            Err(e) => {
+                                failed_cnt += 1;
+                                error!("failed to convert data: {e}");
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        continue;
+                    }
+                    Err(e) => {
+                        failed_cnt += 1;
+                        error!("invalid record: {e}");
+                    }
+                }
+            } else {
+                if grow {
+                    tokio::time::sleep(Duration::from_millis(3_000)).await;
+                    giganto_iter.reader_mut().seek(pos.clone())?;
+                    giganto_iter = giganto_iter.into_reader().into_records();
                     continue;
                 }
                 break;

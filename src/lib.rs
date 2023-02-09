@@ -1,5 +1,6 @@
 mod config;
 mod controller;
+mod migration;
 mod operation_log;
 mod producer;
 mod report;

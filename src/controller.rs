@@ -1,5 +1,5 @@
 use crate::config::{Config, InputType, OutputType};
-use crate::zeek::open_zeek_log_file;
+use crate::zeek::open_raw_event_log_file;
 use crate::{Producer, Report};
 use anyhow::{anyhow, bail, Result};
 use std::fs::File;
@@ -121,13 +121,14 @@ impl Controller {
                 if self.config.output.as_str() == "giganto"
                     && GIGANTO_ZEEK_KINDS.contains(&self.config.giganto_kind.as_str())
                 {
-                    let rdr = open_zeek_log_file(filename)?;
+                    let rdr = open_raw_event_log_file(filename)?;
                     let zeek_iter = rdr.into_records();
                     producer
-                        .send_zeek_to_giganto(
+                        .send_raw_to_giganto(
                             zeek_iter,
                             self.config.send_from,
                             self.config.mode_grow,
+                            self.config.migration,
                             running.clone(),
                         )
                         .await?;

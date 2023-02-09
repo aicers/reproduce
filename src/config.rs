@@ -1,5 +1,6 @@
 use std::fmt;
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct Config {
     // user
@@ -16,6 +17,7 @@ pub struct Config {
     pub giganto_addr: String,
     pub giganto_kind: String,
     pub send_from: u64,
+    pub migration: bool,
 
     // internal
     pub count_sent: usize,
@@ -55,6 +57,7 @@ impl Default for Config {
             giganto_addr: String::new(),
             giganto_kind: String::new(),
             send_from: 1,
+            migration: false,
         }
     }
 }
@@ -76,6 +79,7 @@ impl fmt::Display for Config {
         writeln!(f, "certs_toml={}", self.certs_toml)?;
         writeln!(f, "giganto_name={}", self.giganto_name)?;
         writeln!(f, "giganto_addr={}", self.giganto_addr)?;
-        writeln!(f, "giganto_kind={}", self.giganto_kind)
+        writeln!(f, "giganto_kind={}", self.giganto_kind)?;
+        writeln!(f, "migration={}", self.migration)
     }
 }
