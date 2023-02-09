@@ -11,6 +11,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add ctrlc for zeeklog and oplog when the grow option is given.
 - Add common field (5-tuple + duration)
+- Add additional `-m` options with giganto export file
 
 ### Removed
 

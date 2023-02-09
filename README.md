@@ -49,6 +49,13 @@ reproduce -h
       -C config.toml -k oplog
     ```
 
+* Send giganto export file to Giganto server:
+
+    ```sh
+    reproduce -i LOG_20230209 -o giganto -G 127.0.0.1:38370 -N server_name \
+      -C config.toml -k protocol -m
+    ```
+
 ## License
 
 Copyright 2021-2022 EINSIS, Inc.

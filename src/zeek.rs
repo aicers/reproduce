@@ -5,7 +5,6 @@ mod tests;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
-use std::str;
 use std::{fs::File, path::Path};
 
 const PROTO_TCP: u8 = 0x06;
@@ -31,7 +30,7 @@ fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
     }
 }
 
-pub fn open_zeek_log_file(path: &Path) -> Result<Reader<File>> {
+pub fn open_raw_event_log_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
         .delimiter(b'\t')

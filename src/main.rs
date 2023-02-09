@@ -106,6 +106,12 @@ pub fn parse() -> Config {
                 .default_value("1")
                 .help("zeek log from line number(at least 1)"),
         )
+        .arg(
+            Arg::new("migration")
+                .short('m')
+                .action(clap::ArgAction::SetTrue)
+                .help("if option exists, migration with giganto export file"),
+        )
         .get_matches();
 
     let count_sent = *m.get_one::<usize>("count").expect("has `default_value`");
@@ -124,6 +130,7 @@ pub fn parse() -> Config {
         .get_one::<NonZeroU64>("from")
         .expect("has `default_value`")
         .get();
+    let migration = m.get_flag("migration");
     let mode_polling_dir = m.contains_id("polling");
     // if output.is_empty() && kafka_broker.is_empty() {
     //     error!("Kafka broker (-b) required");
@@ -152,6 +159,7 @@ pub fn parse() -> Config {
         giganto_addr: giganto_addr.to_string(),
         giganto_kind: giganto_kind.to_string(),
         send_from,
+        migration,
         ..Config::default()
     }
 }
