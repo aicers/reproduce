@@ -79,7 +79,9 @@ impl Producer {
                 Err(e) => panic!("{}", e),
             };
 
-            client_handshake(&conn, GIGANTO_VERSION).await?;
+            let g_version = format!("{GIGANTO_VERSION}-reproduce");
+
+            client_handshake(&conn, &g_version).await?;
 
             let (giganto_send, giganto_recv) = conn
                 .open_bi()
