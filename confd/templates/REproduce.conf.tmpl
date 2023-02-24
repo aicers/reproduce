@@ -1,6 +1,0 @@
-[global]
-{{range gets "/REproduce/kafka/global/*"}}{{$url := split (.Key) "/"}}{{index $url 4}}={{.Value}}
-{{end}}
-[topic]
-{{range gets "/REproduce/kafka/topic/*"}}{{$url := split (.Key) "/"}}{{index $url 4}}={{.Value}}
-{{end}}

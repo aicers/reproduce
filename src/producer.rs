@@ -327,8 +327,8 @@ impl Giganto {
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
     {
         info!("send zeek");
-        let mut success_cnt = 0u32;
-        let mut failed_cnt = 0u32;
+        let mut success_cnt = 0u64;
+        let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         while running.load(Ordering::SeqCst) {
@@ -406,8 +406,8 @@ impl Giganto {
         T: Serialize + TryFromGigantoRecord + Unpin + Debug,
     {
         info!("migration");
-        let mut success_cnt = 0u32;
-        let mut failed_cnt = 0u32;
+        let mut success_cnt = 0u64;
+        let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         while running.load(Ordering::SeqCst) {
