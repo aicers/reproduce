@@ -22,6 +22,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::{migration::TryFromGigantoRecord, operation_log, zeek::TryFromZeekRecord};
@@ -606,6 +607,7 @@ impl Giganto {
 
     async fn reconnect(&mut self) -> Result<()> {
         loop {
+            sleep(Duration::from_secs(2)).await;
             let conn = match self
                 .giganto_endpoint
                 .connect(self.giganto_server, &self.giganto_info.name)
