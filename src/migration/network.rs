@@ -140,10 +140,10 @@ impl TryFromGigantoRecord for Dns {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let query = if let Some(query) = rec.get(8) {
@@ -249,7 +249,7 @@ impl TryFromGigantoRecord for Dns {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 query,
                 answer,
                 trans_id,
@@ -307,10 +307,10 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let method = if let Some(method) = rec.get(8) {
@@ -405,7 +405,7 @@ impl TryFromGigantoRecord for Http {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 method,
                 host,
                 uri,
@@ -466,10 +466,10 @@ impl TryFromGigantoRecord for Rdp {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let cookie = if let Some(cookie) = rec.get(8) {
@@ -485,7 +485,7 @@ impl TryFromGigantoRecord for Rdp {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 cookie,
             },
             time,
@@ -531,10 +531,10 @@ impl TryFromGigantoRecord for Smtp {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let mailfrom = if let Some(mailfrom) = rec.get(8) {
@@ -575,7 +575,7 @@ impl TryFromGigantoRecord for Smtp {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 mailfrom,
                 date,
                 from,
@@ -626,10 +626,10 @@ impl TryFromGigantoRecord for Ntlm {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let username = if let Some(username) = rec.get(8) {
@@ -675,7 +675,7 @@ impl TryFromGigantoRecord for Ntlm {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 username,
                 hostname,
                 domainname,
@@ -728,10 +728,10 @@ impl TryFromGigantoRecord for Kerberos {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let request_type = if let Some(request_type) = rec.get(8) {
@@ -802,7 +802,7 @@ impl TryFromGigantoRecord for Kerberos {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 request_type,
                 client,
                 service,
@@ -860,10 +860,10 @@ impl TryFromGigantoRecord for Ssh {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let version = if let Some(version) = rec.get(8) {
@@ -936,7 +936,7 @@ impl TryFromGigantoRecord for Ssh {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 version,
                 auth_success,
                 auth_attempts,
@@ -993,10 +993,10 @@ impl TryFromGigantoRecord for DceRpc {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
-            parse_giganto_timestamp(duration)?.timestamp_nanos()
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing last_time"));
         };
 
         let rtt = if let Some(rtt) = rec.get(8) {
@@ -1027,7 +1027,7 @@ impl TryFromGigantoRecord for DceRpc {
                 resp_addr,
                 resp_port,
                 proto,
-                duration,
+                last_time,
                 rtt,
                 named_pipe,
                 endpoint,

@@ -13,6 +13,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Add common field (5-tuple + duration)
 - Add additional `-m` options with giganto export file
 
+### Changed
+
+- Change `duration` field name to `last_time`.  (Except Session struct)
+
 ### Removed
 
 - Dropped Kafka server support.
