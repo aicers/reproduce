@@ -5,6 +5,10 @@ entries to a Giganto server.
 
 [![Coverage Status](https://codecov.io/gh/aicers/reproduce/branch/main/graph/badge.svg?token=2P7VSZ1KFV)](https://codecov.io/gh/aicers/reproduce)
 
+## Requirements
+
+- Giganto 0.8.0 or higher
+
 ## Build
 
 REproduce may be built as a single binary for portability. Make sure that the
@@ -58,7 +62,7 @@ reproduce -h
 
 ## License
 
-Copyright 2021-2022 EINSIS, Inc.
+Copyright 2021-2023 EINSIS, Inc.
 
 Licensed under [Apache License, Version 2.0][apache-license] (the "License");
 you may not use this crate except in compliance with the License.
