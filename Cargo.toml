@@ -14,7 +14,7 @@ ctrlc = { version = "3", features = ["termination"] }
 giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.2.0" }
 lazy_static = "1.4"
 num-traits = "0.2"
-quinn = "0.9"
+quinn = "0.10"
 regex = "1"
 rustls = "0.20"                                                                          # should be the same version as what quinn uses
 rustls-pemfile = "1.0"
