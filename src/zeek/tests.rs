@@ -1,7 +1,9 @@
 use crate::zeek::TryFromZeekRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
-use giganto_client::ingest::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+use giganto_client::ingest::network::{
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
+};
 
 // data from zeek log
 #[test]
@@ -92,6 +94,36 @@ fn zeek_dce_rpc() {
     let rec = stringrecord(data);
 
     assert!(DceRpc::try_from_zeek_record(&rec).is_ok());
+}
+
+#[test]
+fn zeek_ftp() {
+    // ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	user    password    command reply_code  reply_mgs   data_channel.passive   data_channel.orig_h   data_channel.resp_h   data_channel.resp_p
+    let data = "1669773412.689790	CmES5u32sYpV7JYN	192.168.4.76	53380	196.216.2.24	21	anonymous	ftp@example.com	EPSV	229	Entering Extended Passive Mode  (|||31746|)	T	192.168.4.76	196.216.2.24	31746";
+
+    let rec = stringrecord(data);
+
+    assert!(Ftp::try_from_zeek_record(&rec).is_ok());
+}
+
+#[test]
+fn zeek_ldap() {
+    //ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	proto	message_id	version	opcode	result	diagnostic_message	object	argument
+    let data = "1686710041.192255	CHhAvVGS1DHFjwGM9	10.0.0.1	25936	10.0.0.2	3268	tcp	1	3	bind simple	success	-	xxxxxxxxxxx@xx.xxx.xxxxx.net	REDACTED";
+
+    let rec = stringrecord(data);
+
+    assert!(Ldap::try_from_zeek_record(&rec).is_ok());
+}
+
+#[test]
+fn zeek_tls() {
+    //fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	version	cipher	curve	server_name	resumed	last_alert	next_protocol	established	ssl_history	cert_chain_fps	client_cert_chain_fps	sni_matches_cert
+    let data = "1686710041.192255	CiGlb63Xpb58HD7LVf	172.30.1.206	43672	211.249.221.105	443	TLSv12	TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256	x25519	kakao.com	F	-	h2	T	CsxknGIi	597e3ba5bf295718aa5691d0a153493cb8f2f2691aa10c1f504c1413479bccb6,4bcc5e234fe81ede4eaf883aa19c31335b0b26e85e066b9945e4cb6153eb20c2,cb3ccbb76031e5e0138f8dd39a23f9de47ffc35e43c1144cea27d46a5ab1cb5f	(empty)	T";
+
+    let rec = stringrecord(data);
+
+    assert!(Tls::try_from_zeek_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {

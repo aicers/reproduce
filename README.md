@@ -7,7 +7,7 @@ entries to a Giganto server.
 
 ## Requirements
 
-* Giganto 0.11.x.
+* Giganto 0.12.1.
 
 ## Build
 

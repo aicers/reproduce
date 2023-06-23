@@ -1,6 +1,8 @@
 use super::{parse_zeek_timestamp, TryFromZeekRecord, PROTO_ICMP, PROTO_TCP, PROTO_UDP};
 use anyhow::{anyhow, Context, Result};
-use giganto_client::ingest::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+use giganto_client::ingest::network::{
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
+};
 use num_traits::ToPrimitive;
 use std::net::IpAddr;
 
@@ -285,6 +287,7 @@ impl TryFromZeekRecord for Dns {
         } else {
             return Err(anyhow!("missing ttl"));
         };
+
         Ok((
             Self {
                 orig_addr,
@@ -421,6 +424,38 @@ impl TryFromZeekRecord for Http {
         } else {
             return Err(anyhow!("missing password"));
         };
+        let orig_filenames = if let Some(orig_filenames) = rec.get(25) {
+            orig_filenames
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing orig_filenames"));
+        };
+        let orig_mime_types = if let Some(orig_mime_types) = rec.get(26) {
+            orig_mime_types
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing orig_mime_types"));
+        };
+        let resp_filenames = if let Some(resp_filenames) = rec.get(28) {
+            resp_filenames
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing resp_filenames"));
+        };
+        let resp_mime_types = if let Some(resp_mime_types) = rec.get(29) {
+            resp_mime_types
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing resp_mime_types"));
+        };
 
         Ok((
             Self {
@@ -446,6 +481,10 @@ impl TryFromZeekRecord for Http {
                 content_encoding: String::from("-"),
                 content_type: String::from("-"),
                 cache_control: String::from("-"),
+                orig_filenames,
+                orig_mime_types,
+                resp_filenames,
+                resp_mime_types,
             },
             time,
         ))
@@ -1010,6 +1049,332 @@ impl TryFromZeekRecord for DceRpc {
                 named_pipe,
                 endpoint,
                 operation,
+            },
+            time,
+        ))
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl TryFromZeekRecord for Ftp {
+    fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let user = if let Some(user) = rec.get(6) {
+            user.to_string()
+        } else {
+            return Err(anyhow!("missing user"));
+        };
+        let password = if let Some(password) = rec.get(7) {
+            password.to_string()
+        } else {
+            return Err(anyhow!("missing password"));
+        };
+        let command = if let Some(command) = rec.get(8) {
+            command.to_string()
+        } else {
+            return Err(anyhow!("missing command"));
+        };
+        let reply_code = if let Some(reply_code) = rec.get(9) {
+            reply_code.to_string()
+        } else {
+            return Err(anyhow!("missing reply_code"));
+        };
+        let reply_msg = if let Some(reply_msg) = rec.get(10) {
+            reply_msg.to_string()
+        } else {
+            return Err(anyhow!("missing reply_msg"));
+        };
+        let data_passive = if let Some(data_passive) = rec.get(11) {
+            if data_passive.eq("T") {
+                true
+            } else if data_passive.eq("F") {
+                false
+            } else {
+                return Err(anyhow!("invalid data_passive"));
+            }
+        } else {
+            return Err(anyhow!("missing data_passive"));
+        };
+        let data_orig_addr = if let Some(data_orig_addr) = rec.get(12) {
+            data_orig_addr
+                .parse::<IpAddr>()
+                .context("invalid data source address")?
+        } else {
+            return Err(anyhow!("missing data source address"));
+        };
+        let data_resp_addr = if let Some(data_resp_addr) = rec.get(13) {
+            data_resp_addr
+                .parse::<IpAddr>()
+                .context("invalid data destination address")?
+        } else {
+            return Err(anyhow!("missing data destination address"));
+        };
+        let data_resp_port = if let Some(data_resp_port) = rec.get(14) {
+            data_resp_port
+                .parse::<u16>()
+                .context("invalid data destination port")?
+        } else {
+            return Err(anyhow!("missing data destination port"));
+        };
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto: PROTO_TCP,
+                last_time: 0,
+                user,
+                password,
+                command,
+                reply_code,
+                reply_msg,
+                data_passive,
+                data_orig_addr,
+                data_resp_addr,
+                data_resp_port,
+                file: String::from("-"),
+                file_size: 0,
+                file_id: String::from("-"),
+            },
+            time,
+        ))
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl TryFromZeekRecord for Ldap {
+    fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let proto = if let Some(proto) = rec.get(6) {
+            match proto {
+                "tcp" => PROTO_TCP,
+                "udp" => PROTO_UDP,
+                "icmp" => PROTO_ICMP,
+                _ => 0,
+            }
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let message_id = if let Some(message_id) = rec.get(7) {
+            if message_id.eq("-") {
+                0
+            } else {
+                message_id.parse::<u32>().context("invalid message_id")?
+            }
+        } else {
+            return Err(anyhow!("missing message_id"));
+        };
+        let version = if let Some(version) = rec.get(8) {
+            if version.eq("-") {
+                0
+            } else {
+                version.parse::<u8>().context("invalid version")?
+            }
+        } else {
+            return Err(anyhow!("missing version"));
+        };
+        let opcode = if let Some(opcode) = rec.get(9) {
+            opcode
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing opcode"));
+        };
+        let result = if let Some(result) = rec.get(10) {
+            result
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing result"));
+        };
+        let diagnostic_message = if let Some(diagnostic_message) = rec.get(11) {
+            diagnostic_message
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing diagnostic_message"));
+        };
+        let object = if let Some(object) = rec.get(12) {
+            object
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing object"));
+        };
+        let argument = if let Some(argument) = rec.get(13) {
+            argument
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing argument"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                last_time: 0,
+                message_id,
+                version,
+                opcode,
+                result,
+                diagnostic_message,
+                object,
+                argument,
+            },
+            time,
+        ))
+    }
+}
+
+impl TryFromZeekRecord for Tls {
+    fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let version = if let Some(version) = rec.get(6) {
+            version.to_string()
+        } else {
+            return Err(anyhow!("missing version"));
+        };
+        let server_name = if let Some(server_name) = rec.get(9) {
+            server_name.to_string()
+        } else {
+            return Err(anyhow!("missing server_name"));
+        };
+        let last_alert = if let Some(last_alert) = rec.get(11) {
+            if last_alert.eq("-") {
+                0
+            } else {
+                last_alert.parse::<u8>().context("invalid last_alert")?
+            }
+        } else {
+            return Err(anyhow!("missing last_alert"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto: 0,
+                last_time: 0,
+                server_name,
+                alpn_protocol: String::from("-"),
+                ja3: String::from("-"),
+                version,
+                cipher: 0,
+                ja3s: String::from("-"),
+                serial: String::from("-"),
+                subject_country: String::from("-"),
+                subject_org_name: String::from("-"),
+                subject_common_name: String::from("-"),
+                validity_not_before: 0,
+                validity_not_after: 0,
+                subject_alt_name: String::from("-"),
+                issuer_country: String::from("-"),
+                issuer_org_name: String::from("-"),
+                issuer_org_unit_name: String::from("-"),
+                issuer_common_name: String::from("-"),
+                last_alert,
             },
             time,
         ))
