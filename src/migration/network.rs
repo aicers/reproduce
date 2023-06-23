@@ -1,6 +1,8 @@
 use super::{parse_giganto_timestamp, TryFromGigantoRecord};
 use anyhow::{anyhow, Context, Result};
-use giganto_client::ingest::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+use giganto_client::ingest::network::{
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
+};
 use std::net::IpAddr;
 
 impl TryFromGigantoRecord for Conn {
@@ -145,7 +147,6 @@ impl TryFromGigantoRecord for Dns {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-
         let query = if let Some(query) = rec.get(8) {
             query.to_string()
         } else {
@@ -242,6 +243,7 @@ impl TryFromGigantoRecord for Dns {
         } else {
             return Err(anyhow!("missing ttl"));
         };
+
         Ok((
             Self {
                 orig_addr,
@@ -312,7 +314,6 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-
         let method = if let Some(method) = rec.get(8) {
             method.to_string()
         } else {
@@ -397,6 +398,38 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing cache_control"));
         };
+        let orig_filenames = if let Some(orig_filenames) = rec.get(24) {
+            orig_filenames
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing orig_filenames"));
+        };
+        let orig_mime_types = if let Some(orig_mime_types) = rec.get(25) {
+            orig_mime_types
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing orig_mime_types"));
+        };
+        let resp_filenames = if let Some(resp_filenames) = rec.get(26) {
+            resp_filenames
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing resp_filenames"));
+        };
+        let resp_mime_types = if let Some(resp_mime_types) = rec.get(27) {
+            resp_mime_types
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing resp_mime_types"));
+        };
 
         Ok((
             Self {
@@ -422,6 +455,10 @@ impl TryFromGigantoRecord for Http {
                 content_encoding,
                 content_type,
                 cache_control,
+                orig_filenames,
+                orig_mime_types,
+                resp_filenames,
+                resp_mime_types,
             },
             time,
         ))
@@ -536,7 +573,6 @@ impl TryFromGigantoRecord for Smtp {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-
         let mailfrom = if let Some(mailfrom) = rec.get(8) {
             mailfrom.to_string()
         } else {
@@ -631,7 +667,6 @@ impl TryFromGigantoRecord for Ntlm {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-
         let username = if let Some(username) = rec.get(8) {
             username.to_string()
         } else {
@@ -733,7 +768,6 @@ impl TryFromGigantoRecord for Kerberos {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-
         let request_type = if let Some(request_type) = rec.get(8) {
             request_type.to_string()
         } else {
@@ -998,7 +1032,6 @@ impl TryFromGigantoRecord for DceRpc {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-
         let rtt = if let Some(rtt) = rec.get(8) {
             rtt.parse::<i64>().context("invalid rtt")?
         } else {
@@ -1032,6 +1065,436 @@ impl TryFromGigantoRecord for DceRpc {
                 named_pipe,
                 endpoint,
                 operation,
+            },
+            time,
+        ))
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl TryFromGigantoRecord for Ftp {
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let proto = if let Some(proto) = rec.get(6) {
+            proto.parse::<u8>().context("invalid proto")?
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing last_time"));
+        };
+        let user = if let Some(user) = rec.get(8) {
+            user.to_string()
+        } else {
+            return Err(anyhow!("missing user"));
+        };
+        let password = if let Some(password) = rec.get(9) {
+            password.to_string()
+        } else {
+            return Err(anyhow!("missing password"));
+        };
+        let command = if let Some(command) = rec.get(10) {
+            command.to_string()
+        } else {
+            return Err(anyhow!("missing command"));
+        };
+        let reply_code = if let Some(reply_code) = rec.get(11) {
+            reply_code.to_string()
+        } else {
+            return Err(anyhow!("missing reply_code"));
+        };
+        let reply_msg = if let Some(reply_msg) = rec.get(12) {
+            reply_msg.to_string()
+        } else {
+            return Err(anyhow!("missing reply_msg"));
+        };
+        let data_passive = if let Some(data_passive) = rec.get(13) {
+            if data_passive.eq("true") {
+                true
+            } else if data_passive.eq("false") {
+                false
+            } else {
+                return Err(anyhow!("invalid data_passive"));
+            }
+        } else {
+            return Err(anyhow!("missing data_passive"));
+        };
+        let data_orig_addr = if let Some(data_orig_addr) = rec.get(14) {
+            data_orig_addr
+                .parse::<IpAddr>()
+                .context("invalid data source address")?
+        } else {
+            return Err(anyhow!("missing data source address"));
+        };
+        let data_resp_addr = if let Some(data_resp_addr) = rec.get(15) {
+            data_resp_addr
+                .parse::<IpAddr>()
+                .context("invalid data destination address")?
+        } else {
+            return Err(anyhow!("missing data destination address"));
+        };
+        let data_resp_port = if let Some(data_resp_port) = rec.get(16) {
+            data_resp_port
+                .parse::<u16>()
+                .context("invalid data destination port")?
+        } else {
+            return Err(anyhow!("missing data destination port"));
+        };
+        let file = if let Some(file) = rec.get(17) {
+            file.to_string()
+        } else {
+            return Err(anyhow!("missing file"));
+        };
+        let file_size = if let Some(file_size) = rec.get(18) {
+            file_size.parse::<u64>().context("invalid file_size")?
+        } else {
+            return Err(anyhow!("missing file_size"));
+        };
+        let file_id = if let Some(file_id) = rec.get(19) {
+            file_id.to_string()
+        } else {
+            return Err(anyhow!("missing file_id"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                last_time,
+                user,
+                password,
+                command,
+                reply_code,
+                reply_msg,
+                data_passive,
+                data_orig_addr,
+                data_resp_addr,
+                data_resp_port,
+                file,
+                file_size,
+                file_id,
+            },
+            time,
+        ))
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl TryFromGigantoRecord for Ldap {
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let proto = if let Some(proto) = rec.get(6) {
+            proto.parse::<u8>().context("invalid proto")?
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing last_time"));
+        };
+        let message_id = if let Some(message_id) = rec.get(8) {
+            message_id.parse::<u32>().context("invalid message_id")?
+        } else {
+            return Err(anyhow!("missing message_id"));
+        };
+        let version = if let Some(version) = rec.get(9) {
+            version.parse::<u8>().context("invalid version")?
+        } else {
+            return Err(anyhow!("missing version"));
+        };
+        let opcode = if let Some(opcode) = rec.get(10) {
+            opcode
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing opcode"));
+        };
+        let result = if let Some(result) = rec.get(11) {
+            result
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing result"));
+        };
+        let diagnostic_message = if let Some(diagnostic_message) = rec.get(12) {
+            diagnostic_message
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing diagnostic_message"));
+        };
+        let object = if let Some(object) = rec.get(13) {
+            object
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing object"));
+        };
+        let argument = if let Some(argument) = rec.get(14) {
+            argument
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing argument"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                last_time,
+                message_id,
+                version,
+                opcode,
+                result,
+                diagnostic_message,
+                object,
+                argument,
+            },
+            time,
+        ))
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl TryFromGigantoRecord for Tls {
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let proto = if let Some(proto) = rec.get(6) {
+            proto.parse::<u8>().context("invalid proto")?
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing last_time"));
+        };
+        let server_name = if let Some(server_name) = rec.get(8) {
+            server_name.to_string()
+        } else {
+            return Err(anyhow!("missing server_name"));
+        };
+        let alpn_protocol = if let Some(alpn_protocol) = rec.get(9) {
+            alpn_protocol.to_string()
+        } else {
+            return Err(anyhow!("missing alpn_protocol"));
+        };
+        let ja3 = if let Some(ja3) = rec.get(10) {
+            ja3.to_string()
+        } else {
+            return Err(anyhow!("missing ja3"));
+        };
+        let version = if let Some(version) = rec.get(11) {
+            version.to_string()
+        } else {
+            return Err(anyhow!("missing version"));
+        };
+        let cipher = if let Some(cipher) = rec.get(12) {
+            cipher.parse::<u16>().context("invalid cipher")?
+        } else {
+            return Err(anyhow!("missing cipher"));
+        };
+        let ja3s = if let Some(ja3s) = rec.get(13) {
+            ja3s.to_string()
+        } else {
+            return Err(anyhow!("missing ja3s"));
+        };
+        let serial = if let Some(serial) = rec.get(14) {
+            serial.to_string()
+        } else {
+            return Err(anyhow!("missing serial"));
+        };
+        let subject_country = if let Some(subject_country) = rec.get(15) {
+            subject_country.to_string()
+        } else {
+            return Err(anyhow!("missing subject_country"));
+        };
+        let subject_org_name = if let Some(subject_org_name) = rec.get(16) {
+            subject_org_name.to_string()
+        } else {
+            return Err(anyhow!("missing subject_org_name"));
+        };
+        let subject_common_name = if let Some(subject_common_name) = rec.get(17) {
+            subject_common_name.to_string()
+        } else {
+            return Err(anyhow!("missing subject_common_name"));
+        };
+        let validity_not_before = if let Some(validity_not_before) = rec.get(18) {
+            validity_not_before
+                .parse::<i64>()
+                .context("invalid validity_not_before")?
+        } else {
+            return Err(anyhow!("missing validity_not_before"));
+        };
+        let validity_not_after = if let Some(validity_not_after) = rec.get(19) {
+            validity_not_after
+                .parse::<i64>()
+                .context("invalid validity_not_after")?
+        } else {
+            return Err(anyhow!("missing validity_not_after"));
+        };
+        let subject_alt_name = if let Some(subject_alt_name) = rec.get(20) {
+            subject_alt_name.to_string()
+        } else {
+            return Err(anyhow!("missing subject_alt_name"));
+        };
+        let issuer_country = if let Some(issuer_country) = rec.get(21) {
+            issuer_country.to_string()
+        } else {
+            return Err(anyhow!("missing issuer_country"));
+        };
+        let issuer_org_name = if let Some(issuer_org_name) = rec.get(22) {
+            issuer_org_name.to_string()
+        } else {
+            return Err(anyhow!("missing issuer_org_name"));
+        };
+        let issuer_org_unit_name = if let Some(issuer_org_unit_name) = rec.get(23) {
+            issuer_org_unit_name.to_string()
+        } else {
+            return Err(anyhow!("missing issuer_org_unit_name"));
+        };
+        let issuer_common_name = if let Some(issuer_common_name) = rec.get(24) {
+            issuer_common_name.to_string()
+        } else {
+            return Err(anyhow!("missing issuer_common_name"));
+        };
+        let last_alert = if let Some(last_alert) = rec.get(25) {
+            last_alert.parse::<u8>().context("invalid last_alert")?
+        } else {
+            return Err(anyhow!("missing last_alert"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                last_time,
+                server_name,
+                alpn_protocol,
+                ja3,
+                version,
+                cipher,
+                ja3s,
+                serial,
+                subject_country,
+                subject_org_name,
+                subject_common_name,
+                validity_not_before,
+                validity_not_after,
+                subject_alt_name,
+                issuer_country,
+                issuer_org_name,
+                issuer_org_unit_name,
+                issuer_common_name,
+                last_alert,
             },
             time,
         ))

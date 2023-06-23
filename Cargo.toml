@@ -11,7 +11,7 @@ chrono = "0.4"
 clap = { version = "4.3", features = ["wrap_help"] }
 csv = "1.2"
 ctrlc = { version = "3", features = ["termination"] }
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.7.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.10.0" }
 lazy_static = "1.4"
 num-traits = "0.2"
 quinn = "0.10"

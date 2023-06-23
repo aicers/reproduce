@@ -6,7 +6,7 @@ use giganto_client::{
     frame::{RecvError, SendError},
     ingest::{
         log::Log,
-        network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh},
+        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls},
         receive_ack_timestamp, send_event, send_record_header, RecordType,
     },
 };
@@ -253,6 +253,39 @@ impl Producer {
                     } else {
                         giganto
                             .send_zeek::<DceRpc>(iter, RecordType::DceRpc, from, grow, running)
+                            .await?;
+                    }
+                }
+                "ftp" => {
+                    if migration {
+                        giganto
+                            .migration::<Ftp>(iter, RecordType::Ftp, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Ftp>(iter, RecordType::Ftp, from, grow, running)
+                            .await?;
+                    }
+                }
+                "ldap" => {
+                    if migration {
+                        giganto
+                            .migration::<Ldap>(iter, RecordType::Ldap, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Ldap>(iter, RecordType::Ldap, from, grow, running)
+                            .await?;
+                    }
+                }
+                "tls" => {
+                    if migration {
+                        giganto
+                            .migration::<Tls>(iter, RecordType::Tls, from, grow, running)
+                            .await?;
+                    } else {
+                        giganto
+                            .send_zeek::<Tls>(iter, RecordType::Tls, from, grow, running)
                             .await?;
                     }
                 }

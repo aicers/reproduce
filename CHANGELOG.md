@@ -5,6 +5,25 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Support for extended `struct Http`.
+  - `orig_filenames: Vec<String>`
+  - `orig_mime_types: Vec<String>`
+  - `resp_filenames: Vec<String>`
+  - `resp_mime_types: Vec<String>`
+
+### Added
+
+- Support for sending `giganto`/`zeek` log for new protocols.
+  (`ldap`, `tls`, `ftp`). The structure of `Tls` was defined based on the field
+  values sent by aicer's  packet extraction program. As a result, many fields
+  will be insufficient when transmitted by conventional `zeek log`(ssl.log),
+  and the insufficient fields will be filled with the default value("-"/0) and
+  transmitted.
+
 ## [0.15.0] - 2023-05-18
 
 ### Changed
@@ -185,6 +204,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.15.0...main
 [0.15.0]: https://github.com/aicers/reproduce/compare/0.14.0...0.15.0
 [0.14.0]: https://github.com/aicers/reproduce/compare/0.13.0...0.14.0
 [0.13.0]: https://github.com/aicers/reproduce/compare/0.12.0...0.13.0

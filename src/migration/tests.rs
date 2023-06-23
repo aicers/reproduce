@@ -1,7 +1,9 @@
 use crate::migration::TryFromGigantoRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
-use giganto_client::ingest::network::{Conn, DceRpc, Dns, Http, Kerberos, Ntlm, Rdp, Smtp, Ssh};
+use giganto_client::ingest::network::{
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
+};
 
 #[test]
 fn giganto_conn() {
@@ -15,7 +17,7 @@ fn giganto_conn() {
 
 #[test]
 fn giganto_http() {
-    let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	0.000000000	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-";
+    let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	0.000000000	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-	-	-";
 
     let rec = stringrecord(data);
 
@@ -84,6 +86,33 @@ fn giganto_dce_rpc() {
     let rec = stringrecord(data);
 
     assert!(DceRpc::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_ftp() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	anonymous	ftp@example.com	EPSV	229	Entering Extended Passive Mode  (|||31746|)	true	192.168.4.76	196.216.2.24	31746	ftp://192.168.0.7/pub/stats/afrinic/delegated-afrinic-extended-latest.md5	74	226";
+
+    let rec = stringrecord(data);
+
+    assert!(Ftp::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_ldap() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	2	3	opcode	result	diagnostic_mgs	object	argument";
+
+    let rec = stringrecord(data);
+
+    assert!(Ldap::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_tls() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	server_name	alpn_protocol	ja3	version	10	ja3s	serial	sub_country	sub_org_name	sub_comm_name	1	2	sub_alt_name	issuer_country	issuer_org_name	issuer_org_unit_name	issuer_common_name	10";
+
+    let rec = stringrecord(data);
+
+    assert!(Tls::try_from_giganto_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {
