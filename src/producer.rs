@@ -30,7 +30,7 @@ use crate::{migration::TryFromGigantoRecord, operation_log, zeek::TryFromZeekRec
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_VERSION: &str = "0.11.0";
+const GIGANTO_VERSION: &str = "0.12.1";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
