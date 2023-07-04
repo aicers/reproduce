@@ -2,7 +2,7 @@ use crate::migration::TryFromGigantoRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 #[test]
@@ -113,6 +113,24 @@ fn giganto_tls() {
     let rec = stringrecord(data);
 
     assert!(Tls::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_smb() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0	path	service	file_name	10	20	30	10000000	20000000	10000000	20000000";
+
+    let rec = stringrecord(data);
+
+    assert!(Smb::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_nfs() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	-	-";
+
+    let rec = stringrecord(data);
+
+    assert!(Nfs::try_from_giganto_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {
