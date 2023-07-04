@@ -5,6 +5,15 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2023-07-04
+
+### Added
+
+- Support for sending `giganto` log for new protocols. (`smb`, `nfs`).
+  For `nfs`, zeek log does not exist, and for `smb`, the protocol generates
+  multiple types of logs (conn.log/kerberos.log/smb_files.log, etc.), So it
+  only supports sending Giganto's log files.
+
 ## [0.16.0] - 2023-06-27
 
 ### Changed
@@ -204,6 +213,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[0.17.0]: https://github.com/aicers/reproduce/compare/0.16.0...0.17.0
 [0.16.0]: https://github.com/aicers/reproduce/compare/0.15.0...0.16.0
 [0.15.0]: https://github.com/aicers/reproduce/compare/0.14.0...0.15.0
 [0.14.0]: https://github.com/aicers/reproduce/compare/0.13.0...0.14.0

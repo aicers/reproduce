@@ -6,7 +6,9 @@ use giganto_client::{
     frame::{RecvError, SendError},
     ingest::{
         log::Log,
-        network::{Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls},
+        network::{
+            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+        },
         receive_ack_timestamp, send_event, send_record_header, RecordType,
     },
 };
@@ -30,7 +32,7 @@ use crate::{migration::TryFromGigantoRecord, operation_log, zeek::TryFromZeekRec
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_VERSION: &str = "0.12.1";
+const GIGANTO_VERSION: &str = "0.12.2";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
@@ -287,6 +289,24 @@ impl Producer {
                         giganto
                             .send_zeek::<Tls>(iter, RecordType::Tls, from, grow, running)
                             .await?;
+                    }
+                }
+                "smb" => {
+                    if migration {
+                        giganto
+                            .migration::<Smb>(iter, RecordType::Smb, from, grow, running)
+                            .await?;
+                    } else {
+                        bail!("smb's zeek is not supported".to_string());
+                    }
+                }
+                "nfs" => {
+                    if migration {
+                        giganto
+                            .migration::<Nfs>(iter, RecordType::Nfs, from, grow, running)
+                            .await?;
+                    } else {
+                        bail!("nfs's zeek is not supported".to_string());
                     }
                 }
                 _ => error!("unknown zeek/migration kind"),
