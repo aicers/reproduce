@@ -7,7 +7,7 @@ use giganto_client::{
     ingest::{
         log::Log,
         network::{
-            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_event, send_record_header, RecordType,
     },
@@ -267,6 +267,15 @@ impl Producer {
                         giganto
                             .send_zeek::<Ftp>(iter, RecordType::Ftp, from, grow, running)
                             .await?;
+                    }
+                }
+                "mqtt" => {
+                    if migration {
+                        giganto
+                            .migration::<Mqtt>(iter, RecordType::Mqtt, from, grow, running)
+                            .await?;
+                    } else {
+                        bail!("mqtt's zeek is not supported".to_string());
                     }
                 }
                 "ldap" => {
