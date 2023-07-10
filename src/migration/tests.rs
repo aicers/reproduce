@@ -2,7 +2,7 @@ use crate::migration::TryFromGigantoRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 #[test]
@@ -95,6 +95,15 @@ fn giganto_ftp() {
     let rec = stringrecord(data);
 
     assert!(Ftp::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_mqtt() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	mqtt	3	my_client_id	10	topic1,topic2	10,10,10";
+
+    let rec = stringrecord(data);
+
+    assert!(Mqtt::try_from_giganto_record(&rec).is_ok());
 }
 
 #[test]

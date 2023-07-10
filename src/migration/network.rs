@@ -1,7 +1,7 @@
 use super::{parse_giganto_timestamp, TryFromGigantoRecord};
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
 };
 use std::net::IpAddr;
 
@@ -1208,6 +1208,113 @@ impl TryFromGigantoRecord for Ftp {
                 file,
                 file_size,
                 file_id,
+            },
+            time,
+        ))
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl TryFromGigantoRecord for Mqtt {
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let proto = if let Some(proto) = rec.get(6) {
+            proto.parse::<u8>().context("invalid proto")?
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?.timestamp_nanos()
+        } else {
+            return Err(anyhow!("missing last_time"));
+        };
+        let protocol = if let Some(protocol) = rec.get(8) {
+            protocol.to_string()
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let version = if let Some(version) = rec.get(9) {
+            version.parse::<u8>().context("invalid version")?
+        } else {
+            return Err(anyhow!("missing version"));
+        };
+        let client_id = if let Some(client_id) = rec.get(10) {
+            client_id.to_string()
+        } else {
+            return Err(anyhow!("missing client_id"));
+        };
+        let connack_reason = if let Some(connack_reason) = rec.get(11) {
+            connack_reason
+                .parse::<u8>()
+                .context("invalid connack_reason")?
+        } else {
+            return Err(anyhow!("missing connack_reason"));
+        };
+        let subscribe = if let Some(subscribe) = rec.get(12) {
+            subscribe
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(anyhow!("missing subscribe"));
+        };
+        let suback_reason = if let Some(suback_reason) = rec.get(13) {
+            if suback_reason.eq("-") {
+                vec![0]
+            } else {
+                suback_reason
+                    .split(',')
+                    .map(|t| t.parse::<u8>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing suback_reason"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                last_time,
+                protocol,
+                version,
+                client_id,
+                connack_reason,
+                subscribe,
+                suback_reason,
             },
             time,
         ))
