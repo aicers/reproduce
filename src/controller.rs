@@ -13,8 +13,9 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 use walkdir::WalkDir;
 
-const GIGANTO_ZEEK_KINDS: [&str; 9] = [
-    "conn", "http", "rdp", "smtp", "dns", "ntlm", "kerberos", "ssh", "dce_rpc",
+const GIGANTO_ZEEK_KINDS: [&str; 15] = [
+    "conn", "http", "rdp", "smtp", "dns", "ntlm", "kerberos", "ssh", "dce_rpc", "ftp", "mqtt",
+    "ldap", "tls", "smb", "nfs",
 ];
 const AGENTS_LIST: [&str; 7] = [
     "review",
