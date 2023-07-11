@@ -8,7 +8,6 @@ use tracing::{error, info};
 pub async fn main() {
     tracing_subscriber::fmt::init();
     let config = parse();
-    info!("{config}");
     let mut controller = Controller::new(config);
     info!("reproduce start");
     let _handle = task::spawn(async move {
@@ -44,20 +43,24 @@ pub fn parse() -> Config {
                 .action(clap::ArgAction::SetTrue)
                 .help("If option exists, continues to read from a growing input file"),
         )
-        .arg(Arg::new("input").short('i').default_value("").help(
-            "Input [LOGFILE/DIR] \
-	    	   If not given, internal sample data will be used.",
-        ))
+        .arg(
+            Arg::new("input")
+                .short('i')
+                .default_value("")
+                .help("Input [LOGFILE/DIR]."),
+        )
         .arg(
             Arg::new("prefix")
                 .short('n')
                 .default_value("")
                 .help("Prefix of file names to send multiple files or a directory"),
         )
-        .arg(Arg::new("output").short('o').default_value("").help(
-            "Output type [TEXTFILE/none/giganto]. \
-                   If not given, the output is sent to Kafka.",
-        ))
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .default_value("giganto")
+                .help("Output type [TEXTFILE/none/giganto]."),
+        )
         .arg(Arg::new("offset").short('r').default_value("").help(
             "Record (prefix of offset file). Using this option will start the conversation \
                    after the previous conversation. The offset file name is managed by \
@@ -132,16 +135,8 @@ pub fn parse() -> Config {
         .get();
     let migration = m.get_flag("migration");
     let mode_polling_dir = m.contains_id("polling");
-    // if output.is_empty() && kafka_broker.is_empty() {
-    //     error!("Kafka broker (-b) required");
-    //     std::process::exit(1);
-    // }
-    // if output.is_empty() && kafka_topic.is_empty() {
-    //     error!("Kafka topic (-t) required");
-    //     std::process::exit(1);
-    // }
-    if input.is_empty() && output == "none" {
-        error!("input (-i) required if output (-o) is \"none\"");
+    if input.is_empty() {
+        error!("input (-i) required.");
         std::process::exit(1);
     }
     Config {

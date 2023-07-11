@@ -5,6 +5,21 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] - 2023-07-11
+
+### Added
+
+- Added a list of supported protocols to `GIGANTO_ZEEK_KINDS`.
+
+### Changed
+
+- Changed the output option's default value to "giganto".
+- Changed the input option to required option.
+
+### Removed
+
+- Removed unused confd files.
+
 ## [0.17.1] - 2023-07-10
 
 ### Added
@@ -219,6 +234,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[0.17.2]: https://github.com/aicers/reproduce/compare/0.17.1...0.17.2
 [0.17.1]: https://github.com/aicers/reproduce/compare/0.17.0...0.17.1
 [0.17.0]: https://github.com/aicers/reproduce/compare/0.16.0...0.17.0
 [0.16.0]: https://github.com/aicers/reproduce/compare/0.15.0...0.16.0

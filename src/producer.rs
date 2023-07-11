@@ -32,7 +32,7 @@ use crate::{migration::TryFromGigantoRecord, operation_log, zeek::TryFromZeekRec
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_VERSION: &str = "0.12.2";
+const GIGANTO_VERSION: &str = "0.12.3";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
@@ -778,7 +778,7 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     let client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(server_root)
-        .with_single_cert(cert_chain, pv_key)
+        .with_client_auth_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
 
     let mut transport = TransportConfig::default();

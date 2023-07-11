@@ -1,7 +1,0 @@
-[Template]
-src = "REproduce.conf.tmpl"
-dest = "REproduce.conf"
-keys = [
-    "/REproduce/kafka"
-]
-check_cmd="./REproduce_change_conf.sh"
