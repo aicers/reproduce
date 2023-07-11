@@ -421,7 +421,7 @@ impl Giganto {
                             }
                             Err(e) => {
                                 failed_cnt += 1;
-                                error!("failed to convert data: {e}");
+                                error!("failed to convert data #{}: {e}", next_pos.line());
                             }
                         }
                     }
@@ -500,7 +500,7 @@ impl Giganto {
                             }
                             Err(e) => {
                                 failed_cnt += 1;
-                                error!("failed to convert data: {e}");
+                                error!("failed to convert data #{}: {e}", next_pos.line());
                             }
                         }
                     }
