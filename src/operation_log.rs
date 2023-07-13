@@ -1,9 +1,17 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{OpLogLevel, Oplog};
-use lazy_static::lazy_static;
 use regex::Regex;
-use std::str::FromStr;
+use std::{str::FromStr, sync::OnceLock};
+
+fn get_log_regex() -> &'static Regex {
+    static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
+
+    LOG_REGEX.get_or_init(|| {
+        Regex::new(r"(?P<datetime>\S+)\s+(?P<level>INFO|WARN|ERROR)\s(?P<contents>.+)$")
+            .expect("regex")
+    })
+}
 
 fn parse_oplog_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
     DateTime::from_str(datetime).map_err(|e| anyhow!("{:?}", e))
@@ -19,12 +27,7 @@ fn parse_log_level(level: &str) -> Result<OpLogLevel> {
 }
 
 pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(Oplog, i64)> {
-    lazy_static! {
-        static ref LOG_REGEX: Regex =
-            Regex::new(r"(?P<datetime>\S+)\s+(?P<level>INFO|WARN|ERROR)\s(?P<contents>.+)$")
-                .expect("regex");
-    }
-    let caps = LOG_REGEX.captures(line).context("invalid log line")?;
+    let caps = get_log_regex().captures(line).context("invalid log line")?;
 
     let log_level = match caps.name("level") {
         Some(l) => l.as_str(),
