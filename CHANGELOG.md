@@ -11,6 +11,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added the line number to convert error message.
 
+### Changed
+
+- Replaced `lazy_static` with the new `std::sync::OnceLock`.
+
 ## [0.17.2] - 2023-07-11
 
 ### Added
