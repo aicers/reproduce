@@ -1,3 +1,7 @@
+use crate::{
+    migration::TryFromGigantoRecord, operation_log, syslog::TryFromSysmonRecord,
+    zeek::TryFromZeekRecord,
+};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
@@ -9,7 +13,13 @@ use giganto_client::{
         network::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
-        receive_ack_timestamp, send_event, send_record_header, RecordType,
+        receive_ack_timestamp, send_event, send_record_header,
+        sysmon::{
+            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        },
+        RecordType,
     },
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
@@ -26,8 +36,6 @@ use std::{
 };
 use tokio::time::sleep;
 use tracing::{error, info, warn};
-
-use crate::{migration::TryFromGigantoRecord, operation_log, zeek::TryFromZeekRecord};
 
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
@@ -344,6 +352,167 @@ impl Producer {
         }
         Ok(())
     }
+
+    /// # Errors
+    ///
+    /// Returns an error if any writing operation fails.
+    #[allow(clippy::too_many_lines)]
+    pub async fn send_sysmon_to_giganto(
+        &mut self,
+        iter: StringRecordsIntoIter<File>,
+        from: u64,
+        grow: bool,
+        running: Arc<AtomicBool>,
+    ) -> Result<()> {
+        if let Producer::Giganto(giganto) = self {
+            match giganto.giganto_info.kind.as_str() {
+                "process_create" => {
+                    giganto
+                        .send_sysmon::<ProcessCreate>(
+                            iter,
+                            RecordType::ProcessCreate,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "file_create_time" => {
+                    giganto
+                        .send_sysmon::<FileCreationTimeChanged>(
+                            iter,
+                            RecordType::FileCreateTime,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "network_connect" => {
+                    giganto
+                        .send_sysmon::<NetworkConnection>(
+                            iter,
+                            RecordType::NetworkConnect,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "process_terminate" => {
+                    giganto
+                        .send_sysmon::<ProcessTerminated>(
+                            iter,
+                            RecordType::ProcessTerminate,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "image_load" => {
+                    giganto
+                        .send_sysmon::<ImageLoaded>(
+                            iter,
+                            RecordType::ImageLoad,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "file_create" => {
+                    giganto
+                        .send_sysmon::<FileCreate>(
+                            iter,
+                            RecordType::FileCreate,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "registry_value_set" => {
+                    giganto
+                        .send_sysmon::<RegistryValueSet>(
+                            iter,
+                            RecordType::RegistryValueSet,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "registry_key_rename" => {
+                    giganto
+                        .send_sysmon::<RegistryKeyValueRename>(
+                            iter,
+                            RecordType::RegistryKeyRename,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "file_create_stream_hash" => {
+                    giganto
+                        .send_sysmon::<FileCreateStreamHash>(
+                            iter,
+                            RecordType::FileCreateStreamHash,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "pipe_event" => {
+                    giganto
+                        .send_sysmon::<PipeEvent>(iter, RecordType::PipeEvent, from, grow, running)
+                        .await?;
+                }
+                "dns_query" => {
+                    giganto
+                        .send_sysmon::<DnsEvent>(iter, RecordType::DnsQuery, from, grow, running)
+                        .await?;
+                }
+                "file_delete" => {
+                    giganto
+                        .send_sysmon::<FileDelete>(
+                            iter,
+                            RecordType::FileDelete,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "process_tamper" => {
+                    giganto
+                        .send_sysmon::<ProcessTampering>(
+                            iter,
+                            RecordType::ProcessTamper,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                "file_delete_detected" => {
+                    giganto
+                        .send_sysmon::<FileDeleteDetected>(
+                            iter,
+                            RecordType::FileDeleteDetected,
+                            from,
+                            grow,
+                            running,
+                        )
+                        .await?;
+                }
+                _ => error!("unknown sysmon kind"),
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -586,6 +755,90 @@ impl Giganto {
         info!(
             "last line: {}, success: {}, failed: {}",
             cnt, success_cnt, failed_cnt
+        );
+
+        Ok(())
+    }
+
+    async fn send_sysmon<T>(
+        &mut self,
+        mut sysmon_iter: StringRecordsIntoIter<File>,
+        protocol: RecordType,
+        from: u64,
+        grow: bool,
+        running: Arc<AtomicBool>,
+    ) -> Result<()>
+    where
+        T: Serialize + TryFromSysmonRecord + Unpin + Debug,
+    {
+        info!("send sysmon");
+        let mut success_cnt = 0u32;
+        let mut failed_cnt = 0u32;
+        let mut pos = Position::new();
+        let mut last_record = StringRecord::new();
+        let mut time_serial = 0_i64;
+        while running.load(Ordering::SeqCst) {
+            let next_pos = sysmon_iter.reader().position().clone();
+            if let Some(result) = sysmon_iter.next() {
+                if next_pos.line() < from {
+                    continue;
+                }
+                match result {
+                    Ok(record) if record != last_record => {
+                        last_record = record.clone();
+                        time_serial += 1;
+                        if time_serial > 999 {
+                            time_serial = 1;
+                        }
+                        match T::try_from_sysmon_record(&record, time_serial) {
+                            Ok((event, timestamp)) => {
+                                if self.init_msg {
+                                    send_record_header(&mut self.giganto_sender, protocol).await?;
+                                    self.init_msg = false;
+                                }
+                                match send_event(&mut self.giganto_sender, timestamp, event).await {
+                                    Err(SendError::WriteError(_)) => {
+                                        self.reconnect().await?;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        bail!("{e:?}");
+                                    }
+                                    Ok(_) => {}
+                                }
+                                success_cnt += 1;
+                            }
+                            Err(e) => {
+                                failed_cnt += 1;
+                                error!("failed to convert data #{}: {e}", next_pos.line());
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        continue;
+                    }
+                    Err(e) => {
+                        failed_cnt += 1;
+                        error!("invalid record: {e}");
+                    }
+                }
+            } else {
+                if grow {
+                    tokio::time::sleep(Duration::from_millis(3_000)).await;
+                    sysmon_iter.reader_mut().seek(pos.clone())?;
+                    sysmon_iter = sysmon_iter.into_reader().into_records();
+                    continue;
+                }
+                break;
+            }
+            pos = next_pos;
+        }
+
+        info!(
+            "last line: {}, success line: {}, failed line: {} ",
+            pos.line(),
+            success_cnt,
+            failed_cnt
         );
 
         Ok(())

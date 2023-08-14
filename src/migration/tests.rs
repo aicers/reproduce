@@ -1,4 +1,4 @@
-use crate::migration::TryFromGigantoRecord;
+use super::TryFromGigantoRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
