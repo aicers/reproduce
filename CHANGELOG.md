@@ -10,6 +10,22 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added the line number to convert error message.
+- Supports sysmon csv log.
+  - kind:
+    "process_create",
+    "file_create_time",
+    "network_connect",
+    "process_terminate",
+    "image_load",
+    "file_create",
+    "registry_value_set",
+    "registry_key_rename",
+    "file_create_stream_hash",
+    "pipe_event",
+    "dns_query",
+    "file_delete",
+    "process_tamper",
+    "file_delete_detected"
 
 ### Changed
 

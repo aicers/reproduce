@@ -1,6 +1,6 @@
-use crate::config::{Config, InputType, OutputType};
+use crate::syslog::open_sysmon_csv_file;
 use crate::zeek::open_raw_event_log_file;
-use crate::{Producer, Report};
+use crate::{Config, InputType, OutputType, Producer, Report};
 use anyhow::{anyhow, bail, Result};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -27,6 +27,22 @@ const AGENTS_LIST: [&str; 7] = [
     "tivan",
 ];
 const OPERATION_LOG: &str = "oplog";
+const SYSLOG_TYPES: [&str; 14] = [
+    "process_create",
+    "file_create_time",
+    "network_connect",
+    "process_terminate",
+    "image_load",
+    "file_create",
+    "registry_value_set",
+    "registry_key_rename",
+    "file_create_stream_hash",
+    "pipe_event",
+    "dns_query",
+    "file_delete",
+    "process_tamper",
+    "file_delete_detected",
+];
 
 pub struct Controller {
     config: Config,
@@ -156,6 +172,19 @@ impl Controller {
                             self.config.mode_grow,
                             self.config.send_from,
                             running.clone(),
+                        )
+                        .await?;
+                } else if self.config.output.as_str() == "giganto"
+                    && SYSLOG_TYPES.contains(&self.config.giganto_kind.as_str())
+                {
+                    let rdr = open_sysmon_csv_file(filename)?;
+                    let iter = rdr.into_records();
+                    producer
+                        .send_sysmon_to_giganto(
+                            iter,
+                            self.config.send_from,
+                            self.config.mode_grow,
+                            running,
                         )
                         .await?;
                 } else {
