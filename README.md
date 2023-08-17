@@ -41,24 +41,68 @@ reproduce -h
 
 * Convert a zeek log file and send it to Giganto server from specific line:
 
-    ```sh
-    reproduce -i LOG_20220921 -o giganto -G 127.0.0.1:38370 -N server_name \
-        -C config.toml -k protocol -f 10
-    ```
+  ```sh
+  reproduce -i LOG_20220921 -o giganto -G 127.0.0.1:38370 -N server_name \
+      -C config.toml -k protocol -f 10
+  ```
 
-* Send Operation log to Giganto server:
+* Send operation log to Giganto server:
 
-    ```sh
-    reproduce -i AGENT_NAME.log -o giganto -G 127.0.0.1:38370 -N server_name \
-      -C config.toml -k oplog
-    ```
+  ```sh
+  reproduce -i AGENT_NAME.log -o giganto -G 127.0.0.1:38370 -N server_name \
+    -C config.toml -k oplog
+  ```
 
 * Send giganto export file to Giganto server:
 
-    ```sh
-    reproduce -i LOG_20230209 -o giganto -G 127.0.0.1:38370 -N server_name \
-      -C config.toml -k protocol -m
-    ```
+  ```sh
+  reproduce -i LOG_20230209 -o giganto -G 127.0.0.1:38370 -N server_name \
+    -C config.toml -k protocol -m
+  ```
+
+* Send sysmon csv file to Giganto server:
+
+  ```sh
+  reproduce -i EVENT_LOG.csv -o giganto -G 127.0.0.1:38370 -N server_name \
+    -C config.toml -k event_name
+  ```
+
+## Defined kind type
+
+| Kind | Protocol |
+| --- | --- |
+| Protocol | - conn |
+|| - http |
+|| - rdp |
+|| - smtp |
+|| - dns |
+|| - ntlm |
+|| - kerberos |
+|| - ssh |
+|| - dce_rpc |
+|| - ftp |
+|| - mqtt |
+|| - ldap |
+|| - tls |
+|| - smb |
+|| - nfs |
+| | |
+| Event name | - process_create |
+|| - file_create_time |
+|| - network_connect |
+|| - process_terminate |
+|| - image_load |
+|| - file_create |
+|| - registry_value_set |
+|| - registry_key_rename |
+|| - file_create_stream_hash |
+|| - pipe_event |
+|| - dns_query |
+|| - file_delete |
+|| - process_tamper |
+|| - file_delete_detected |
+| | |
+| Oplog | - oplog |
 
 ## License
 
