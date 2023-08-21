@@ -7,7 +7,11 @@ use giganto_client::ingest::sysmon::{
     FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
-use std::{fs::File, net::IpAddr, path::Path};
+use std::{
+    fs::File,
+    net::{IpAddr, Ipv4Addr},
+    path::Path,
+};
 
 impl TryFromSysmonRecord for ProcessCreate {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
@@ -297,7 +301,7 @@ impl TryFromSysmonRecord for NetworkConnection {
         let initiated = if let Some(initiated) = rec.get(9) {
             if initiated.eq("true") {
                 true
-            } else if initiated.eq("false") {
+            } else if initiated.eq("false") || initiated.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid initiated"));
@@ -308,7 +312,7 @@ impl TryFromSysmonRecord for NetworkConnection {
         let source_is_ipv6 = if let Some(source_is_ipv6) = rec.get(10) {
             if source_is_ipv6.eq("true") {
                 true
-            } else if source_is_ipv6.eq("false") {
+            } else if source_is_ipv6.eq("false") || source_is_ipv6.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid source_is_ipv6"));
@@ -317,7 +321,11 @@ impl TryFromSysmonRecord for NetworkConnection {
             return Err(anyhow!("missing source_is_ipv6"));
         };
         let source_ip = if let Some(source_ip) = rec.get(11) {
-            source_ip.parse::<IpAddr>().context("invalid source_ip")?
+            if source_ip.eq("-") {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            } else {
+                source_ip.parse::<IpAddr>().context("invalid source_ip")?
+            }
         } else {
             return Err(anyhow!("missing source_ip"));
         };
@@ -327,7 +335,11 @@ impl TryFromSysmonRecord for NetworkConnection {
             return Err(anyhow!("missing source_hostname"));
         };
         let source_port = if let Some(source_port) = rec.get(13) {
-            source_port.parse::<u16>().context("invalid source_port")?
+            if source_port.eq("-") {
+                0
+            } else {
+                source_port.parse::<u16>().context("invalid source_port")?
+            }
         } else {
             return Err(anyhow!("missing source_port"));
         };
@@ -339,7 +351,7 @@ impl TryFromSysmonRecord for NetworkConnection {
         let destination_is_ipv6 = if let Some(destination_is_ipv6) = rec.get(15) {
             if destination_is_ipv6.eq("true") {
                 true
-            } else if destination_is_ipv6.eq("false") {
+            } else if destination_is_ipv6.eq("false") || destination_is_ipv6.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid destination_is_ipv6"));
@@ -348,9 +360,13 @@ impl TryFromSysmonRecord for NetworkConnection {
             return Err(anyhow!("missing destination_is_ipv6"));
         };
         let destination_ip = if let Some(destination_ip) = rec.get(16) {
-            destination_ip
-                .parse::<IpAddr>()
-                .context("invalid destination_ip")?
+            if destination_ip.eq("-") {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            } else {
+                destination_ip
+                    .parse::<IpAddr>()
+                    .context("invalid destination_ip")?
+            }
         } else {
             return Err(anyhow!("missing destination_ip"));
         };
@@ -360,9 +376,13 @@ impl TryFromSysmonRecord for NetworkConnection {
             return Err(anyhow!("missing destination_hostname"));
         };
         let destination_port = if let Some(destination_port) = rec.get(18) {
-            destination_port
-                .parse::<u16>()
-                .context("invalid destination_port")?
+            if destination_port.eq("-") {
+                0
+            } else {
+                destination_port
+                    .parse::<u16>()
+                    .context("invalid destination_port")?
+            }
         } else {
             return Err(anyhow!("missing destination_port"));
         };
@@ -523,7 +543,7 @@ impl TryFromSysmonRecord for ImageLoaded {
         let signed = if let Some(signed) = rec.get(14) {
             if signed.eq("true") {
                 true
-            } else if signed.eq("false") {
+            } else if signed.eq("false") || signed.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid signed"));
@@ -1053,7 +1073,7 @@ impl TryFromSysmonRecord for FileDelete {
         let is_executable = if let Some(is_executable) = rec.get(10) {
             if is_executable.eq("true") {
                 true
-            } else if is_executable.eq("false") {
+            } else if is_executable.eq("false") || is_executable.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid is_executable"));
@@ -1064,7 +1084,7 @@ impl TryFromSysmonRecord for FileDelete {
         let archived = if let Some(archived) = rec.get(11) {
             if archived.eq("true") {
                 true
-            } else if archived.eq("false") {
+            } else if archived.eq("false") || archived.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid archived"));
@@ -1202,7 +1222,7 @@ impl TryFromSysmonRecord for FileDeleteDetected {
         let is_executable = if let Some(is_executable) = rec.get(10) {
             if is_executable.eq("true") {
                 true
-            } else if is_executable.eq("false") {
+            } else if is_executable.eq("false") || is_executable.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid is_executable"));
