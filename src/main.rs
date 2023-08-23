@@ -20,6 +20,9 @@ pub async fn main() {
     info!("reproduce end");
 }
 
+/// # Panics
+///
+/// Panics if argument parse fail.
 #[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn parse() -> Config {

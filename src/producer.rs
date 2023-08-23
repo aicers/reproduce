@@ -971,13 +971,14 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
         }
     };
 
-    let Ok((cert,key)) = fs::read(&config.certification.cert)
-        .and_then(|x| Ok((x, fs::read(&config.certification.key)?))) else {
-             bail!(
-                 "failed to read (cert, key) file. cert_path:{}, key_path:{}",
-                 &config.certification.cert,
-                 &config.certification.key
-             );
+    let Ok((cert, key)) = fs::read(&config.certification.cert)
+        .and_then(|x| Ok((x, fs::read(&config.certification.key)?)))
+    else {
+        bail!(
+            "failed to read (cert, key) file. cert_path:{}, key_path:{}",
+            &config.certification.cert,
+            &config.certification.key
+        );
     };
 
     let pv_key = if Path::new(&config.certification.key)
