@@ -57,6 +57,10 @@ impl Controller {
     /// # Errors
     ///
     /// Returns an error if creating a converter fails.
+    ///
+    /// # Panics
+    ///
+    /// Stream finish / Connection close error
     pub async fn run(&mut self) -> Result<()> {
         let input_type = input_type(&self.config.input);
         let mut producer = producer(&self.config).await;
