@@ -8,7 +8,7 @@ anyhow = "1"
 bincode = "1.3"
 bytesize = "1"
 chrono = "0.4"
-clap = { version = "4.3", features = ["wrap_help"] }
+clap = { version = "4.4", features = ["wrap_help"] }
 csv = "1.2"
 ctrlc = { version = "3", features = ["termination"] }
 giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.12.1" }
