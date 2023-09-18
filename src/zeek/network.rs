@@ -10,7 +10,9 @@ impl TryFromZeekRecord for Conn {
     #[allow(clippy::too_many_lines)]
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -134,7 +136,9 @@ impl TryFromZeekRecord for Dns {
     )]
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -200,7 +204,9 @@ impl TryFromZeekRecord for Dns {
             if rtt.eq("-") {
                 0
             } else {
-                parse_zeek_timestamp(rtt)?.timestamp_nanos()
+                parse_zeek_timestamp(rtt)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
             }
         } else {
             return Err(anyhow!("missing rtt"));
@@ -318,7 +324,9 @@ impl TryFromZeekRecord for Http {
     #[allow(clippy::too_many_lines)]
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -495,7 +503,9 @@ impl TryFromZeekRecord for Http {
 impl TryFromZeekRecord for Kerberos {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -554,7 +564,9 @@ impl TryFromZeekRecord for Kerberos {
             if from.eq("-") {
                 0
             } else {
-                parse_zeek_timestamp(from)?.timestamp_nanos()
+                parse_zeek_timestamp(from)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
             }
         } else {
             return Err(anyhow!("missing from"));
@@ -563,7 +575,9 @@ impl TryFromZeekRecord for Kerberos {
             if till.eq("-") {
                 0
             } else {
-                parse_zeek_timestamp(till)?.timestamp_nanos()
+                parse_zeek_timestamp(till)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
             }
         } else {
             return Err(anyhow!("missing till"));
@@ -623,7 +637,9 @@ impl TryFromZeekRecord for Kerberos {
 impl TryFromZeekRecord for Ntlm {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -713,7 +729,9 @@ impl TryFromZeekRecord for Ntlm {
 impl TryFromZeekRecord for Rdp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -767,7 +785,9 @@ impl TryFromZeekRecord for Rdp {
 impl TryFromZeekRecord for Smtp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -852,7 +872,9 @@ impl TryFromZeekRecord for Smtp {
 impl TryFromZeekRecord for Ssh {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -982,7 +1004,9 @@ impl TryFromZeekRecord for Ssh {
 impl TryFromZeekRecord for DceRpc {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1016,7 +1040,9 @@ impl TryFromZeekRecord for DceRpc {
             if rtt.eq("-") {
                 0
             } else {
-                parse_zeek_timestamp(rtt)?.timestamp_nanos()
+                parse_zeek_timestamp(rtt)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
             }
         } else {
             return Err(anyhow!("missing rtt"));
@@ -1059,7 +1085,9 @@ impl TryFromZeekRecord for DceRpc {
 impl TryFromZeekRecord for Ftp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1176,7 +1204,9 @@ impl TryFromZeekRecord for Ftp {
 impl TryFromZeekRecord for Ldap {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1299,7 +1329,9 @@ impl TryFromZeekRecord for Ldap {
 impl TryFromZeekRecord for Tls {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?.timestamp_nanos()
+            parse_zeek_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };

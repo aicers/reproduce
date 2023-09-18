@@ -857,7 +857,9 @@ impl Giganto {
 
         match send_event(
             &mut self.giganto_sender,
-            Utc::now().timestamp_nanos(),
+            Utc::now()
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?,
             send_log,
         )
         .await
