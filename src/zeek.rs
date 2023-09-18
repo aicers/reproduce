@@ -24,7 +24,7 @@ fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
         let Some(time) = NaiveDateTime::from_timestamp_opt(secs, micros * 1000) else {
             return Err(anyhow!("failed to create NaiveDateTime from timestamp"));
         };
-        Ok(DateTime::<Utc>::from_utc(time, Utc))
+        Ok(DateTime::<Utc>::from_naive_utc_and_offset(time, Utc))
     } else {
         Err(anyhow!("invalid timestamp: {}", timestamp))
     }

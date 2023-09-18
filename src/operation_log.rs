@@ -39,7 +39,9 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(Oplog, i64)> {
         Some(d) => d.as_str(),
         None => bail!("invalid datetime"),
     };
-    let timestamp = parse_oplog_timestamp(datetime)?.timestamp_nanos();
+    let timestamp = parse_oplog_timestamp(datetime)?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")?;
 
     let log = match caps.name("contents") {
         Some(l) => l.as_str(),
@@ -84,7 +86,8 @@ mod tests {
             dt,
             Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
                 .unwrap()
-                .timestamp_nanos()
+                .timestamp_nanos_opt()
+                .unwrap()
         );
         assert_eq!(res_info.agent_name, "agent".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));

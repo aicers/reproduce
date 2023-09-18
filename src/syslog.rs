@@ -26,7 +26,10 @@ impl TryFromSysmonRecord for ProcessCreate {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -199,7 +202,10 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -224,12 +230,16 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
             return Err(anyhow!("missing target_filename"));
         };
         let creation_utc_time = if let Some(creation_utc_time) = rec.get(8) {
-            parse_sysmon_time(creation_utc_time)?.timestamp_nanos()
+            parse_sysmon_time(creation_utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing creation_utc_time"));
         };
         let previous_creation_utc_time = if let Some(previous_creation_utc_time) = rec.get(9) {
-            parse_sysmon_time(previous_creation_utc_time)?.timestamp_nanos()
+            parse_sysmon_time(previous_creation_utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing previous_creation_utc_time"));
         };
@@ -269,7 +279,10 @@ impl TryFromSysmonRecord for NetworkConnection {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -431,7 +444,10 @@ impl TryFromSysmonRecord for ProcessTerminated {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -483,7 +499,10 @@ impl TryFromSysmonRecord for ImageLoaded {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -604,7 +623,10 @@ impl TryFromSysmonRecord for FileCreate {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -632,7 +654,9 @@ impl TryFromSysmonRecord for FileCreate {
             if creation_utc_time.eq("-") {
                 0
             } else {
-                parse_sysmon_time(creation_utc_time)?.timestamp_nanos()
+                parse_sysmon_time(creation_utc_time)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
             }
         } else {
             return Err(anyhow!("missing creation_utc_time"));
@@ -677,7 +701,10 @@ impl TryFromSysmonRecord for RegistryValueSet {
             return Err(anyhow!("missing event_type"));
         };
         let time = if let Some(utc_time) = rec.get(4) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -747,7 +774,10 @@ impl TryFromSysmonRecord for RegistryKeyValueRename {
             return Err(anyhow!("missing event_type"));
         };
         let time = if let Some(utc_time) = rec.get(4) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -812,7 +842,10 @@ impl TryFromSysmonRecord for FileCreateStreamHash {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -837,7 +870,9 @@ impl TryFromSysmonRecord for FileCreateStreamHash {
             return Err(anyhow!("missing target_filename"));
         };
         let creation_utc_time = if let Some(creation_utc_time) = rec.get(8) {
-            parse_sysmon_time(creation_utc_time)?.timestamp_nanos()
+            parse_sysmon_time(creation_utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing creation_utc_time"));
         };
@@ -895,7 +930,10 @@ impl TryFromSysmonRecord for PipeEvent {
             return Err(anyhow!("missing event_type"));
         };
         let time = if let Some(utc_time) = rec.get(4) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -954,7 +992,10 @@ impl TryFromSysmonRecord for DnsEvent {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -1033,7 +1074,10 @@ impl TryFromSysmonRecord for FileDelete {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -1124,7 +1168,10 @@ impl TryFromSysmonRecord for ProcessTampering {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -1182,7 +1229,10 @@ impl TryFromSysmonRecord for FileDeleteDetected {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?.timestamp_nanos() + serial
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -1250,7 +1300,7 @@ impl TryFromSysmonRecord for FileDeleteDetected {
 
 fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
     if let Ok(ndt) = NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S%.f") {
-        Ok(DateTime::<Utc>::from_utc(ndt, Utc))
+        Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
     } else {
         Err(anyhow!("invalid time: {}", time))
     }
