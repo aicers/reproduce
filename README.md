@@ -69,7 +69,7 @@ reproduce -h
 
 ## Defined kind type
 
-| Kind | Protocol |
+| Category | Kind |
 | --- | --- |
 | Protocol | - conn |
 || - http |
@@ -86,22 +86,26 @@ reproduce -h
 || - tls |
 || - smb |
 || - nfs |
-| | |
-| Event name | - process_create |
-|| - file_create_time |
-|| - network_connect |
-|| - process_terminate |
-|| - image_load |
-|| - file_create |
-|| - registry_value_set |
-|| - registry_key_rename |
-|| - file_create_stream_hash |
-|| - pipe_event |
-|| - dns_query |
-|| - file_delete |
-|| - process_tamper |
-|| - file_delete_detected |
-| | |
+
+| Category | Kind | number |
+| --- | --- | --- |
+| Event name | - process_create | event 1 |
+|| - file_create_time | event 2 |
+|| - network_connect | event 3 |
+|| - process_terminate | event 5 |
+|| - image_load | event 7 |
+|| - file_create | event 11 |
+|| - registry_value_set | event 13 |
+|| - registry_key_rename | event 14 |
+|| - file_create_stream_hash | event 15 |
+|| - pipe_event | event 17 |
+|| - dns_query | event 22 |
+|| - file_delete | event 23 |
+|| - process_tamper | event 25 |
+|| - file_delete_detected | event 26 |
+
+| Category | Kind |
+| --- | --- |
 | Oplog | - oplog |
 
 ## License
