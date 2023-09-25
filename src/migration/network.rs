@@ -748,7 +748,7 @@ impl TryFromGigantoRecord for Ntlm {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::similar_names)]
 impl TryFromGigantoRecord for Kerberos {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
@@ -796,65 +796,60 @@ impl TryFromGigantoRecord for Kerberos {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-        let request_type = if let Some(request_type) = rec.get(8) {
-            request_type.to_string()
+        let client_time = if let Some(client_time) = rec.get(8) {
+            parse_giganto_timestamp(client_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
-            return Err(anyhow!("missing request_type"));
+            return Err(anyhow!("missing client_time"));
         };
-        let client = if let Some(client) = rec.get(9) {
-            client.to_string()
+        let server_time = if let Some(server_time) = rec.get(9) {
+            parse_giganto_timestamp(server_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
-            return Err(anyhow!("missing client"));
+            return Err(anyhow!("missing server_time"));
         };
-        let service = if let Some(service) = rec.get(10) {
-            service.to_string()
+        let error_code = if let Some(error_code) = rec.get(10) {
+            error_code.parse::<u32>().context("invalid error_code")?
         } else {
-            return Err(anyhow!("missing service"));
+            return Err(anyhow!("missing error_code"));
         };
-        let success = if let Some(success) = rec.get(11) {
-            success.to_string()
+        let client_realm = if let Some(client_realm) = rec.get(11) {
+            client_realm.to_string()
         } else {
-            return Err(anyhow!("missing success"));
+            return Err(anyhow!("missing client_realm"));
         };
-        let error_msg = if let Some(error_msg) = rec.get(12) {
-            error_msg.to_string()
+        let cname_type = if let Some(cname_type) = rec.get(12) {
+            cname_type.parse::<u8>().context("invalid cname_type")?
         } else {
-            return Err(anyhow!("missing error_msg"));
+            return Err(anyhow!("missing cname_type"));
         };
-        let from = if let Some(from) = rec.get(13) {
-            from.parse::<i64>().context("invalid from")?
+        let client_name = if let Some(client_name) = rec.get(13) {
+            client_name
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
         } else {
-            return Err(anyhow!("missing from"));
+            return Err(anyhow!("missing client_name"));
         };
-        let till = if let Some(till) = rec.get(14) {
-            till.parse::<i64>().context("invalid from")?
+        let realm = if let Some(realm) = rec.get(14) {
+            realm.to_string()
         } else {
-            return Err(anyhow!("missing till"));
+            return Err(anyhow!("missing realm"));
         };
-        let cipher = if let Some(cipher) = rec.get(15) {
-            cipher.to_string()
+        let sname_type = if let Some(sname_type) = rec.get(15) {
+            sname_type.parse::<u8>().context("invalid sname_type")?
         } else {
-            return Err(anyhow!("missing cipher"));
+            return Err(anyhow!("missing sname_type"));
         };
-        let forwardable = if let Some(forwardable) = rec.get(16) {
-            forwardable.to_string()
+        let service_name = if let Some(service_name) = rec.get(16) {
+            service_name
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect()
         } else {
-            return Err(anyhow!("missing forwardable"));
-        };
-        let renewable = if let Some(renewable) = rec.get(17) {
-            renewable.to_string()
-        } else {
-            return Err(anyhow!("missing renewable"));
-        };
-        let client_cert_subject = if let Some(client_cert_subject) = rec.get(18) {
-            client_cert_subject.to_string()
-        } else {
-            return Err(anyhow!("missing client_cert_subject"));
-        };
-        let server_cert_subject = if let Some(server_cert_subject) = rec.get(19) {
-            server_cert_subject.to_string()
-        } else {
-            return Err(anyhow!("missing server_cert_subject"));
+            return Err(anyhow!("missing service_name"));
         };
 
         Ok((
@@ -865,18 +860,15 @@ impl TryFromGigantoRecord for Kerberos {
                 resp_port,
                 proto,
                 last_time,
-                request_type,
-                client,
-                service,
-                success,
-                error_msg,
-                from,
-                till,
-                cipher,
-                forwardable,
-                renewable,
-                client_cert_subject,
-                server_cert_subject,
+                client_time,
+                server_time,
+                error_code,
+                client_realm,
+                cname_type,
+                client_name,
+                realm,
+                sname_type,
+                service_name,
             },
             time,
         ))
