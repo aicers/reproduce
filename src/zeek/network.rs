@@ -535,78 +535,6 @@ impl TryFromZeekRecord for Kerberos {
         } else {
             return Err(anyhow!("missing destination port"));
         };
-        let request_type = if let Some(request_type) = rec.get(6) {
-            request_type.to_string()
-        } else {
-            return Err(anyhow!("missing request_type"));
-        };
-        let client = if let Some(client) = rec.get(7) {
-            client.to_string()
-        } else {
-            return Err(anyhow!("missing client"));
-        };
-        let service = if let Some(service) = rec.get(8) {
-            service.to_string()
-        } else {
-            return Err(anyhow!("missing service"));
-        };
-        let success = if let Some(success) = rec.get(9) {
-            success.to_string()
-        } else {
-            return Err(anyhow!("missing success"));
-        };
-        let error_msg = if let Some(error_msg) = rec.get(10) {
-            error_msg.to_string()
-        } else {
-            return Err(anyhow!("missing error_msg"));
-        };
-        let from = if let Some(from) = rec.get(11) {
-            if from.eq("-") {
-                0
-            } else {
-                parse_zeek_timestamp(from)?
-                    .timestamp_nanos_opt()
-                    .context("to_timestamp_nanos")?
-            }
-        } else {
-            return Err(anyhow!("missing from"));
-        };
-        let till = if let Some(till) = rec.get(12) {
-            if till.eq("-") {
-                0
-            } else {
-                parse_zeek_timestamp(till)?
-                    .timestamp_nanos_opt()
-                    .context("to_timestamp_nanos")?
-            }
-        } else {
-            return Err(anyhow!("missing till"));
-        };
-        let cipher = if let Some(cipher) = rec.get(13) {
-            cipher.to_string()
-        } else {
-            return Err(anyhow!("missing cipher"));
-        };
-        let forwardable = if let Some(forwardable) = rec.get(14) {
-            forwardable.to_string()
-        } else {
-            return Err(anyhow!("missing forwardable"));
-        };
-        let renewable = if let Some(renewable) = rec.get(15) {
-            renewable.to_string()
-        } else {
-            return Err(anyhow!("missing renewable"));
-        };
-        let client_cert_subject = if let Some(client_cert_subject) = rec.get(16) {
-            client_cert_subject.to_string()
-        } else {
-            return Err(anyhow!("missing client_cert_subject"));
-        };
-        let server_cert_subject = if let Some(server_cert_subject) = rec.get(18) {
-            server_cert_subject.to_string()
-        } else {
-            return Err(anyhow!("missing server_cert_subject"));
-        };
 
         Ok((
             Self {
@@ -616,18 +544,15 @@ impl TryFromZeekRecord for Kerberos {
                 resp_port,
                 proto: 0,
                 last_time: 0,
-                request_type,
-                client,
-                service,
-                success,
-                error_msg,
-                from,
-                till,
-                cipher,
-                forwardable,
-                renewable,
-                client_cert_subject,
-                server_cert_subject,
+                client_time: 0,
+                server_time: 0,
+                error_code: 1,
+                client_realm: "client_realm".to_string(),
+                cname_type: 1,
+                client_name: vec!["client_name".to_string()],
+                realm: "realm".to_string(),
+                sname_type: 1,
+                service_name: vec!["service_name".to_string()],
             },
             time,
         ))

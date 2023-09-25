@@ -63,7 +63,7 @@ fn giganto_ntlm() {
 
 #[test]
 fn giganto_kerberos() {
-    let data = "1562093132.125665000	localhost	89.248.167.131	24067	210.117.142.55	88	0	0.000000000	AS	/NM	krbtgt/NM	-	-	0	0	-	T	T	-	-";
+    let data = "1562093132.125665000	localhost	89.248.167.131	24067	210.117.142.55	88	0	0.000000000	0.000000000	0.000000000	1	client_realm	1	client,name	realm	1	service,name";
 
     let rec = stringrecord(data);
 
