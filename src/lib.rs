@@ -1,6 +1,7 @@
 mod config;
 mod controller;
 mod migration;
+mod netflow;
 mod operation_log;
 mod producer;
 mod report;

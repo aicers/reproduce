@@ -27,7 +27,7 @@ const AGENTS_LIST: [&str; 7] = [
     "tivan",
 ];
 const OPERATION_LOG: &str = "oplog";
-const SYSLOG_TYPES: [&str; 14] = [
+const SYSMON_KINDS: [&str; 14] = [
     "process_create",
     "file_create_time",
     "network_connect",
@@ -43,6 +43,7 @@ const SYSLOG_TYPES: [&str; 14] = [
     "process_tamper",
     "file_delete_detected",
 ];
+const NETFLOW_KIND: [&str; 2] = ["netflow5", "netflow9"];
 
 pub struct Controller {
     config: Config,
@@ -179,7 +180,7 @@ impl Controller {
                         )
                         .await?;
                 } else if self.config.output.as_str() == "giganto"
-                    && SYSLOG_TYPES.contains(&self.config.giganto_kind.as_str())
+                    && SYSMON_KINDS.contains(&self.config.giganto_kind.as_str())
                 {
                     let rdr = open_sysmon_csv_file(filename)?;
                     let iter = rdr.into_records();
@@ -190,6 +191,12 @@ impl Controller {
                             self.config.mode_grow,
                             running,
                         )
+                        .await?;
+                } else if self.config.output.as_str() == "giganto"
+                    && NETFLOW_KIND.contains(&self.config.giganto_kind.as_str())
+                {
+                    producer
+                        .send_netflow_to_giganto(filename, self.config.send_from, running)
                         .await?;
                 } else {
                     let log_file =

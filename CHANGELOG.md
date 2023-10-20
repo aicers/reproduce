@@ -7,6 +7,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Supports `Netflow5`, `Netflow9` pcap.
+
 ### Changed
 
 - Modified kerberos event to support giganto-client.
