@@ -1,5 +1,8 @@
 use crate::{
-    migration::TryFromGigantoRecord, operation_log, syslog::TryFromSysmonRecord,
+    migration::TryFromGigantoRecord,
+    netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
+    operation_log,
+    syslog::TryFromSysmonRecord,
     zeek::TryFromZeekRecord,
 };
 use anyhow::{bail, Context, Result};
@@ -10,6 +13,7 @@ use giganto_client::{
     frame::{RecvError, SendError},
     ingest::{
         log::Log,
+        netflow::{Netflow5, Netflow9},
         network::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
@@ -25,6 +29,7 @@ use giganto_client::{
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use serde::{Deserialize, Serialize};
 use std::{
+    env,
     fmt::Debug,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
@@ -513,6 +518,33 @@ impl Producer {
         }
         Ok(())
     }
+
+    /// # Errors
+    ///
+    /// Returns an error if it failed to parse netflow pcap.
+    pub async fn send_netflow_to_giganto(
+        &mut self,
+        filename: &Path,
+        from: u64,
+        running: Arc<AtomicBool>,
+    ) -> Result<()> {
+        if let Producer::Giganto(giganto) = self {
+            match giganto.giganto_info.kind.as_str() {
+                "netflow5" => {
+                    giganto
+                        .send_netflow::<Netflow5>(RecordType::Netflow5, filename, from, running)
+                        .await?;
+                }
+                "netflow9" => {
+                    giganto
+                        .send_netflow::<Netflow9>(RecordType::Netflow9, filename, from, running)
+                        .await?;
+                }
+                _ => error!("unknown netflow version"),
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -584,7 +616,7 @@ impl Giganto {
                                     Err(e) => {
                                         bail!("{e:?}");
                                     }
-                                    Ok(_) => {}
+                                    Ok(()) => {}
                                 }
                                 success_cnt += 1;
                             }
@@ -663,7 +695,7 @@ impl Giganto {
                                     Err(e) => {
                                         bail!("{e:?}");
                                     }
-                                    Ok(_) => {}
+                                    Ok(()) => {}
                                 }
                                 success_cnt += 1;
                             }
@@ -742,7 +774,7 @@ impl Giganto {
                     Err(e) => {
                         bail!("{e:?}");
                     }
-                    Ok(_) => {}
+                    Ok(()) => {}
                 }
             } else {
                 if grow {
@@ -804,7 +836,7 @@ impl Giganto {
                                     Err(e) => {
                                         bail!("{e:?}");
                                     }
-                                    Ok(_) => {}
+                                    Ok(()) => {}
                                 }
                                 success_cnt += 1;
                             }
@@ -844,6 +876,109 @@ impl Giganto {
         Ok(())
     }
 
+    async fn send_netflow<T>(
+        &mut self,
+        protocol: RecordType,
+        filename: &Path,
+        from: u64,
+        running: Arc<AtomicBool>,
+    ) -> Result<()>
+    where
+        T: Serialize + ParseNetflowDatasets + Unpin + Debug,
+    {
+        info!("send netflow");
+        let tmpl_path = env::var("NETFLOW_TEMPLATES_PATH");
+        let mut templates = if let Ok(tmpl_path) = tmpl_path.as_ref() {
+            TemplatesBox::from_path(tmpl_path).unwrap_or_default()
+        } else {
+            TemplatesBox::new()
+        };
+        let mut handle = pcap::Capture::from_file(filename)?;
+        if handle.get_datalink() != pcap::Linktype::ETHERNET {
+            bail!(
+                "Error: unknown datalink {:?} in {:?}",
+                handle.get_datalink().get_name(),
+                filename
+            );
+        }
+
+        let mut stats = Stats::new();
+        let mut pkt_cnt = 0_u64;
+        let mut timestamp_old = 0_u32;
+        let mut nanos = 1_u32;
+
+        while let Ok(pkt) = handle.next_packet() {
+            pkt_cnt += 1;
+            if from > pkt_cnt {
+                continue;
+            }
+
+            let mut input = PktBuf::new(&pkt);
+            let rst = input.is_netflow();
+            stats.add(rst, 1);
+            if rst != ProcessStats::YesNetflowPackets {
+                continue;
+            }
+
+            let Ok(header) = input.parse_netflow_header() else {
+                stats.add(ProcessStats::InvalidNetflowPackets, 1);
+                continue;
+            };
+
+            let (unix_secs, unix_nanos) = header.timestamp();
+            if timestamp_old != unix_secs {
+                nanos = unix_nanos;
+            }
+            timestamp_old = unix_secs;
+
+            match header {
+                NetflowHeader::V5(_) => stats.add(ProcessStats::NetflowV5DataPackets, 1),
+                NetflowHeader::V9(_) => stats.add(ProcessStats::NetflowV9DataPackets, 1),
+            }
+            let events = T::parse_netflow_datasets(
+                pkt_cnt,
+                &mut templates,
+                &header,
+                &mut nanos,
+                &mut input,
+                &mut stats,
+            )?;
+            if self.init_msg {
+                send_record_header(&mut self.giganto_sender, protocol).await?;
+                self.init_msg = false;
+            }
+            for (timestamp, event) in events {
+                match send_event(&mut self.giganto_sender, timestamp, event).await {
+                    Err(SendError::WriteError(_)) => {
+                        self.reconnect().await?;
+                        continue;
+                    }
+                    Err(e) => {
+                        bail!("{e:?}");
+                    }
+                    Ok(()) => {}
+                }
+            }
+
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+        stats.add(
+            ProcessStats::Packets,
+            pkt_cnt.try_into().unwrap_or_default(),
+        );
+        info!("netflow pcap processing statistics: {:?}", stats);
+        if !templates.is_empty() {
+            if let Ok(tmpl_path) = tmpl_path.as_ref() {
+                if let Err(e) = templates.save(tmpl_path) {
+                    error!("{}. {}", e, tmpl_path);
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn send(&mut self, msg: &[u8]) -> Result<()> {
         let send_log: Log = Log {
             kind: self.giganto_info.kind.to_string(),
@@ -870,7 +1005,7 @@ impl Giganto {
             Err(e) => {
                 bail!("{e:?}");
             }
-            Ok(_) => {}
+            Ok(()) => {}
         }
         Ok(())
     }
@@ -889,7 +1024,7 @@ impl Giganto {
             Err(e) => {
                 bail!("{e:?}");
             }
-            Ok(_) => {}
+            Ok(()) => {}
         }
         Ok(())
     }

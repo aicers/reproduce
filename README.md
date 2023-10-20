@@ -37,6 +37,9 @@ To diplay the usage, type:
 reproduce -h
 ```
 
+To support pcap parser for netflow v9, templates would be read from
+the environment variable `NETFLOW_TEMPLATES_PATH`.
+
 ## Examples
 
 * Convert a zeek log file and send it to Giganto server from specific line:
@@ -104,9 +107,11 @@ reproduce -h
 || - process_tamper | event 25 |
 || - file_delete_detected | event 26 |
 
-| Category | Kind |
-| --- | --- |
-| Oplog | - oplog |
+| Category | Kind | Description |
+| --- | --- | --- |
+| Oplog | - oplog | Operation log of applications |
+| Netflow | - netflow5 | Netflow v5 pcap |
+|| - netflow9 | Netflow v9 pcap |
 
 ## License
 
