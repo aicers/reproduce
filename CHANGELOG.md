@@ -5,7 +5,7 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.4] - 2023-10-23
 
 ### Added
 
@@ -270,6 +270,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[0.17.4]: https://github.com/aicers/reproduce/compare/0.17.3...0.17.4
 [0.17.3]: https://github.com/aicers/reproduce/compare/0.17.2...0.17.3
 [0.17.2]: https://github.com/aicers/reproduce/compare/0.17.1...0.17.2
 [0.17.1]: https://github.com/aicers/reproduce/compare/0.17.0...0.17.1
