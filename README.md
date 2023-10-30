@@ -7,7 +7,7 @@ entries to a Giganto server.
 
 ## Requirements
 
-* Giganto 0.13.0.
+* Giganto 0.14.0.
 
 ## Build
 
@@ -72,6 +72,8 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ## Defined kind type
 
+### Network Events
+
 | Category | Kind |
 | --- | --- |
 | Protocol | - conn |
@@ -90,6 +92,8 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 || - smb |
 || - nfs |
 
+### Sysmon Events
+
 | Category | Kind | number |
 | --- | --- | --- |
 | Event name | - process_create | event 1 |
@@ -107,11 +111,26 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 || - process_tamper | event 25 |
 || - file_delete_detected | event 26 |
 
+### Netflow, Logs
+
 | Category | Kind | Description |
 | --- | --- | --- |
 | Oplog | - oplog | Operation log of applications |
 | Netflow | - netflow5 | Netflow v5 pcap |
 || - netflow9 | Netflow v9 pcap |
+| Security log | - wapples_fw_6.0 | PentaSecurity |
+|| - mf2_ips_4.0 | SECU-I |
+|| - sniper_ips_8.0 | WINS |
+|| - aiwaf_waf_4.1 | Monitorapp |
+|| - tg_ips_2.7 | Ahnlab |
+|| - vforce_ips_4.6 | NexG |
+|| - srx_ips_15.1 | Juniper |
+|| - sonicwall_fw_6.5 | SonicWALL |
+|| - fgt_ips_6.2 | Fortinet |
+|| - shadowwall_ips_5.0 | Duruan |
+|| - axgate_fw_2.1 | AXGATE |
+| OS log | - ubuntu_syslog_20.04 | Ubuntu 20.04 |
+| Web log | - nginx_accesslog_1.25.2 | NGINX |
 
 ## License
 

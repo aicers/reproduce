@@ -5,6 +5,7 @@ mod netflow;
 mod operation_log;
 mod producer;
 mod report;
+mod security_log;
 mod syslog;
 mod zeek;
 
