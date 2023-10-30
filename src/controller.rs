@@ -44,6 +44,21 @@ const SYSMON_KINDS: [&str; 14] = [
     "file_delete_detected",
 ];
 const NETFLOW_KIND: [&str; 2] = ["netflow5", "netflow9"];
+const SUPPORTED_SECURITY_KIND: [&str; 13] = [
+    "wapples_fw_6.0",
+    "mf2_ips_4.0",
+    "sniper_ips_8.0",
+    "aiwaf_waf_4.1",
+    "tg_ips_2.7",
+    "vforce_ips_4.6",
+    "srx_ips_15.1",
+    "sonicwall_fw_6.5",
+    "fgt_ips_6.2",
+    "shadowwall_ips_5.0",
+    "axgate_fw_2.1",
+    "ubuntu_syslog_20.04",
+    "nginx_accesslog_1.25.2",
+];
 
 pub struct Controller {
     config: Config,
@@ -197,6 +212,19 @@ impl Controller {
                 {
                     producer
                         .send_netflow_to_giganto(filename, self.config.send_from, running)
+                        .await?;
+                } else if self.config.output.as_str() == "giganto"
+                    && SUPPORTED_SECURITY_KIND.contains(&self.config.giganto_kind.as_str())
+                {
+                    let seculog = File::open(filename)?;
+                    let rdr = BufReader::new(seculog);
+                    producer
+                        .send_seculog_to_giganto(
+                            rdr,
+                            self.config.mode_grow,
+                            self.config.send_from,
+                            running,
+                        )
                         .await?;
                 } else {
                     let log_file =

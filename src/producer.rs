@@ -2,6 +2,10 @@ use crate::{
     migration::TryFromGigantoRecord,
     netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
     operation_log,
+    security_log::{
+        Aiwaf, Axgate, Fgt, Mf2, Nginx, ParseSecurityLog, SecurityLogInfo, ShadowWall, SniperIps,
+        SonicWall, Srx, Tg, Ubuntu, Vforce, Wapples,
+    },
     syslog::TryFromSysmonRecord,
     zeek::TryFromZeekRecord,
 };
@@ -545,6 +549,90 @@ impl Producer {
         }
         Ok(())
     }
+
+    /// # Errors
+    ///
+    /// Returns an error if any writing operation fails.
+    #[allow(clippy::too_many_lines)]
+    pub async fn send_seculog_to_giganto(
+        &mut self,
+        reader: BufReader<File>,
+        grow: bool,
+        from: u64,
+        running: Arc<AtomicBool>,
+    ) -> Result<()> {
+        if let Producer::Giganto(giganto) = self {
+            match giganto.giganto_info.kind.as_str() {
+                "wapples_fw_6.0" => {
+                    giganto
+                        .send_seculog::<Wapples>(reader, grow, from, running)
+                        .await?;
+                }
+                "mf2_ips_4.0" => {
+                    giganto
+                        .send_seculog::<Mf2>(reader, grow, from, running)
+                        .await?;
+                }
+                "sniper_ips_8.0" => {
+                    giganto
+                        .send_seculog::<SniperIps>(reader, grow, from, running)
+                        .await?;
+                }
+                "aiwaf_waf_4.1" => {
+                    giganto
+                        .send_seculog::<Aiwaf>(reader, grow, from, running)
+                        .await?;
+                }
+                "tg_ips_2.7" => {
+                    giganto
+                        .send_seculog::<Tg>(reader, grow, from, running)
+                        .await?;
+                }
+                "vforce_ips_4.6" => {
+                    giganto
+                        .send_seculog::<Vforce>(reader, grow, from, running)
+                        .await?;
+                }
+                "srx_ips_15.1" => {
+                    giganto
+                        .send_seculog::<Srx>(reader, grow, from, running)
+                        .await?;
+                }
+                "sonicwall_fw_6.5" => {
+                    giganto
+                        .send_seculog::<SonicWall>(reader, grow, from, running)
+                        .await?;
+                }
+                "fgt_ips_6.2" => {
+                    giganto
+                        .send_seculog::<Fgt>(reader, grow, from, running)
+                        .await?;
+                }
+                "shadowwall_ips_5.0" => {
+                    giganto
+                        .send_seculog::<ShadowWall>(reader, grow, from, running)
+                        .await?;
+                }
+                "axgate_fw_2.1" => {
+                    giganto
+                        .send_seculog::<Axgate>(reader, grow, from, running)
+                        .await?;
+                }
+                "ubuntu_syslog_20.04" => {
+                    giganto
+                        .send_seculog::<Ubuntu>(reader, grow, from, running)
+                        .await?;
+                }
+                "nginx_accesslog_1.25.2" => {
+                    giganto
+                        .send_seculog::<Nginx>(reader, grow, from, running)
+                        .await?;
+                }
+                _ => error!("invalid security log kind"),
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -743,6 +831,7 @@ impl Giganto {
         from: u64,
         running: Arc<AtomicBool>,
     ) -> Result<()> {
+        info!("send oplog");
         let mut lines = reader.lines();
         let mut cnt = 0;
         let mut success_cnt = 0u32;
@@ -976,6 +1065,74 @@ impl Giganto {
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn send_seculog<T>(
+        &mut self,
+        reader: BufReader<File>,
+        grow: bool,
+        from: u64,
+        running: Arc<AtomicBool>,
+    ) -> Result<()>
+    where
+        T: Serialize + ParseSecurityLog + Unpin + Debug,
+    {
+        info!("send seculog");
+        let mut lines = reader.lines();
+        let mut cnt = 0;
+        let mut success_cnt = 0u32;
+        let mut failed_cnt = 0u32;
+        let mut time_serial = 0_i64;
+        while running.load(Ordering::SeqCst) {
+            if let Some(Ok(line)) = lines.next() {
+                cnt += 1;
+                time_serial += 1;
+                if time_serial > 999 {
+                    time_serial = 1;
+                }
+                if cnt < from {
+                    continue;
+                }
+                let (seculog_data, timestamp) = if let Ok(r) = T::parse_security_log(
+                    &line,
+                    time_serial,
+                    SecurityLogInfo::new(&self.giganto_info.kind),
+                ) {
+                    success_cnt += 1;
+                    r
+                } else {
+                    failed_cnt += 1;
+                    continue;
+                };
+
+                if self.init_msg {
+                    send_record_header(&mut self.giganto_sender, RecordType::Seculog).await?;
+                    self.init_msg = false;
+                }
+
+                match send_event(&mut self.giganto_sender, timestamp, seculog_data).await {
+                    Err(SendError::WriteError(_)) => {
+                        self.reconnect().await?;
+                    }
+                    Err(e) => {
+                        bail!("{e:?}");
+                    }
+                    Ok(()) => {}
+                }
+            } else {
+                if grow {
+                    tokio::time::sleep(Duration::from_millis(3_000)).await;
+                    continue;
+                }
+                break;
+            }
+        }
+        info!(
+            "last line: {}, success: {}, failed: {}",
+            cnt, success_cnt, failed_cnt
+        );
+
         Ok(())
     }
 
