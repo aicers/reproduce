@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use giganto_client::ingest::log::{OpLogLevel, Oplog};
+use giganto_client::ingest::log::{OpLog, OpLogLevel};
 use regex::Regex;
 use std::{str::FromStr, sync::OnceLock};
 
@@ -26,7 +26,7 @@ fn parse_log_level(level: &str) -> Result<OpLogLevel> {
     }
 }
 
-pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(Oplog, i64)> {
+pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
     let caps = get_log_regex().captures(line).context("invalid log line")?;
 
     let log_level = match caps.name("level") {
@@ -49,7 +49,7 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(Oplog, i64)> {
     };
 
     Ok((
-        Oplog {
+        OpLog {
             agent_name: agent.to_string(),
             log_level,
             contents: log.to_string(),

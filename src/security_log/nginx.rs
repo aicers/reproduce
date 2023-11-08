@@ -1,7 +1,7 @@
 use super::{Nginx, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, FixedOffset};
-use giganto_client::ingest::log::Seculog;
+use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
@@ -23,7 +23,7 @@ impl ParseSecurityLog for Nginx {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(Seculog, i64)> {
+    ) -> Result<(SecuLog, i64)> {
         let caps = get_nginx_regex()
             .captures(line)
             .context("invalid log line")?;
@@ -44,7 +44,8 @@ impl ParseSecurityLog for Nginx {
             + serial;
 
         Ok((
-            Seculog {
+            SecuLog {
+                source: String::new(),
                 kind: info.kind,
                 log_type: info.log_type,
                 version: info.version,

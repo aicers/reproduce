@@ -115,7 +115,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 | Category | Kind | Description |
 | --- | --- | --- |
-| Oplog | - oplog | Operation log of applications |
+| OpLog | - oplog | Operation log of applications |
 | Netflow | - netflow5 | Netflow v5 pcap |
 || - netflow9 | Netflow v9 pcap |
 | Security log | - wapples_fw_6.0 | PentaSecurity |

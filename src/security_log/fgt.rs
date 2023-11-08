@@ -1,7 +1,7 @@
 use super::{Fgt, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, FixedOffset};
-use giganto_client::ingest::log::Seculog;
+use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
@@ -24,7 +24,7 @@ impl ParseSecurityLog for Fgt {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(Seculog, i64)> {
+    ) -> Result<(SecuLog, i64)> {
         let caps = get_fgt_regex().captures(line).context("invalid log line")?;
 
         let date = match caps.name("date") {
@@ -71,7 +71,8 @@ impl ParseSecurityLog for Fgt {
             + serial;
 
         Ok((
-            Seculog {
+            SecuLog {
+                source: String::new(),
                 kind: info.kind,
                 log_type: info.log_type,
                 version: info.version,
