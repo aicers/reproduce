@@ -27,8 +27,8 @@ use giganto_client::{
             FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
             ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
         },
-        RecordType,
     },
+    RawEventKind,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ use tracing::{error, info, warn};
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_VERSION: &str = "0.12.3";
+const GIGANTO_VERSION: &str = "0.14.0";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
@@ -179,117 +179,129 @@ impl Producer {
                 "conn" => {
                     if migration {
                         giganto
-                            .migration::<Conn>(iter, RecordType::Conn, from, grow, running)
+                            .migration::<Conn>(iter, RawEventKind::Conn, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Conn>(iter, RecordType::Conn, from, grow, running)
+                            .send_zeek::<Conn>(iter, RawEventKind::Conn, from, grow, running)
                             .await?;
                     }
                 }
                 "http" => {
                     if migration {
                         giganto
-                            .migration::<Http>(iter, RecordType::Http, from, grow, running)
+                            .migration::<Http>(iter, RawEventKind::Http, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Http>(iter, RecordType::Http, from, grow, running)
+                            .send_zeek::<Http>(iter, RawEventKind::Http, from, grow, running)
                             .await?;
                     }
                 }
                 "rdp" => {
                     if migration {
                         giganto
-                            .migration::<Rdp>(iter, RecordType::Rdp, from, grow, running)
+                            .migration::<Rdp>(iter, RawEventKind::Rdp, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Rdp>(iter, RecordType::Rdp, from, grow, running)
+                            .send_zeek::<Rdp>(iter, RawEventKind::Rdp, from, grow, running)
                             .await?;
                     }
                 }
                 "smtp" => {
                     if migration {
                         giganto
-                            .migration::<Smtp>(iter, RecordType::Smtp, from, grow, running)
+                            .migration::<Smtp>(iter, RawEventKind::Smtp, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Smtp>(iter, RecordType::Smtp, from, grow, running)
+                            .send_zeek::<Smtp>(iter, RawEventKind::Smtp, from, grow, running)
                             .await?;
                     }
                 }
                 "dns" => {
                     if migration {
                         giganto
-                            .migration::<Dns>(iter, RecordType::Dns, from, grow, running)
+                            .migration::<Dns>(iter, RawEventKind::Dns, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Dns>(iter, RecordType::Dns, from, grow, running)
+                            .send_zeek::<Dns>(iter, RawEventKind::Dns, from, grow, running)
                             .await?;
                     }
                 }
                 "ntlm" => {
                     if migration {
                         giganto
-                            .migration::<Ntlm>(iter, RecordType::Ntlm, from, grow, running)
+                            .migration::<Ntlm>(iter, RawEventKind::Ntlm, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Ntlm>(iter, RecordType::Ntlm, from, grow, running)
+                            .send_zeek::<Ntlm>(iter, RawEventKind::Ntlm, from, grow, running)
                             .await?;
                     }
                 }
                 "kerberos" => {
                     if migration {
                         giganto
-                            .migration::<Kerberos>(iter, RecordType::Kerberos, from, grow, running)
+                            .migration::<Kerberos>(
+                                iter,
+                                RawEventKind::Kerberos,
+                                from,
+                                grow,
+                                running,
+                            )
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Kerberos>(iter, RecordType::Kerberos, from, grow, running)
+                            .send_zeek::<Kerberos>(
+                                iter,
+                                RawEventKind::Kerberos,
+                                from,
+                                grow,
+                                running,
+                            )
                             .await?;
                     }
                 }
                 "ssh" => {
                     if migration {
                         giganto
-                            .migration::<Ssh>(iter, RecordType::Ssh, from, grow, running)
+                            .migration::<Ssh>(iter, RawEventKind::Ssh, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Ssh>(iter, RecordType::Ssh, from, grow, running)
+                            .send_zeek::<Ssh>(iter, RawEventKind::Ssh, from, grow, running)
                             .await?;
                     }
                 }
                 "dce_rpc" => {
                     if migration {
                         giganto
-                            .migration::<DceRpc>(iter, RecordType::DceRpc, from, grow, running)
+                            .migration::<DceRpc>(iter, RawEventKind::DceRpc, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<DceRpc>(iter, RecordType::DceRpc, from, grow, running)
+                            .send_zeek::<DceRpc>(iter, RawEventKind::DceRpc, from, grow, running)
                             .await?;
                     }
                 }
                 "ftp" => {
                     if migration {
                         giganto
-                            .migration::<Ftp>(iter, RecordType::Ftp, from, grow, running)
+                            .migration::<Ftp>(iter, RawEventKind::Ftp, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Ftp>(iter, RecordType::Ftp, from, grow, running)
+                            .send_zeek::<Ftp>(iter, RawEventKind::Ftp, from, grow, running)
                             .await?;
                     }
                 }
                 "mqtt" => {
                     if migration {
                         giganto
-                            .migration::<Mqtt>(iter, RecordType::Mqtt, from, grow, running)
+                            .migration::<Mqtt>(iter, RawEventKind::Mqtt, from, grow, running)
                             .await?;
                     } else {
                         bail!("mqtt's zeek is not supported".to_string());
@@ -298,29 +310,29 @@ impl Producer {
                 "ldap" => {
                     if migration {
                         giganto
-                            .migration::<Ldap>(iter, RecordType::Ldap, from, grow, running)
+                            .migration::<Ldap>(iter, RawEventKind::Ldap, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Ldap>(iter, RecordType::Ldap, from, grow, running)
+                            .send_zeek::<Ldap>(iter, RawEventKind::Ldap, from, grow, running)
                             .await?;
                     }
                 }
                 "tls" => {
                     if migration {
                         giganto
-                            .migration::<Tls>(iter, RecordType::Tls, from, grow, running)
+                            .migration::<Tls>(iter, RawEventKind::Tls, from, grow, running)
                             .await?;
                     } else {
                         giganto
-                            .send_zeek::<Tls>(iter, RecordType::Tls, from, grow, running)
+                            .send_zeek::<Tls>(iter, RawEventKind::Tls, from, grow, running)
                             .await?;
                     }
                 }
                 "smb" => {
                     if migration {
                         giganto
-                            .migration::<Smb>(iter, RecordType::Smb, from, grow, running)
+                            .migration::<Smb>(iter, RawEventKind::Smb, from, grow, running)
                             .await?;
                     } else {
                         bail!("smb's zeek is not supported".to_string());
@@ -329,7 +341,7 @@ impl Producer {
                 "nfs" => {
                     if migration {
                         giganto
-                            .migration::<Nfs>(iter, RecordType::Nfs, from, grow, running)
+                            .migration::<Nfs>(iter, RawEventKind::Nfs, from, grow, running)
                             .await?;
                     } else {
                         bail!("nfs's zeek is not supported".to_string());
@@ -379,7 +391,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<ProcessCreate>(
                             iter,
-                            RecordType::ProcessCreate,
+                            RawEventKind::ProcessCreate,
                             from,
                             grow,
                             running,
@@ -390,7 +402,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<FileCreationTimeChanged>(
                             iter,
-                            RecordType::FileCreateTime,
+                            RawEventKind::FileCreateTime,
                             from,
                             grow,
                             running,
@@ -401,7 +413,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<NetworkConnection>(
                             iter,
-                            RecordType::NetworkConnect,
+                            RawEventKind::NetworkConnect,
                             from,
                             grow,
                             running,
@@ -412,7 +424,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<ProcessTerminated>(
                             iter,
-                            RecordType::ProcessTerminate,
+                            RawEventKind::ProcessTerminate,
                             from,
                             grow,
                             running,
@@ -423,7 +435,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<ImageLoaded>(
                             iter,
-                            RecordType::ImageLoad,
+                            RawEventKind::ImageLoad,
                             from,
                             grow,
                             running,
@@ -434,7 +446,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<FileCreate>(
                             iter,
-                            RecordType::FileCreate,
+                            RawEventKind::FileCreate,
                             from,
                             grow,
                             running,
@@ -445,7 +457,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<RegistryValueSet>(
                             iter,
-                            RecordType::RegistryValueSet,
+                            RawEventKind::RegistryValueSet,
                             from,
                             grow,
                             running,
@@ -456,7 +468,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<RegistryKeyValueRename>(
                             iter,
-                            RecordType::RegistryKeyRename,
+                            RawEventKind::RegistryKeyRename,
                             from,
                             grow,
                             running,
@@ -467,7 +479,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<FileCreateStreamHash>(
                             iter,
-                            RecordType::FileCreateStreamHash,
+                            RawEventKind::FileCreateStreamHash,
                             from,
                             grow,
                             running,
@@ -476,19 +488,25 @@ impl Producer {
                 }
                 "pipe_event" => {
                     giganto
-                        .send_sysmon::<PipeEvent>(iter, RecordType::PipeEvent, from, grow, running)
+                        .send_sysmon::<PipeEvent>(
+                            iter,
+                            RawEventKind::PipeEvent,
+                            from,
+                            grow,
+                            running,
+                        )
                         .await?;
                 }
                 "dns_query" => {
                     giganto
-                        .send_sysmon::<DnsEvent>(iter, RecordType::DnsQuery, from, grow, running)
+                        .send_sysmon::<DnsEvent>(iter, RawEventKind::DnsQuery, from, grow, running)
                         .await?;
                 }
                 "file_delete" => {
                     giganto
                         .send_sysmon::<FileDelete>(
                             iter,
-                            RecordType::FileDelete,
+                            RawEventKind::FileDelete,
                             from,
                             grow,
                             running,
@@ -499,7 +517,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<ProcessTampering>(
                             iter,
-                            RecordType::ProcessTamper,
+                            RawEventKind::ProcessTamper,
                             from,
                             grow,
                             running,
@@ -510,7 +528,7 @@ impl Producer {
                     giganto
                         .send_sysmon::<FileDeleteDetected>(
                             iter,
-                            RecordType::FileDeleteDetected,
+                            RawEventKind::FileDeleteDetected,
                             from,
                             grow,
                             running,
@@ -536,12 +554,12 @@ impl Producer {
             match giganto.giganto_info.kind.as_str() {
                 "netflow5" => {
                     giganto
-                        .send_netflow::<Netflow5>(RecordType::Netflow5, filename, from, running)
+                        .send_netflow::<Netflow5>(RawEventKind::Netflow5, filename, from, running)
                         .await?;
                 }
                 "netflow9" => {
                     giganto
-                        .send_netflow::<Netflow9>(RecordType::Netflow9, filename, from, running)
+                        .send_netflow::<Netflow9>(RawEventKind::Netflow9, filename, from, running)
                         .await?;
                 }
                 _ => error!("unknown netflow version"),
@@ -668,7 +686,7 @@ impl Giganto {
     async fn send_zeek<T>(
         &mut self,
         mut zeek_iter: StringRecordsIntoIter<File>,
-        protocol: RecordType,
+        protocol: RawEventKind,
         from: u64,
         grow: bool,
         running: Arc<AtomicBool>,
@@ -747,7 +765,7 @@ impl Giganto {
     async fn migration<T>(
         &mut self,
         mut giganto_iter: StringRecordsIntoIter<File>,
-        protocol: RecordType,
+        protocol: RawEventKind,
         from: u64,
         grow: bool,
         running: Arc<AtomicBool>,
@@ -852,7 +870,7 @@ impl Giganto {
                 };
 
                 if self.init_msg {
-                    send_record_header(&mut self.giganto_sender, RecordType::Oplog).await?;
+                    send_record_header(&mut self.giganto_sender, RawEventKind::OpLog).await?;
                     self.init_msg = false;
                 }
 
@@ -884,7 +902,7 @@ impl Giganto {
     async fn send_sysmon<T>(
         &mut self,
         mut sysmon_iter: StringRecordsIntoIter<File>,
-        protocol: RecordType,
+        protocol: RawEventKind,
         from: u64,
         grow: bool,
         running: Arc<AtomicBool>,
@@ -967,7 +985,7 @@ impl Giganto {
 
     async fn send_netflow<T>(
         &mut self,
-        protocol: RecordType,
+        protocol: RawEventKind,
         filename: &Path,
         from: u64,
         running: Arc<AtomicBool>,
@@ -1107,7 +1125,7 @@ impl Giganto {
                 };
 
                 if self.init_msg {
-                    send_record_header(&mut self.giganto_sender, RecordType::Seculog).await?;
+                    send_record_header(&mut self.giganto_sender, RawEventKind::SecuLog).await?;
                     self.init_msg = false;
                 }
 
@@ -1143,7 +1161,7 @@ impl Giganto {
         };
 
         if self.init_msg {
-            send_record_header(&mut self.giganto_sender, RecordType::Log).await?;
+            send_record_header(&mut self.giganto_sender, RawEventKind::Log).await?;
             self.init_msg = false;
         }
 

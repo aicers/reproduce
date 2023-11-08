@@ -1,7 +1,7 @@
 use super::{ParseSecurityLog, SecurityLogInfo, Tg, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, FixedOffset};
-use giganto_client::ingest::log::Seculog;
+use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
@@ -24,7 +24,7 @@ impl ParseSecurityLog for Tg {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(Seculog, i64)> {
+    ) -> Result<(SecuLog, i64)> {
         let caps = get_tg_regex().captures(line).context("invalid log line")?;
 
         let datetime = match caps.name("datetime") {
@@ -63,7 +63,8 @@ impl ParseSecurityLog for Tg {
             + serial;
 
         Ok((
-            Seculog {
+            SecuLog {
+                source: String::new(),
                 kind: info.kind,
                 log_type: info.log_type,
                 version: info.version,

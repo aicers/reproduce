@@ -15,7 +15,7 @@ mod vforce;
 mod wapples;
 
 use anyhow::Result;
-use giganto_client::ingest::log::Seculog;
+use giganto_client::ingest::log::SecuLog;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -85,7 +85,7 @@ pub struct Nginx;
 
 pub trait ParseSecurityLog {
     fn parse_security_log(line: &str, serial: i64, info: SecurityLogInfo)
-        -> Result<(Seculog, i64)>; // agent: &str
+        -> Result<(SecuLog, i64)>; // agent: &str
 }
 
 pub fn proto_to_u8(proto: &str) -> u8 {

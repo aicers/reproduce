@@ -2,7 +2,7 @@ use super::{
     ParseSecurityLog, SecurityLogInfo, ShadowWall, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP,
 };
 use anyhow::{bail, Context, Result};
-use giganto_client::ingest::log::Seculog;
+use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
@@ -20,7 +20,7 @@ impl ParseSecurityLog for ShadowWall {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(Seculog, i64)> {
+    ) -> Result<(SecuLog, i64)> {
         let caps = get_shadow_regex()
             .captures(line)
             .context("invalid log line")?;
@@ -61,7 +61,8 @@ impl ParseSecurityLog for ShadowWall {
             + serial;
 
         Ok((
-            Seculog {
+            SecuLog {
+                source: String::new(),
                 kind: info.kind,
                 log_type: info.log_type,
                 version: info.version,
