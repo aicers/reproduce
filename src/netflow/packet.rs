@@ -400,17 +400,17 @@ impl PktBuf {
             if remained < NETFLOW_V5_RECORD_LENGTH || header.count <= dataset_count {
                 break;
             }
-            let srcaddr: IpAddr = Ipv4Addr::from(self.data.read_u32::<BigEndian>()?).into();
-            let dstaddr: IpAddr = Ipv4Addr::from(self.data.read_u32::<BigEndian>()?).into();
-            let nexthop: IpAddr = Ipv4Addr::from(self.data.read_u32::<BigEndian>()?).into();
+            let src_addr: IpAddr = Ipv4Addr::from(self.data.read_u32::<BigEndian>()?).into();
+            let dst_addr: IpAddr = Ipv4Addr::from(self.data.read_u32::<BigEndian>()?).into();
+            let next_hop: IpAddr = Ipv4Addr::from(self.data.read_u32::<BigEndian>()?).into();
             let input = self.data.read_u16::<BigEndian>()?;
             let output = self.data.read_u16::<BigEndian>()?;
-            let dpkts = self.data.read_u32::<BigEndian>()?;
-            let doctets = self.data.read_u32::<BigEndian>()?;
+            let d_pkts = self.data.read_u32::<BigEndian>()?;
+            let d_octets = self.data.read_u32::<BigEndian>()?;
             let first = self.data.read_u32::<BigEndian>()?;
             let last = self.data.read_u32::<BigEndian>()?;
-            let srcport = self.data.read_u16::<BigEndian>()?;
-            let dstport = self.data.read_u16::<BigEndian>()?;
+            let src_port = self.data.read_u16::<BigEndian>()?;
+            let dst_port = self.data.read_u16::<BigEndian>()?;
             self.data.consume(1);
             let tcp_flags = self.data.read_u8()?;
             let prot = self.data.read_u8()?;
@@ -421,17 +421,18 @@ impl PktBuf {
             let dst_mask = self.data.read_u8()?;
             self.data.consume(2);
             flows.push(Netflow5 {
-                srcaddr,
-                dstaddr,
-                nexthop,
+                source: String::new(),
+                src_addr,
+                dst_addr,
+                next_hop,
                 input,
                 output,
-                dpkts,
-                doctets,
+                d_pkts,
+                d_octets,
                 first,
                 last,
-                srcport,
-                dstport,
+                src_port,
+                dst_port,
                 tcp_flags,
                 prot,
                 tos,
@@ -540,6 +541,7 @@ impl PktBuf {
                 }
             }
             flows.push(Netflow9 {
+                source: String::new(),
                 sequence: header.flow_sequence,
                 source_id: header.source_id,
                 template_id,
