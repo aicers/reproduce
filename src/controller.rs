@@ -79,17 +79,31 @@ impl Controller {
     /// Stream finish / Connection close error
     pub async fn run(&mut self) -> Result<()> {
         let input_type = input_type(&self.config.input);
-        let mut producer = producer(&self.config).await;
 
-        if input_type == InputType::Dir {
-            self.run_split(&mut producer).await?;
+        if input_type == InputType::Elastic {
+            self.run_elastic().await?;
         } else {
-            let filename = Path::new(&self.config.input).to_path_buf();
-            self.run_single(filename.as_ref(), &mut producer).await?;
-        }
+            let mut producer = producer(&self.config).await;
 
-        if let Producer::Giganto(mut giganto) = producer {
-            giganto.finish().await.expect("failed to finish stream");
+            match input_type {
+                InputType::Dir => {
+                    self.run_split(&mut producer).await?;
+                }
+                InputType::Log => {
+                    let file_name = Path::new(&self.config.input).to_path_buf();
+                    self.run_single(
+                        file_name.as_ref(),
+                        &mut producer,
+                        &self.config.giganto_kind.clone(),
+                    )
+                    .await?;
+                }
+                InputType::Elastic => {}
+            }
+
+            if let Producer::Giganto(mut giganto) = producer {
+                giganto.finish().await.expect("failed to finish stream");
+            }
         }
 
         Ok(())
@@ -112,7 +126,8 @@ impl Controller {
             files.sort_unstable();
             for file in files {
                 info!("{file:?}");
-                self.run_single(file.as_path(), producer).await?;
+                self.run_single(file.as_path(), producer, &self.config.giganto_kind.clone())
+                    .await?;
                 processed.push(file);
             }
 
@@ -123,8 +138,41 @@ impl Controller {
         Ok(())
     }
 
+    async fn run_elastic(&mut self) -> Result<()> {
+        let dir = crate::syslog::fetch_elastic_search(
+            &self.config.elastic_auth,
+            &self.config.config_toml,
+        )
+        .await?;
+
+        let mut files = files_in_dir(&dir, "", &[]);
+        if files.is_empty() {
+            bail!("no data with elastic");
+        }
+
+        files.sort_unstable();
+        for file in files {
+            let mut producer = producer(&self.config).await;
+            info!("{file:?}");
+            let kind = file_to_kind(&file).to_string();
+            self.run_single(file.as_path(), &mut producer, &kind)
+                .await?;
+            std::fs::remove_file(&file)?;
+            if let Producer::Giganto(mut giganto) = producer {
+                giganto.finish().await.expect("failed to finish stream");
+            }
+        }
+        std::fs::remove_dir(&dir)?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
-    async fn run_single(&mut self, filename: &Path, producer: &mut Producer) -> Result<()> {
+    async fn run_single(
+        &mut self,
+        filename: &Path,
+        producer: &mut Producer,
+        kind: &str,
+    ) -> Result<()> {
         let input_type = input_type(&filename.to_string_lossy());
         if input_type == InputType::Dir {
             return Err(anyhow!("invalid input type"));
@@ -155,9 +203,7 @@ impl Controller {
 
         match input_type {
             InputType::Log => {
-                if self.config.output.as_str() == "giganto"
-                    && GIGANTO_ZEEK_KINDS.contains(&self.config.giganto_kind.as_str())
-                {
+                if self.config.output.as_str() == "giganto" && GIGANTO_ZEEK_KINDS.contains(&kind) {
                     let rdr = open_raw_event_log_file(filename)?;
                     let zeek_iter = rdr.into_records();
                     producer
@@ -169,9 +215,7 @@ impl Controller {
                             running.clone(),
                         )
                         .await?;
-                } else if self.config.output.as_str() == "giganto"
-                    && self.config.giganto_kind.as_str() == OPERATION_LOG
-                {
+                } else if self.config.output.as_str() == "giganto" && kind == OPERATION_LOG {
                     let agent = filename
                         .file_name()
                         .expect("input file name")
@@ -194,9 +238,7 @@ impl Controller {
                             running.clone(),
                         )
                         .await?;
-                } else if self.config.output.as_str() == "giganto"
-                    && SYSMON_KINDS.contains(&self.config.giganto_kind.as_str())
-                {
+                } else if self.config.output.as_str() == "giganto" && SYSMON_KINDS.contains(&kind) {
                     let rdr = open_sysmon_csv_file(filename)?;
                     let iter = rdr.into_records();
                     producer
@@ -204,17 +246,16 @@ impl Controller {
                             iter,
                             self.config.send_from,
                             self.config.mode_grow,
+                            kind,
                             running,
                         )
                         .await?;
-                } else if self.config.output.as_str() == "giganto"
-                    && NETFLOW_KIND.contains(&self.config.giganto_kind.as_str())
-                {
+                } else if self.config.output.as_str() == "giganto" && NETFLOW_KIND.contains(&kind) {
                     producer
                         .send_netflow_to_giganto(filename, self.config.send_from, running)
                         .await?;
                 } else if self.config.output.as_str() == "giganto"
-                    && SUPPORTED_SECURITY_KIND.contains(&self.config.giganto_kind.as_str())
+                    && SUPPORTED_SECURITY_KIND.contains(&kind)
                 {
                     let seculog = File::open(filename)?;
                     let rdr = BufReader::new(seculog);
@@ -266,7 +307,7 @@ impl Controller {
                     }
                 }
             }
-            InputType::Dir => {
+            InputType::Dir | InputType::Elastic => {
                 error!("invalid input type: {input_type:?}");
             }
         }
@@ -281,6 +322,33 @@ impl Controller {
             warn!("cannot write report: {e}");
         }
         Ok(())
+    }
+}
+
+fn file_to_kind(path: &Path) -> &'static str {
+    let re = regex::Regex::new(r"event(\d+)_log.csv").unwrap();
+    let file_name = path.file_name().unwrap().to_str().unwrap();
+    if let Some(cap) = re.captures(file_name) {
+        let num = &cap[1];
+        match num {
+            "1" => "process_create",
+            "2" => "file_create_time",
+            "3" => "network_connect",
+            "5" => "process_terminate",
+            "7" => "image_load",
+            "11" => "file_create",
+            "13" => "registry_value_set",
+            "14" => "registry_key_rename",
+            "15" => "file_create_stream_hash",
+            "17" => "pipe_event",
+            "22" => "dns_query",
+            "23" => "file_delete",
+            "25" => "process_tamper",
+            "26" => "file_delete_detected",
+            _ => "",
+        }
+    } else {
+        ""
     }
 }
 
@@ -314,11 +382,15 @@ fn files_in_dir(path: &str, prefix: &str, skip: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn input_type(input: &str) -> InputType {
-    let path = Path::new(input);
-    if path.is_dir() {
-        InputType::Dir
+    if input == "elastic" {
+        InputType::Elastic
     } else {
-        InputType::Log
+        let path = Path::new(input);
+        if path.is_dir() {
+            InputType::Dir
+        } else {
+            InputType::Log
+        }
     }
 }
 
@@ -375,7 +447,7 @@ async fn producer(config: &Config) -> Producer {
             match Producer::new_giganto(
                 &config.giganto_addr,
                 &config.giganto_name,
-                &config.certs_toml,
+                &config.config_toml,
                 &config.giganto_kind,
             )
             .await

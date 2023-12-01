@@ -8,16 +8,19 @@ pub struct Config {
     pub mode_grow: bool,        // convert while tracking the growing file
     pub mode_polling_dir: bool, // polling the input directory
     pub count_skip: usize,      // count to skip
-    pub input: String,          // input: packet/log/none
+    pub input: String,          // input: packet/log/elastic/none
     pub output: String,         // output: giganto/file/none
     pub offset_prefix: String,  // prefix of offset file to read from and write to
     pub file_prefix: String,    // file name prefix when sending multiple files or a directory
-    pub certs_toml: String,
+    pub config_toml: String,
     pub giganto_name: String,
     pub giganto_addr: String,
     pub giganto_kind: String,
     pub send_from: u64,
     pub migration: bool,
+
+    // elastic_search
+    pub elastic_auth: String,
 
     // internal
     pub count_sent: usize,
@@ -29,6 +32,7 @@ pub struct Config {
 pub enum InputType {
     Log,
     Dir,
+    Elastic,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,12 +56,13 @@ impl Default for Config {
             count_sent: 0,
             input_type: InputType::Log,
             output_type: OutputType::None,
-            certs_toml: String::new(),
+            config_toml: String::new(),
             giganto_name: String::new(),
             giganto_addr: String::new(),
             giganto_kind: String::new(),
             send_from: 1,
             migration: false,
+            elastic_auth: String::new(),
         }
     }
 }
@@ -76,7 +81,7 @@ impl fmt::Display for Config {
         if !self.file_prefix.is_empty() {
             writeln!(f, "file_prefix={}", self.file_prefix.clone())?;
         }
-        writeln!(f, "certs_toml={}", self.certs_toml)?;
+        writeln!(f, "config_toml={}", self.config_toml)?;
         writeln!(f, "giganto_name={}", self.giganto_name)?;
         writeln!(f, "giganto_addr={}", self.giganto_addr)?;
         writeln!(f, "giganto_kind={}", self.giganto_kind)?;

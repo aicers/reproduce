@@ -7,9 +7,17 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added function to send sysmon events from elastic search.
+  - input: elastic
+  - `-E` option needed for elastic search.
+  - Added elastic search configuration fields to config file.
+
 ### Changed
 
 - Modified netflow event according to giganto-client.
+- Modified config file
 
 ## [0.17.5] - 2023-11-09
 
