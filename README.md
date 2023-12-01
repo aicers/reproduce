@@ -70,6 +70,13 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
     -C config.toml -k event_name
   ```
 
+* Send sysmon with elastic search to Giganto server:
+
+  ```sh
+  reproduce -i elastic -o giganto -G 127.0.0.1:38370 -N server_name \
+    -C config.toml -E id:password
+  ```
+
 ## Defined kind type
 
 ### Network Events

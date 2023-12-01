@@ -383,10 +383,11 @@ impl Producer {
         iter: StringRecordsIntoIter<File>,
         from: u64,
         grow: bool,
+        kind: &str,
         running: Arc<AtomicBool>,
     ) -> Result<()> {
         if let Producer::Giganto(giganto) = self {
-            match giganto.giganto_info.kind.as_str() {
+            match kind {
                 "process_create" => {
                     giganto
                         .send_sysmon::<ProcessCreate>(
@@ -910,7 +911,7 @@ impl Giganto {
     where
         T: Serialize + TryFromSysmonRecord + Unpin + Debug,
     {
-        info!("send sysmon");
+        info!("send sysmon, {protocol:?}");
         let mut success_cnt = 0u32;
         let mut failed_cnt = 0u32;
         let mut pos = Position::new();
@@ -973,6 +974,7 @@ impl Giganto {
             pos = next_pos;
         }
 
+        self.init_msg = true;
         info!(
             "last line: {}, success line: {}, failed line: {} ",
             pos.line(),

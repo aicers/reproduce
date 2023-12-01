@@ -50,7 +50,7 @@ pub fn parse() -> Config {
             Arg::new("input")
                 .short('i')
                 .default_value("")
-                .help("Input [LOGFILE/DIR]."),
+                .help("Input [LOGFILE/DIR/elastic]."),
         )
         .arg(
             Arg::new("prefix")
@@ -94,10 +94,10 @@ pub fn parse() -> Config {
                 .help("Giganto server hostname."),
         )
         .arg(
-            Arg::new("certs")
+            Arg::new("config")
                 .short('C')
                 .default_value("config.toml")
-                .help("config.toml file with cert, key, roots path."),
+                .help("config.toml file with cert paths, elastic search configures."),
         )
         .arg(
             Arg::new("kind")
@@ -110,13 +110,19 @@ pub fn parse() -> Config {
                 .short('f')
                 .value_parser(value_parser!(NonZeroU64))
                 .default_value("1")
-                .help("zeek log from line number(at least 1)"),
+                .help("log from line number(at least 1)"),
         )
         .arg(
             Arg::new("migration")
                 .short('m')
                 .action(clap::ArgAction::SetTrue)
                 .help("if option exists, migration with giganto export file"),
+        )
+        .arg(
+            Arg::new("elastic")
+                .short('E')
+                .default_value("")
+                .help("if input is elastic, [ID:PASSWORD]"),
         )
         .get_matches();
 
@@ -128,10 +134,11 @@ pub fn parse() -> Config {
     let output = m.get_one::<String>("output").expect("has `default_value`");
     let offset_prefix = m.get_one::<String>("offset").expect("has `default_value`");
     let count_skip = *m.get_one::<usize>("skip").expect("has `default_value`");
-    let certs_toml = m.get_one::<String>("certs").expect("has `default_value`");
+    let config_toml = m.get_one::<String>("config").expect("has `default_value`");
     let giganto_name = m.get_one::<String>("name").expect("has `default_value`");
     let giganto_addr = m.get_one::<String>("giganto").expect("has `default_name`");
     let giganto_kind = m.get_one::<String>("kind").expect("has `default_value`");
+    let elastic_auth = m.get_one::<String>("elastic").expect("has `default_value`");
     let send_from = m
         .get_one::<NonZeroU64>("from")
         .expect("has `default_value`")
@@ -142,6 +149,11 @@ pub fn parse() -> Config {
         error!("input (-i) required.");
         std::process::exit(1);
     }
+    if input == "elastic" && elastic_auth.is_empty() {
+        error!("if input is elastic, auth (-E [ID:PASSWORD]) required.");
+        std::process::exit(1);
+    }
+
     Config {
         mode_eval,
         mode_grow,
@@ -152,12 +164,13 @@ pub fn parse() -> Config {
         offset_prefix: offset_prefix.to_string(),
         file_prefix: file_prefix.to_string(),
         count_sent,
-        certs_toml: certs_toml.to_string(),
+        config_toml: config_toml.to_string(),
         giganto_name: giganto_name.to_string(),
         giganto_addr: giganto_addr.to_string(),
         giganto_kind: giganto_kind.to_string(),
         send_from,
         migration,
+        elastic_auth: elastic_auth.to_string(),
         ..Config::default()
     }
 }

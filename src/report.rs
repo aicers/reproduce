@@ -113,7 +113,7 @@ impl Report {
                 let processed_bytes = (self.sum_bytes + self.process_cnt) as u64;
                 ("Input(LOG)", processed_bytes)
             }
-            InputType::Dir => ("", 0),
+            InputType::Dir | InputType::Elastic => ("", 0),
         };
         report_file.write_fmt(format_args!(
             "{:width$}{} ({})\n",
