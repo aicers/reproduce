@@ -70,7 +70,7 @@ impl TryFromSysmonRecord for FileDelete {
         let archived = if let Some(archived) = rec.get(11) {
             if archived.eq("true") {
                 true
-            } else if archived.eq("false") || archived.eq("-") {
+            } else if archived.starts_with("false") || archived.eq("-") {
                 false
             } else {
                 return Err(anyhow!("invalid archived"));
