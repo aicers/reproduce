@@ -322,6 +322,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e962a19be5cfc3f3bf6dd8f61eb50107f356ad6270fbb3ed41476571db78be5"
+
+[[package]]
 name = "deranged"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -470,8 +476,8 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.15.2"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.15.2#797e31ad7d06020deb5b4198ab35dc0c1237da96"
+version = "0.15.2-rio.0.0.1"
+source = "git+https://github.com/aicers/giganto-client.git?rev=a4ff6fe#a4ff6fe8be1670218466f36694a564cf955a2e28"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1164,6 +1170,7 @@ dependencies = [
  "clap",
  "csv",
  "ctrlc",
+ "data-encoding",
  "giganto-client",
  "nom",
  "num-derive",
