@@ -6,6 +6,7 @@ mod file_delete;
 mod file_delete_detected;
 mod image_load;
 mod network_connect;
+mod pe_file;
 mod pipe_event;
 mod process_create;
 mod process_tamper;

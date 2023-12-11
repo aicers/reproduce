@@ -25,7 +25,7 @@ use giganto_client::{
         receive_ack_timestamp, send_event, send_record_header,
         sysmon::{
             DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PEFile, PipeEvent, ProcessCreate,
             ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
         },
     },
@@ -535,6 +535,11 @@ impl Producer {
                             grow,
                             running,
                         )
+                        .await?;
+                }
+                "pe_file" => {
+                    giganto
+                        .send_sysmon::<PEFile>(iter, RawEventKind::PeFile, from, grow, running)
                         .await?;
                 }
                 _ => error!("unknown sysmon kind"),

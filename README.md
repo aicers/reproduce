@@ -117,6 +117,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 || - file_delete | event 23 |
 || - process_tamper | event 25 |
 || - file_delete_detected | event 26 |
+|| - pe_file | Exception event |
 
 ### Netflow, Logs
 
