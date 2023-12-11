@@ -6,10 +6,10 @@ use crate::{
         Aiwaf, Axgate, Fgt, Mf2, Nginx, ParseSecurityLog, SecurityLogInfo, ShadowWall, SniperIps,
         SonicWall, Srx, Tg, Ubuntu, Vforce, Wapples,
     },
-    syslog::TryFromSysmonRecord,
+    syslog::{parse_sysmon_time, TryFromSysmonRecord},
     zeek::TryFromZeekRecord,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
 use giganto_client::{
@@ -51,6 +51,65 @@ const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const GIGANTO_VERSION: &str = "0.15.1";
 const INTERVAL: u64 = 5;
+
+#[allow(clippy::module_name_repetitions)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PEFile {
+    pub agent_name: String,
+    pub agent_id: String,
+    pub file_name: String,
+    pub file_hash: String,
+    pub data: Vec<u8>,
+}
+
+impl TryFromSysmonRecord for PEFile {
+    fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
+        let agent_name = if let Some(agent_name) = rec.get(0) {
+            agent_name.to_string()
+        } else {
+            return Err(anyhow!("missing agent_name"));
+        };
+        let agent_id = if let Some(agent_id) = rec.get(1) {
+            agent_id.to_string()
+        } else {
+            return Err(anyhow!("missing agent_id"));
+        };
+        let time = if let Some(utc_time) = rec.get(2) {
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
+        } else {
+            return Err(anyhow!("missing time"));
+        };
+        let file_name = if let Some(file_name) = rec.get(3) {
+            file_name.to_string()
+        } else {
+            return Err(anyhow!("missing file_hash"));
+        };
+        let file_hash = if let Some(file_hash) = rec.get(4) {
+            file_hash.to_string()
+        } else {
+            return Err(anyhow!("missing file_hash"));
+        };
+        let encord_data = if let Some(data) = rec.get(5) {
+            data.to_string()
+        } else {
+            return Err(anyhow!("missing data"));
+        };
+        let data = data_encoding::BASE64.decode(encord_data.as_bytes())?;
+        Ok((
+            Self {
+                agent_name,
+                agent_id,
+                file_name,
+                file_hash,
+                data,
+            },
+            time,
+        ))
+    }
+}
 
 #[allow(clippy::large_enum_variant)]
 pub enum Producer {
@@ -534,6 +593,11 @@ impl Producer {
                             grow,
                             running,
                         )
+                        .await?;
+                }
+                "pe_file" => {
+                    giganto
+                        .send_sysmon::<PEFile>(iter, RawEventKind::SecuLog, from, grow, running)
                         .await?;
                 }
                 _ => error!("unknown sysmon kind"),

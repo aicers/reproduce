@@ -27,7 +27,7 @@ const AGENTS_LIST: [&str; 7] = [
     "tivan",
 ];
 const OPERATION_LOG: &str = "oplog";
-const SYSMON_KINDS: [&str; 14] = [
+const SYSMON_KINDS: [&str; 15] = [
     "process_create",
     "file_create_time",
     "network_connect",
@@ -42,6 +42,7 @@ const SYSMON_KINDS: [&str; 14] = [
     "file_delete",
     "process_tamper",
     "file_delete_detected",
+    "pe_file",
 ];
 const NETFLOW_KIND: [&str; 2] = ["netflow5", "netflow9"];
 const SUPPORTED_SECURITY_KIND: [&str; 13] = [
