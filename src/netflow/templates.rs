@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Write, net::IpAddr};
 use tracing::info;
 
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
     pub header: Netflow9Header,
