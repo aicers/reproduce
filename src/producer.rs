@@ -1,3 +1,4 @@
+#![allow(clippy::struct_field_names)]
 use crate::{
     migration::TryFromGigantoRecord,
     netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
@@ -1338,7 +1339,7 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
             .into_iter()
             .map(rustls::Certificate)
             .collect();
-        if let Some(cert) = root_cert.get(0) {
+        if let Some(cert) = root_cert.first() {
             server_root.add(cert).expect("failed to add cert");
         }
     }

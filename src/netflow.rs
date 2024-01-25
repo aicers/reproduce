@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use chrono::NaiveDateTime;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 #[allow(clippy::module_name_repetitions)]
-pub use packet::{Netflow5Header, Netflow9Header, NetflowHeader, PktBuf};
+pub use packet::{NetflowHeader, PktBuf};
 pub use statistics::{ProcessStats, Stats};
 pub use templates::TemplatesBox;
 use tracing::{error, warn};
