@@ -1,6 +1,6 @@
 [package]
 name = "reproduce"
-version = "0.18.0"
+version = "0.18.0-rio.0.0.1"
 edition = "2021"
 
 [dependencies]
