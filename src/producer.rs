@@ -16,14 +16,14 @@ use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
 use giganto_client::{
     connection::client_handshake,
-    frame::{RecvError, SendError},
+    frame::{send_raw, RecvError, SendError},
     ingest::{
         log::Log,
         netflow::{Netflow5, Netflow9},
         network::{
             Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
         },
-        receive_ack_timestamp, send_event, send_record_header,
+        receive_ack_timestamp, send_record_header,
         sysmon::{
             DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
             FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
@@ -56,6 +56,7 @@ const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const GIGANTO_VERSION: &str = "0.21.0-alpha.1";
 const INTERVAL: u64 = 5;
+const BATCH_SIZE: usize = 100;
 
 #[allow(clippy::large_enum_variant)]
 pub struct Producer {
@@ -1022,6 +1023,8 @@ impl Giganto {
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
+        let mut buf = Vec::new();
+
         while running.load(Ordering::SeqCst) {
             let next_pos = zeek_iter.reader().position().clone();
             if let Some(result) = zeek_iter.next() {
@@ -1037,15 +1040,21 @@ impl Giganto {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;
                                 }
-                                match send_event(&mut self.giganto_sender, timestamp, event).await {
-                                    Err(SendError::WriteError(_)) => {
-                                        self.reconnect().await?;
-                                        continue;
+
+                                let record_data = bincode::serialize(&event)?;
+                                buf.push((timestamp, record_data));
+                                if buf.len() >= BATCH_SIZE {
+                                    match self.send_event_in_batch(&buf).await {
+                                        Err(SendError::WriteError(_)) => {
+                                            self.reconnect().await?;
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            bail!("{e:?}");
+                                        }
+                                        Ok(()) => {}
                                     }
-                                    Err(e) => {
-                                        bail!("{e:?}");
-                                    }
-                                    Ok(()) => {}
+                                    buf.clear();
                                 }
                                 success_cnt += 1;
                             }
@@ -1078,6 +1087,10 @@ impl Giganto {
             }
         }
 
+        if !buf.is_empty() {
+            self.send_event_in_batch(&buf).await?;
+        }
+
         info!(
             "last line: {}, success line: {}, failed line: {} ",
             pos.line(),
@@ -1106,6 +1119,8 @@ impl Giganto {
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
+        let mut buf = Vec::new();
+
         while running.load(Ordering::SeqCst) {
             let next_pos = giganto_iter.reader().position().clone();
             if let Some(result) = giganto_iter.next() {
@@ -1121,15 +1136,21 @@ impl Giganto {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;
                                 }
-                                match send_event(&mut self.giganto_sender, timestamp, event).await {
-                                    Err(SendError::WriteError(_)) => {
-                                        self.reconnect().await?;
-                                        continue;
+
+                                let record_data = bincode::serialize(&event)?;
+                                buf.push((timestamp, record_data));
+                                if buf.len() >= BATCH_SIZE {
+                                    match self.send_event_in_batch(&buf).await {
+                                        Err(SendError::WriteError(_)) => {
+                                            self.reconnect().await?;
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            bail!("{e:?}");
+                                        }
+                                        Ok(()) => {}
                                     }
-                                    Err(e) => {
-                                        bail!("{e:?}");
-                                    }
-                                    Ok(()) => {}
+                                    buf.clear();
                                 }
                                 success_cnt += 1;
                             }
@@ -1162,6 +1183,10 @@ impl Giganto {
             }
         }
 
+        if !buf.is_empty() {
+            self.send_event_in_batch(&buf).await?;
+        }
+
         info!(
             "last line: {}, success line: {}, failed line: {} ",
             pos.line(),
@@ -1186,6 +1211,8 @@ impl Giganto {
         let mut cnt = 0;
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
+        let mut buf = Vec::new();
+
         while running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = lines.next() {
                 cnt += 1;
@@ -1206,14 +1233,19 @@ impl Giganto {
                     self.init_msg = false;
                 }
 
-                match send_event(&mut self.giganto_sender, timestamp, oplog_data).await {
-                    Err(SendError::WriteError(_)) => {
-                        self.reconnect().await?;
+                let record_data = bincode::serialize(&oplog_data)?;
+                buf.push((timestamp, record_data));
+                if buf.len() >= BATCH_SIZE {
+                    match self.send_event_in_batch(&buf).await {
+                        Err(SendError::WriteError(_)) => {
+                            self.reconnect().await?;
+                        }
+                        Err(e) => {
+                            bail!("{e:?}");
+                        }
+                        Ok(()) => {}
                     }
-                    Err(e) => {
-                        bail!("{e:?}");
-                    }
-                    Ok(()) => {}
+                    buf.clear();
                 }
                 if count_sent != 0 && success_cnt >= count_sent {
                     break;
@@ -1226,6 +1258,11 @@ impl Giganto {
                 break;
             }
         }
+
+        if !buf.is_empty() {
+            self.send_event_in_batch(&buf).await?;
+        }
+
         info!(
             "last line: {}, success: {}, failed: {}",
             cnt, success_cnt, failed_cnt
@@ -1253,6 +1290,8 @@ impl Giganto {
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         let mut time_serial = 0_i64;
+        let mut buf = Vec::new();
+
         while running.load(Ordering::SeqCst) {
             let next_pos = sysmon_iter.reader().position().clone();
             if let Some(result) = sysmon_iter.next() {
@@ -1272,15 +1311,21 @@ impl Giganto {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;
                                 }
-                                match send_event(&mut self.giganto_sender, timestamp, event).await {
-                                    Err(SendError::WriteError(_)) => {
-                                        self.reconnect().await?;
-                                        continue;
+
+                                let record_data = bincode::serialize(&event)?;
+                                buf.push((timestamp, record_data));
+                                if buf.len() >= BATCH_SIZE {
+                                    match self.send_event_in_batch(&buf).await {
+                                        Err(SendError::WriteError(_)) => {
+                                            self.reconnect().await?;
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            bail!("{e:?}");
+                                        }
+                                        Ok(()) => {}
                                     }
-                                    Err(e) => {
-                                        bail!("{e:?}");
-                                    }
-                                    Ok(()) => {}
+                                    buf.clear();
                                 }
                                 success_cnt += 1;
                             }
@@ -1311,6 +1356,10 @@ impl Giganto {
                 }
                 break;
             }
+        }
+
+        if !buf.is_empty() {
+            self.send_event_in_batch(&buf).await?;
         }
 
         self.init_msg = true;
@@ -1355,6 +1404,7 @@ impl Giganto {
         let mut pkt_cnt = 0_u64;
         let mut timestamp_old = 0_u32;
         let mut nanos = 1_u32;
+        let mut buf = Vec::new();
 
         while let Ok(pkt) = handle.next_packet() {
             pkt_cnt += 1;
@@ -1397,16 +1447,26 @@ impl Giganto {
                 self.init_msg = false;
             }
             for (timestamp, event) in events {
-                match send_event(&mut self.giganto_sender, timestamp, event).await {
-                    Err(SendError::WriteError(_)) => {
-                        self.reconnect().await?;
-                        continue;
+                let record_data = bincode::serialize(&event)?;
+                buf.push((timestamp, record_data));
+                if buf.len() >= BATCH_SIZE {
+                    match self.send_event_in_batch(&buf).await {
+                        Err(SendError::WriteError(_)) => {
+                            self.reconnect().await?;
+                            continue;
+                        }
+                        Err(e) => {
+                            bail!("{e:?}");
+                        }
+                        Ok(()) => {}
                     }
-                    Err(e) => {
-                        bail!("{e:?}");
-                    }
-                    Ok(()) => {}
+                    buf.clear();
                 }
+            }
+
+            if !buf.is_empty() {
+                self.send_event_in_batch(&buf).await?;
+                buf.clear();
             }
 
             if count_sent != 0 && pkt_cnt >= count_sent {
@@ -1450,6 +1510,7 @@ impl Giganto {
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
         let mut time_serial = 0_i64;
+        let mut buf = Vec::new();
         while running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = lines.next() {
                 cnt += 1;
@@ -1477,14 +1538,19 @@ impl Giganto {
                     self.init_msg = false;
                 }
 
-                match send_event(&mut self.giganto_sender, timestamp, seculog_data).await {
-                    Err(SendError::WriteError(_)) => {
-                        self.reconnect().await?;
+                let record_data = bincode::serialize(&seculog_data)?;
+                buf.push((timestamp, record_data));
+                if buf.len() >= BATCH_SIZE {
+                    match self.send_event_in_batch(&buf).await {
+                        Err(SendError::WriteError(_)) => {
+                            self.reconnect().await?;
+                        }
+                        Err(e) => {
+                            bail!("{e:?}");
+                        }
+                        Ok(()) => {}
                     }
-                    Err(e) => {
-                        bail!("{e:?}");
-                    }
-                    Ok(()) => {}
+                    buf.clear();
                 }
 
                 if count_sent != 0 && success_cnt >= count_sent {
@@ -1497,6 +1563,9 @@ impl Giganto {
                 }
                 break;
             }
+        }
+        if !buf.is_empty() {
+            self.send_event_in_batch(&buf).await?;
         }
         info!(
             "last line: {}, success: {}, failed: {}",
@@ -1570,15 +1639,13 @@ impl Giganto {
             self.init_msg = false;
         }
 
-        match send_event(
-            &mut self.giganto_sender,
-            Utc::now()
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?,
-            send_log,
-        )
-        .await
-        {
+        let timestamp = Utc::now()
+            .timestamp_nanos_opt()
+            .context("to_timestamp_nanos")?;
+        let record_data = bincode::serialize(&send_log)?;
+        let buf = vec![(timestamp, record_data)];
+
+        match self.send_event_in_batch(&buf).await {
             Err(SendError::WriteError(_)) => {
                 self.reconnect().await?;
             }
@@ -1590,14 +1657,15 @@ impl Giganto {
         Ok(())
     }
 
+    async fn send_event_in_batch(&mut self, events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+        let buf = bincode::serialize(&events)?;
+        send_raw(&mut self.giganto_sender, &buf).await
+    }
+
     async fn send_finish(&mut self) -> Result<()> {
-        match send_event(
-            &mut self.giganto_sender,
-            CHANNEL_CLOSE_TIMESTAMP,
-            CHANNEL_CLOSE_MESSAGE,
-        )
-        .await
-        {
+        let record_data = bincode::serialize(CHANNEL_CLOSE_MESSAGE)?;
+        let buf = vec![(CHANNEL_CLOSE_TIMESTAMP, record_data)];
+        match self.send_event_in_batch(&buf).await {
             Err(SendError::WriteError(_)) => {
                 bail!("failed to send channel done message");
             }

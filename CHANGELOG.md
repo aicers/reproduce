@@ -17,6 +17,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Fixed parsing code in zeek log and giganto log due to changes in conn,
     http, smtp, ntlm, ssh, tls protocol fields.
   - Changed `GIGANTO_VERSION` to "0.21.0-alpha.1"
+- Change to send events in unit of 100 for protocol events.
 
 ## [0.19.0] - 2024-05-14
 
