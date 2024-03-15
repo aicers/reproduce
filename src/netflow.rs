@@ -4,7 +4,7 @@ mod statistics;
 mod templates;
 
 use anyhow::{bail, Result};
-use chrono::NaiveDateTime;
+use chrono::DateTime;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 #[allow(clippy::module_name_repetitions)]
 pub use packet::{NetflowHeader, PktBuf};
@@ -39,7 +39,7 @@ impl ParseNetflowDatasets for Netflow5 {
         if let Ok(values) = input.parse_netflow_v5_datasets(header) {
             for v5 in values {
                 events.push((
-                    NaiveDateTime::from_timestamp_opt(i64::from(header.unix_secs), *nanos)
+                    DateTime::from_timestamp(i64::from(header.unix_secs), *nanos)
                         .map_or(0, |t| t.timestamp_nanos_opt().unwrap_or_default()),
                     v5,
                 ));
@@ -113,7 +113,7 @@ impl ParseNetflowDatasets for Netflow9 {
                     let flows = input.parse_netflow_v9_datasets(template, header, flowset_id);
                     for v9 in flows {
                         events.push((
-                            NaiveDateTime::from_timestamp_opt(i64::from(header.unix_secs), *nanos)
+                            DateTime::from_timestamp(i64::from(header.unix_secs), *nanos)
                                 .map_or(0, |t| t.timestamp_nanos_opt().unwrap_or_default()),
                             v9,
                         ));
