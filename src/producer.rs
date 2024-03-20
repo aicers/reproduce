@@ -1,4 +1,4 @@
-#![allow(clippy::struct_field_names)]
+#![allow(clippy::struct_field_names, clippy::too_many_arguments)]
 use crate::{
     migration::TryFromGigantoRecord,
     netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
@@ -9,8 +9,9 @@ use crate::{
     },
     syslog::TryFromSysmonRecord,
     zeek::TryFromZeekRecord,
+    Config, Report,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
 use giganto_client::{
@@ -32,16 +33,18 @@ use giganto_client::{
     RawEventKind,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     env,
     fmt::Debug,
     fs::{self, File},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader},
     net::SocketAddr,
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::time::sleep;
@@ -54,21 +57,11 @@ const GIGANTO_VERSION: &str = "0.15.1";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
-pub enum Producer {
-    File(File),
-    Giganto(Giganto),
-    Null,
+pub struct Producer {
+    pub giganto: Giganto,
 }
 
 impl Producer {
-    /// # Errors
-    ///
-    /// Returns an error if file creation fails.
-    pub fn new_file(filename: &str) -> Result<Self> {
-        let output = File::create(filename)?;
-        Ok(Producer::File(output))
-    }
-
     /// # Errors
     ///
     /// Returns an error if it fails to set up Giganto.
@@ -76,21 +69,22 @@ impl Producer {
     ///  # Panics
     ///
     /// Connection error, not `TimedOut`
-    pub async fn new_giganto(addr: &str, name: &str, certs_toml: &str, kind: &str) -> Result<Self> {
-        let endpoint = match init_giganto(certs_toml) {
-            Ok(ret) => ret,
-            Err(e) => {
-                bail!("failed to create Giganto producer: {:?}", e);
-            }
-        };
-        let remote = match addr.parse::<SocketAddr>() {
-            Ok(ret) => ret,
-            Err(e) => {
-                bail!("failed to parse Giganto server: {:?}", e);
-            }
-        };
+    pub async fn new_giganto(config: &Config) -> Result<Self> {
+        let endpoint =
+            match init_giganto(&config.common.cert, &config.common.key, &config.common.root) {
+                Ok(ret) => ret,
+                Err(e) => {
+                    bail!("failed to create Giganto producer: {:?}", e);
+                }
+            };
         loop {
-            let conn = match endpoint.connect(remote, name)?.await {
+            let conn = match endpoint
+                .connect(
+                    config.common.giganto_ingest_addr,
+                    &config.common.giganto_name,
+                )?
+                .await
+            {
                 Ok(r) => r,
                 Err(quinn::ConnectionError::TimedOut) => {
                     info!("server timeout, reconnecting...");
@@ -112,54 +106,20 @@ impl Producer {
 
             tokio::spawn(async move { recv_ack(giganto_recv, finish_checker_recv).await });
 
-            return Ok(Self::Giganto(Giganto {
-                giganto_endpoint: endpoint.clone(),
-                giganto_server: remote,
-                giganto_info: GigantoInfo {
-                    name: name.to_string(),
-                    kind: kind.to_string(),
+            return Ok(Self {
+                giganto: Giganto {
+                    giganto_endpoint: endpoint.clone(),
+                    giganto_server: config.common.giganto_ingest_addr,
+                    giganto_info: GigantoInfo {
+                        name: config.common.giganto_name.clone(),
+                        kind: config.common.kind.clone(),
+                    },
+                    giganto_conn: conn,
+                    giganto_sender: giganto_send,
+                    init_msg: true,
+                    finish_checker: finish_checker_send,
                 },
-                giganto_conn: conn,
-                giganto_sender: giganto_send,
-                init_msg: true,
-                finish_checker: finish_checker_send,
-            }));
-        }
-    }
-
-    #[must_use]
-    pub fn new_null() -> Self {
-        Self::Null
-    }
-
-    #[must_use]
-    pub fn max_bytes() -> usize {
-        const DEFAULT_MAX_BYTES: usize = 100_000;
-        DEFAULT_MAX_BYTES
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if any writing operation fails.
-    pub async fn produce(&mut self, message: &[u8], flush: bool) -> Result<()> {
-        match self {
-            Producer::File(f) => {
-                f.write_all(message)?;
-                f.write_all(b"\n")?;
-                if flush {
-                    f.flush()?;
-                }
-                Ok(())
-            }
-            Producer::Giganto(giganto) => {
-                giganto
-                    .send(message)
-                    .await
-                    .context("failed to send message")?;
-
-                Ok(())
-            }
-            Producer::Null => Ok(()),
+            });
         }
     }
 
@@ -170,188 +130,394 @@ impl Producer {
     pub async fn send_raw_to_giganto(
         &mut self,
         iter: StringRecordsIntoIter<File>,
-        from: u64,
-        grow: bool,
-        migration: bool,
+        skip: u64,
+        count_sent: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
+        migration: Option<bool>,
         running: Arc<AtomicBool>,
-    ) -> Result<()> {
-        if let Producer::Giganto(giganto) = self {
-            match giganto.giganto_info.kind.as_str() {
-                "conn" => {
-                    if migration {
-                        giganto
-                            .migration::<Conn>(iter, RawEventKind::Conn, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Conn>(iter, RawEventKind::Conn, from, grow, running)
-                            .await?;
-                    }
+    ) -> Result<u64> {
+        let Some(migration) = migration else {
+            bail!("export_from_giganto parameter is required");
+        };
+        match self.giganto.giganto_info.kind.as_str() {
+            "conn" => {
+                if migration {
+                    self.giganto
+                        .migration::<Conn>(
+                            iter,
+                            RawEventKind::Conn,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Conn>(
+                            iter,
+                            RawEventKind::Conn,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
                 }
-                "http" => {
-                    if migration {
-                        giganto
-                            .migration::<Http>(iter, RawEventKind::Http, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Http>(iter, RawEventKind::Http, from, grow, running)
-                            .await?;
-                    }
-                }
-                "rdp" => {
-                    if migration {
-                        giganto
-                            .migration::<Rdp>(iter, RawEventKind::Rdp, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Rdp>(iter, RawEventKind::Rdp, from, grow, running)
-                            .await?;
-                    }
-                }
-                "smtp" => {
-                    if migration {
-                        giganto
-                            .migration::<Smtp>(iter, RawEventKind::Smtp, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Smtp>(iter, RawEventKind::Smtp, from, grow, running)
-                            .await?;
-                    }
-                }
-                "dns" => {
-                    if migration {
-                        giganto
-                            .migration::<Dns>(iter, RawEventKind::Dns, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Dns>(iter, RawEventKind::Dns, from, grow, running)
-                            .await?;
-                    }
-                }
-                "ntlm" => {
-                    if migration {
-                        giganto
-                            .migration::<Ntlm>(iter, RawEventKind::Ntlm, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Ntlm>(iter, RawEventKind::Ntlm, from, grow, running)
-                            .await?;
-                    }
-                }
-                "kerberos" => {
-                    if migration {
-                        giganto
-                            .migration::<Kerberos>(
-                                iter,
-                                RawEventKind::Kerberos,
-                                from,
-                                grow,
-                                running,
-                            )
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Kerberos>(
-                                iter,
-                                RawEventKind::Kerberos,
-                                from,
-                                grow,
-                                running,
-                            )
-                            .await?;
-                    }
-                }
-                "ssh" => {
-                    if migration {
-                        giganto
-                            .migration::<Ssh>(iter, RawEventKind::Ssh, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Ssh>(iter, RawEventKind::Ssh, from, grow, running)
-                            .await?;
-                    }
-                }
-                "dce_rpc" => {
-                    if migration {
-                        giganto
-                            .migration::<DceRpc>(iter, RawEventKind::DceRpc, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<DceRpc>(iter, RawEventKind::DceRpc, from, grow, running)
-                            .await?;
-                    }
-                }
-                "ftp" => {
-                    if migration {
-                        giganto
-                            .migration::<Ftp>(iter, RawEventKind::Ftp, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Ftp>(iter, RawEventKind::Ftp, from, grow, running)
-                            .await?;
-                    }
-                }
-                "mqtt" => {
-                    if migration {
-                        giganto
-                            .migration::<Mqtt>(iter, RawEventKind::Mqtt, from, grow, running)
-                            .await?;
-                    } else {
-                        bail!("mqtt's zeek is not supported".to_string());
-                    }
-                }
-                "ldap" => {
-                    if migration {
-                        giganto
-                            .migration::<Ldap>(iter, RawEventKind::Ldap, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Ldap>(iter, RawEventKind::Ldap, from, grow, running)
-                            .await?;
-                    }
-                }
-                "tls" => {
-                    if migration {
-                        giganto
-                            .migration::<Tls>(iter, RawEventKind::Tls, from, grow, running)
-                            .await?;
-                    } else {
-                        giganto
-                            .send_zeek::<Tls>(iter, RawEventKind::Tls, from, grow, running)
-                            .await?;
-                    }
-                }
-                "smb" => {
-                    if migration {
-                        giganto
-                            .migration::<Smb>(iter, RawEventKind::Smb, from, grow, running)
-                            .await?;
-                    } else {
-                        bail!("smb's zeek is not supported".to_string());
-                    }
-                }
-                "nfs" => {
-                    if migration {
-                        giganto
-                            .migration::<Nfs>(iter, RawEventKind::Nfs, from, grow, running)
-                            .await?;
-                    } else {
-                        bail!("nfs's zeek is not supported".to_string());
-                    }
-                }
-                _ => error!("unknown zeek/migration kind"),
             }
+            "http" => {
+                if migration {
+                    self.giganto
+                        .migration::<Http>(
+                            iter,
+                            RawEventKind::Http,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Http>(
+                            iter,
+                            RawEventKind::Http,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "rdp" => {
+                if migration {
+                    self.giganto
+                        .migration::<Rdp>(
+                            iter,
+                            RawEventKind::Rdp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Rdp>(
+                            iter,
+                            RawEventKind::Rdp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "smtp" => {
+                if migration {
+                    self.giganto
+                        .migration::<Smtp>(
+                            iter,
+                            RawEventKind::Smtp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Smtp>(
+                            iter,
+                            RawEventKind::Smtp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "dns" => {
+                if migration {
+                    self.giganto
+                        .migration::<Dns>(
+                            iter,
+                            RawEventKind::Dns,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Dns>(
+                            iter,
+                            RawEventKind::Dns,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "ntlm" => {
+                if migration {
+                    self.giganto
+                        .migration::<Ntlm>(
+                            iter,
+                            RawEventKind::Ntlm,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Ntlm>(
+                            iter,
+                            RawEventKind::Ntlm,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "kerberos" => {
+                if migration {
+                    self.giganto
+                        .migration::<Kerberos>(
+                            iter,
+                            RawEventKind::Kerberos,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Kerberos>(
+                            iter,
+                            RawEventKind::Kerberos,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "ssh" => {
+                if migration {
+                    self.giganto
+                        .migration::<Ssh>(
+                            iter,
+                            RawEventKind::Ssh,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Ssh>(
+                            iter,
+                            RawEventKind::Ssh,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "dce_rpc" => {
+                if migration {
+                    self.giganto
+                        .migration::<DceRpc>(
+                            iter,
+                            RawEventKind::DceRpc,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<DceRpc>(
+                            iter,
+                            RawEventKind::DceRpc,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "ftp" => {
+                if migration {
+                    self.giganto
+                        .migration::<Ftp>(
+                            iter,
+                            RawEventKind::Ftp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Ftp>(
+                            iter,
+                            RawEventKind::Ftp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "mqtt" => {
+                if migration {
+                    self.giganto
+                        .migration::<Mqtt>(
+                            iter,
+                            RawEventKind::Mqtt,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    bail!("mqtt's zeek is not supported".to_string());
+                }
+            }
+            "ldap" => {
+                if migration {
+                    self.giganto
+                        .migration::<Ldap>(
+                            iter,
+                            RawEventKind::Ldap,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Ldap>(
+                            iter,
+                            RawEventKind::Ldap,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "tls" => {
+                if migration {
+                    self.giganto
+                        .migration::<Tls>(
+                            iter,
+                            RawEventKind::Tls,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_zeek::<Tls>(
+                            iter,
+                            RawEventKind::Tls,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                }
+            }
+            "smb" => {
+                if migration {
+                    self.giganto
+                        .migration::<Smb>(
+                            iter,
+                            RawEventKind::Smb,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    bail!("smb's zeek is not supported".to_string());
+                }
+            }
+            "nfs" => {
+                if migration {
+                    self.giganto
+                        .migration::<Nfs>(
+                            iter,
+                            RawEventKind::Nfs,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    bail!("nfs's zeek is not supported".to_string());
+                }
+            }
+            _ => bail!("unknown zeek/migration kind"),
         }
-        Ok(())
     }
 
     /// # Errors
@@ -361,18 +527,23 @@ impl Producer {
         &mut self,
         reader: BufReader<File>,
         agent: &str,
-        grow: bool,
-        from: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
+        skip: u64,
+        count_sent: u64,
         running: Arc<AtomicBool>,
-    ) -> Result<()> {
-        if let Producer::Giganto(giganto) = self {
-            if giganto.giganto_info.kind.as_str() == "oplog" {
-                giganto
-                    .send_oplog(reader, agent, grow, from, running)
-                    .await?;
-            }
-        }
-        Ok(())
+    ) -> Result<u64> {
+        self.giganto
+            .send_oplog(
+                reader,
+                agent,
+                file_polling_mode,
+                dir_polling_mode,
+                skip,
+                count_sent,
+                running,
+            )
+            .await
     }
 
     /// # Errors
@@ -382,165 +553,198 @@ impl Producer {
     pub async fn send_sysmon_to_giganto(
         &mut self,
         iter: StringRecordsIntoIter<File>,
-        from: u64,
-        grow: bool,
+        skip: u64,
+        count_sent: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
         kind: &str,
         running: Arc<AtomicBool>,
-    ) -> Result<()> {
-        if let Producer::Giganto(giganto) = self {
-            match kind {
-                "process_create" => {
-                    giganto
-                        .send_sysmon::<ProcessCreate>(
-                            iter,
-                            RawEventKind::ProcessCreate,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "file_create_time" => {
-                    giganto
-                        .send_sysmon::<FileCreationTimeChanged>(
-                            iter,
-                            RawEventKind::FileCreateTime,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "network_connect" => {
-                    giganto
-                        .send_sysmon::<NetworkConnection>(
-                            iter,
-                            RawEventKind::NetworkConnect,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "process_terminate" => {
-                    giganto
-                        .send_sysmon::<ProcessTerminated>(
-                            iter,
-                            RawEventKind::ProcessTerminate,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "image_load" => {
-                    giganto
-                        .send_sysmon::<ImageLoaded>(
-                            iter,
-                            RawEventKind::ImageLoad,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "file_create" => {
-                    giganto
-                        .send_sysmon::<FileCreate>(
-                            iter,
-                            RawEventKind::FileCreate,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "registry_value_set" => {
-                    giganto
-                        .send_sysmon::<RegistryValueSet>(
-                            iter,
-                            RawEventKind::RegistryValueSet,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "registry_key_rename" => {
-                    giganto
-                        .send_sysmon::<RegistryKeyValueRename>(
-                            iter,
-                            RawEventKind::RegistryKeyRename,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "file_create_stream_hash" => {
-                    giganto
-                        .send_sysmon::<FileCreateStreamHash>(
-                            iter,
-                            RawEventKind::FileCreateStreamHash,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "pipe_event" => {
-                    giganto
-                        .send_sysmon::<PipeEvent>(
-                            iter,
-                            RawEventKind::PipeEvent,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "dns_query" => {
-                    giganto
-                        .send_sysmon::<DnsEvent>(iter, RawEventKind::DnsQuery, from, grow, running)
-                        .await?;
-                }
-                "file_delete" => {
-                    giganto
-                        .send_sysmon::<FileDelete>(
-                            iter,
-                            RawEventKind::FileDelete,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "process_tamper" => {
-                    giganto
-                        .send_sysmon::<ProcessTampering>(
-                            iter,
-                            RawEventKind::ProcessTamper,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                "file_delete_detected" => {
-                    giganto
-                        .send_sysmon::<FileDeleteDetected>(
-                            iter,
-                            RawEventKind::FileDeleteDetected,
-                            from,
-                            grow,
-                            running,
-                        )
-                        .await?;
-                }
-                _ => error!("unknown sysmon kind"),
+    ) -> Result<u64> {
+        match kind {
+            "process_create" => {
+                self.giganto
+                    .send_sysmon::<ProcessCreate>(
+                        iter,
+                        RawEventKind::ProcessCreate,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
             }
+            "file_create_time" => {
+                self.giganto
+                    .send_sysmon::<FileCreationTimeChanged>(
+                        iter,
+                        RawEventKind::FileCreateTime,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "network_connect" => {
+                self.giganto
+                    .send_sysmon::<NetworkConnection>(
+                        iter,
+                        RawEventKind::NetworkConnect,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "process_terminate" => {
+                self.giganto
+                    .send_sysmon::<ProcessTerminated>(
+                        iter,
+                        RawEventKind::ProcessTerminate,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "image_load" => {
+                self.giganto
+                    .send_sysmon::<ImageLoaded>(
+                        iter,
+                        RawEventKind::ImageLoad,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "file_create" => {
+                self.giganto
+                    .send_sysmon::<FileCreate>(
+                        iter,
+                        RawEventKind::FileCreate,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "registry_value_set" => {
+                self.giganto
+                    .send_sysmon::<RegistryValueSet>(
+                        iter,
+                        RawEventKind::RegistryValueSet,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "registry_key_rename" => {
+                self.giganto
+                    .send_sysmon::<RegistryKeyValueRename>(
+                        iter,
+                        RawEventKind::RegistryKeyRename,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "file_create_stream_hash" => {
+                self.giganto
+                    .send_sysmon::<FileCreateStreamHash>(
+                        iter,
+                        RawEventKind::FileCreateStreamHash,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "pipe_event" => {
+                self.giganto
+                    .send_sysmon::<PipeEvent>(
+                        iter,
+                        RawEventKind::PipeEvent,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "dns_query" => {
+                self.giganto
+                    .send_sysmon::<DnsEvent>(
+                        iter,
+                        RawEventKind::DnsQuery,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "file_delete" => {
+                self.giganto
+                    .send_sysmon::<FileDelete>(
+                        iter,
+                        RawEventKind::FileDelete,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "process_tamper" => {
+                self.giganto
+                    .send_sysmon::<ProcessTampering>(
+                        iter,
+                        RawEventKind::ProcessTamper,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            "file_delete_detected" => {
+                self.giganto
+                    .send_sysmon::<FileDeleteDetected>(
+                        iter,
+                        RawEventKind::FileDeleteDetected,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                    )
+                    .await
+            }
+            _ => bail!("unknown sysmon kind"),
         }
-        Ok(())
     }
 
     /// # Errors
@@ -549,25 +753,35 @@ impl Producer {
     pub async fn send_netflow_to_giganto(
         &mut self,
         filename: &Path,
-        from: u64,
+        skip: u64,
+        count_sent: u64,
         running: Arc<AtomicBool>,
-    ) -> Result<()> {
-        if let Producer::Giganto(giganto) = self {
-            match giganto.giganto_info.kind.as_str() {
-                "netflow5" => {
-                    giganto
-                        .send_netflow::<Netflow5>(RawEventKind::Netflow5, filename, from, running)
-                        .await?;
-                }
-                "netflow9" => {
-                    giganto
-                        .send_netflow::<Netflow9>(RawEventKind::Netflow9, filename, from, running)
-                        .await?;
-                }
-                _ => error!("unknown netflow version"),
+    ) -> Result<u64> {
+        match self.giganto.giganto_info.kind.as_str() {
+            "netflow5" => {
+                self.giganto
+                    .send_netflow::<Netflow5>(
+                        RawEventKind::Netflow5,
+                        filename,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
             }
+            "netflow9" => {
+                self.giganto
+                    .send_netflow::<Netflow9>(
+                        RawEventKind::Netflow9,
+                        filename,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            _ => bail!("unknown netflow version"),
         }
-        Ok(())
     }
 
     /// # Errors
@@ -577,94 +791,198 @@ impl Producer {
     pub async fn send_seculog_to_giganto(
         &mut self,
         reader: BufReader<File>,
-        grow: bool,
-        from: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
+        skip: u64,
+        count_sent: u64,
         running: Arc<AtomicBool>,
-    ) -> Result<()> {
-        if let Producer::Giganto(giganto) = self {
-            match giganto.giganto_info.kind.as_str() {
-                "wapples_fw_6.0" => {
-                    giganto
-                        .send_seculog::<Wapples>(reader, grow, from, running)
-                        .await?;
-                }
-                "mf2_ips_4.0" => {
-                    giganto
-                        .send_seculog::<Mf2>(reader, grow, from, running)
-                        .await?;
-                }
-                "sniper_ips_8.0" => {
-                    giganto
-                        .send_seculog::<SniperIps>(reader, grow, from, running)
-                        .await?;
-                }
-                "aiwaf_waf_4.1" => {
-                    giganto
-                        .send_seculog::<Aiwaf>(reader, grow, from, running)
-                        .await?;
-                }
-                "tg_ips_2.7" => {
-                    giganto
-                        .send_seculog::<Tg>(reader, grow, from, running)
-                        .await?;
-                }
-                "vforce_ips_4.6" => {
-                    giganto
-                        .send_seculog::<Vforce>(reader, grow, from, running)
-                        .await?;
-                }
-                "srx_ips_15.1" => {
-                    giganto
-                        .send_seculog::<Srx>(reader, grow, from, running)
-                        .await?;
-                }
-                "sonicwall_fw_6.5" => {
-                    giganto
-                        .send_seculog::<SonicWall>(reader, grow, from, running)
-                        .await?;
-                }
-                "fgt_ips_6.2" => {
-                    giganto
-                        .send_seculog::<Fgt>(reader, grow, from, running)
-                        .await?;
-                }
-                "shadowwall_ips_5.0" => {
-                    giganto
-                        .send_seculog::<ShadowWall>(reader, grow, from, running)
-                        .await?;
-                }
-                "axgate_fw_2.1" => {
-                    giganto
-                        .send_seculog::<Axgate>(reader, grow, from, running)
-                        .await?;
-                }
-                "ubuntu_syslog_20.04" => {
-                    giganto
-                        .send_seculog::<Ubuntu>(reader, grow, from, running)
-                        .await?;
-                }
-                "nginx_accesslog_1.25.2" => {
-                    giganto
-                        .send_seculog::<Nginx>(reader, grow, from, running)
-                        .await?;
-                }
-                _ => error!("invalid security log kind"),
+    ) -> Result<u64> {
+        match self.giganto.giganto_info.kind.as_str() {
+            "wapples_fw_6.0" => {
+                self.giganto
+                    .send_seculog::<Wapples>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
             }
+            "mf2_ips_4.0" => {
+                self.giganto
+                    .send_seculog::<Mf2>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "sniper_ips_8.0" => {
+                self.giganto
+                    .send_seculog::<SniperIps>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "aiwaf_waf_4.1" => {
+                self.giganto
+                    .send_seculog::<Aiwaf>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "tg_ips_2.7" => {
+                self.giganto
+                    .send_seculog::<Tg>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "vforce_ips_4.6" => {
+                self.giganto
+                    .send_seculog::<Vforce>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "srx_ips_15.1" => {
+                self.giganto
+                    .send_seculog::<Srx>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "sonicwall_fw_6.5" => {
+                self.giganto
+                    .send_seculog::<SonicWall>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "fgt_ips_6.2" => {
+                self.giganto
+                    .send_seculog::<Fgt>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "shadowwall_ips_5.0" => {
+                self.giganto
+                    .send_seculog::<ShadowWall>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "axgate_fw_2.1" => {
+                self.giganto
+                    .send_seculog::<Axgate>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "ubuntu_syslog_20.04" => {
+                self.giganto
+                    .send_seculog::<Ubuntu>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            "nginx_accesslog_1.25.2" => {
+                self.giganto
+                    .send_seculog::<Nginx>(
+                        reader,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        skip,
+                        count_sent,
+                        running,
+                    )
+                    .await
+            }
+            _ => bail!("invalid security log kind"),
         }
-        Ok(())
     }
-}
 
-#[derive(Deserialize, Debug)]
-struct Config {
-    certification: Certification,
-}
-
-#[derive(Deserialize, Debug)]
-struct Certification {
-    cert: String,
-    key: String,
-    roots: Vec<String>,
+    /// # Errors
+    ///
+    /// Returns an error if any writing log fails.
+    pub async fn send_log_to_giganto(
+        &mut self,
+        file_name: &Path,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
+        skip: u64,
+        count_sent: u64,
+        report: &mut Report,
+        running: Arc<AtomicBool>,
+    ) -> Result<u64> {
+        self.giganto
+            .send_log(
+                file_name,
+                file_polling_mode,
+                dir_polling_mode,
+                skip,
+                count_sent,
+                report,
+                running,
+            )
+            .await
+    }
 }
 
 #[derive(Debug)]
@@ -689,22 +1007,24 @@ impl Giganto {
         &mut self,
         mut zeek_iter: StringRecordsIntoIter<File>,
         protocol: RawEventKind,
-        from: u64,
-        grow: bool,
+        skip: u64,
+        count_sent: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
         running: Arc<AtomicBool>,
-    ) -> Result<()>
+    ) -> Result<u64>
     where
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
     {
         info!("send zeek");
-        let mut success_cnt = 0u32;
-        let mut failed_cnt = 0u32;
+        let mut success_cnt = 0u64;
+        let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         while running.load(Ordering::SeqCst) {
             let next_pos = zeek_iter.reader().position().clone();
             if let Some(result) = zeek_iter.next() {
-                if next_pos.line() < from {
+                if next_pos.line() <= skip {
                     continue;
                 }
                 match result {
@@ -742,8 +1062,12 @@ impl Giganto {
                         error!("invalid record: {e}");
                     }
                 }
+                pos = next_pos;
+                if count_sent != 0 && success_cnt >= count_sent {
+                    break;
+                }
             } else {
-                if grow {
+                if file_polling_mode && !dir_polling_mode {
                     tokio::time::sleep(Duration::from_millis(3_000)).await;
                     zeek_iter.reader_mut().seek(pos.clone())?;
                     zeek_iter = zeek_iter.into_reader().into_records();
@@ -751,7 +1075,6 @@ impl Giganto {
                 }
                 break;
             }
-            pos = next_pos;
         }
 
         info!(
@@ -761,29 +1084,31 @@ impl Giganto {
             failed_cnt
         );
 
-        Ok(())
+        Ok(pos.line())
     }
 
     async fn migration<T>(
         &mut self,
         mut giganto_iter: StringRecordsIntoIter<File>,
         protocol: RawEventKind,
-        from: u64,
-        grow: bool,
+        skip: u64,
+        count_sent: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
         running: Arc<AtomicBool>,
-    ) -> Result<()>
+    ) -> Result<u64>
     where
         T: Serialize + TryFromGigantoRecord + Unpin + Debug,
     {
         info!("migration");
-        let mut success_cnt = 0u32;
-        let mut failed_cnt = 0u32;
+        let mut success_cnt = 0u64;
+        let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         while running.load(Ordering::SeqCst) {
             let next_pos = giganto_iter.reader().position().clone();
             if let Some(result) = giganto_iter.next() {
-                if next_pos.line() < from {
+                if next_pos.line() <= skip {
                     continue;
                 }
                 match result {
@@ -821,8 +1146,12 @@ impl Giganto {
                         error!("invalid record: {e}");
                     }
                 }
+                pos = next_pos;
+                if count_sent != 0 && success_cnt >= count_sent {
+                    break;
+                }
             } else {
-                if grow {
+                if file_polling_mode && !dir_polling_mode {
                     tokio::time::sleep(Duration::from_millis(3_000)).await;
                     giganto_iter.reader_mut().seek(pos.clone())?;
                     giganto_iter = giganto_iter.into_reader().into_records();
@@ -830,7 +1159,6 @@ impl Giganto {
                 }
                 break;
             }
-            pos = next_pos;
         }
 
         info!(
@@ -839,27 +1167,28 @@ impl Giganto {
             success_cnt,
             failed_cnt
         );
-
-        Ok(())
+        Ok(pos.line())
     }
 
     async fn send_oplog(
         &mut self,
         reader: BufReader<File>,
         agent: &str,
-        grow: bool,
-        from: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
+        skip: u64,
+        count_sent: u64,
         running: Arc<AtomicBool>,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         info!("send oplog");
         let mut lines = reader.lines();
         let mut cnt = 0;
-        let mut success_cnt = 0u32;
-        let mut failed_cnt = 0u32;
+        let mut success_cnt = 0u64;
+        let mut failed_cnt = 0u64;
         while running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = lines.next() {
                 cnt += 1;
-                if cnt < from {
+                if cnt <= skip {
                     continue;
                 }
                 let (oplog_data, timestamp) = if let Ok(r) = operation_log::log_regex(&line, agent)
@@ -885,8 +1214,11 @@ impl Giganto {
                     }
                     Ok(()) => {}
                 }
+                if count_sent != 0 && success_cnt >= count_sent {
+                    break;
+                }
             } else {
-                if grow {
+                if file_polling_mode && !dir_polling_mode {
                     tokio::time::sleep(Duration::from_millis(3_000)).await;
                     continue;
                 }
@@ -898,30 +1230,32 @@ impl Giganto {
             cnt, success_cnt, failed_cnt
         );
 
-        Ok(())
+        Ok(cnt)
     }
 
     async fn send_sysmon<T>(
         &mut self,
         mut sysmon_iter: StringRecordsIntoIter<File>,
         protocol: RawEventKind,
-        from: u64,
-        grow: bool,
+        skip: u64,
+        count_sent: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
         running: Arc<AtomicBool>,
-    ) -> Result<()>
+    ) -> Result<u64>
     where
         T: Serialize + TryFromSysmonRecord + Unpin + Debug,
     {
         info!("send sysmon, {protocol:?}");
-        let mut success_cnt = 0u32;
-        let mut failed_cnt = 0u32;
+        let mut success_cnt = 0u64;
+        let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         let mut time_serial = 0_i64;
         while running.load(Ordering::SeqCst) {
             let next_pos = sysmon_iter.reader().position().clone();
             if let Some(result) = sysmon_iter.next() {
-                if next_pos.line() < from {
+                if next_pos.line() <= skip {
                     continue;
                 }
                 match result {
@@ -963,8 +1297,12 @@ impl Giganto {
                         error!("invalid record: {e}");
                     }
                 }
+                pos = next_pos;
+                if count_sent != 0 && success_cnt >= count_sent {
+                    break;
+                }
             } else {
-                if grow {
+                if file_polling_mode && !dir_polling_mode {
                     tokio::time::sleep(Duration::from_millis(3_000)).await;
                     sysmon_iter.reader_mut().seek(pos.clone())?;
                     sysmon_iter = sysmon_iter.into_reader().into_records();
@@ -972,7 +1310,6 @@ impl Giganto {
                 }
                 break;
             }
-            pos = next_pos;
         }
 
         self.init_msg = true;
@@ -983,16 +1320,17 @@ impl Giganto {
             failed_cnt
         );
 
-        Ok(())
+        Ok(pos.line())
     }
 
     async fn send_netflow<T>(
         &mut self,
         protocol: RawEventKind,
         filename: &Path,
-        from: u64,
+        skip: u64,
+        count_sent: u64,
         running: Arc<AtomicBool>,
-    ) -> Result<()>
+    ) -> Result<u64>
     where
         T: Serialize + ParseNetflowDatasets + Unpin + Debug,
     {
@@ -1019,7 +1357,7 @@ impl Giganto {
 
         while let Ok(pkt) = handle.next_packet() {
             pkt_cnt += 1;
-            if from > pkt_cnt {
+            if skip >= pkt_cnt {
                 continue;
             }
 
@@ -1070,6 +1408,10 @@ impl Giganto {
                 }
             }
 
+            if count_sent != 0 && pkt_cnt >= count_sent {
+                break;
+            }
+
             if !running.load(Ordering::SeqCst) {
                 break;
             }
@@ -1086,24 +1428,26 @@ impl Giganto {
                 }
             }
         }
-        Ok(())
+        Ok(pkt_cnt)
     }
 
     async fn send_seculog<T>(
         &mut self,
         reader: BufReader<File>,
-        grow: bool,
-        from: u64,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
+        skip: u64,
+        count_sent: u64,
         running: Arc<AtomicBool>,
-    ) -> Result<()>
+    ) -> Result<u64>
     where
         T: Serialize + ParseSecurityLog + Unpin + Debug,
     {
         info!("send seculog");
         let mut lines = reader.lines();
         let mut cnt = 0;
-        let mut success_cnt = 0u32;
-        let mut failed_cnt = 0u32;
+        let mut success_cnt = 0u64;
+        let mut failed_cnt = 0u64;
         let mut time_serial = 0_i64;
         while running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = lines.next() {
@@ -1112,7 +1456,7 @@ impl Giganto {
                 if time_serial > 999 {
                     time_serial = 1;
                 }
-                if cnt < from {
+                if cnt <= skip {
                     continue;
                 }
                 let (seculog_data, timestamp) = if let Ok(r) = T::parse_security_log(
@@ -1141,8 +1485,12 @@ impl Giganto {
                     }
                     Ok(()) => {}
                 }
+
+                if count_sent != 0 && success_cnt >= count_sent {
+                    break;
+                }
             } else {
-                if grow {
+                if file_polling_mode && !dir_polling_mode {
                     tokio::time::sleep(Duration::from_millis(3_000)).await;
                     continue;
                 }
@@ -1154,7 +1502,60 @@ impl Giganto {
             cnt, success_cnt, failed_cnt
         );
 
-        Ok(())
+        Ok(cnt)
+    }
+
+    async fn send_log(
+        &mut self,
+        file_name: &Path,
+        file_polling_mode: bool,
+        dir_polling_mode: bool,
+        skip: u64,
+        count_sent: u64,
+        report: &mut Report,
+        running: Arc<AtomicBool>,
+    ) -> Result<u64> {
+        let log_file = open_log(file_name).map_err(|e| anyhow!("failed to open: {}", e))?;
+        let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(usize::try_from(skip)?);
+        let mut giganto_msg: Vec<u8> = Vec::new();
+        let mut conv_cnt = 0;
+        report.start();
+        while running.load(Ordering::SeqCst) {
+            let line = match lines.next() {
+                Some(Ok(line)) => {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    line
+                }
+                Some(Err(e)) => {
+                    error!("failed to convert input data: {e}");
+                    break;
+                }
+                None => {
+                    if file_polling_mode && !dir_polling_mode {
+                        tokio::time::sleep(Duration::from_millis(3_000)).await;
+                        continue;
+                    }
+                    break;
+                }
+            };
+
+            giganto_msg.extend(&line);
+            self.send(giganto_msg.as_slice())
+                .await
+                .context("failed to to send message to Giganto")?;
+            giganto_msg.clear();
+            conv_cnt += 1;
+            report.process(line.len());
+            if count_sent != 0 && conv_cnt >= count_sent {
+                break;
+            }
+        }
+        if let Err(e) = report.end() {
+            warn!("cannot write report: {e}");
+        }
+        Ok(conv_cnt + skip)
     }
 
     async fn send(&mut self, msg: &[u8]) -> Result<()> {
@@ -1272,42 +1673,24 @@ impl Giganto {
     }
 }
 
-fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
-    let mut cfg_str = String::new();
-    if let Err(e) =
-        File::open(Path::new(certs_toml)).and_then(|mut f| f.read_to_string(&mut cfg_str))
-    {
-        bail!("failed to open cert file{:?}", e);
-    }
-    let config = match toml::from_str::<Config>(&cfg_str) {
-        Ok(r) => r,
-        Err(e) => {
-            bail!("failed to parse config file. {:?}", e);
-        }
-    };
-
-    let Ok((cert, key)) = fs::read(&config.certification.cert)
-        .and_then(|x| Ok((x, fs::read(&config.certification.key)?)))
-    else {
+fn init_giganto(cert: &str, key: &str, root: &str) -> Result<Endpoint> {
+    let Ok((cert_pem, key_pem)) = fs::read(cert).and_then(|x| Ok((x, fs::read(key)?))) else {
         bail!(
             "failed to read (cert, key) file. cert_path:{}, key_path:{}",
-            &config.certification.cert,
-            &config.certification.key
+            cert,
+            key
         );
     };
 
-    let pv_key = if Path::new(&config.certification.key)
-        .extension()
-        .map_or(false, |x| x == "der")
-    {
-        rustls::PrivateKey(key)
+    let pv_key = if Path::new(key).extension().map_or(false, |x| x == "der") {
+        rustls::PrivateKey(key_pem)
     } else {
-        let pkcs8 =
-            rustls_pemfile::pkcs8_private_keys(&mut &*key).expect("malformed PKCS #8 private key");
+        let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key_pem)
+            .expect("malformed PKCS #8 private key");
         if let Some(key) = pkcs8.into_iter().next() {
             rustls::PrivateKey(key)
         } else {
-            let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
+            let rsa = rustls_pemfile::rsa_private_keys(&mut &*key_pem)
                 .expect("malformed PKCS #1 private key");
             match rsa.into_iter().next() {
                 Some(x) => rustls::PrivateKey(x),
@@ -1318,13 +1701,10 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
         }
     };
 
-    let cert_chain = if Path::new(&config.certification.cert)
-        .extension()
-        .map_or(false, |x| x == "der")
-    {
-        vec![rustls::Certificate(cert)]
+    let cert_chain = if Path::new(&cert).extension().map_or(false, |x| x == "der") {
+        vec![rustls::Certificate(cert_pem)]
     } else {
-        rustls_pemfile::certs(&mut &*cert)
+        rustls_pemfile::certs(&mut &*cert_pem)
             .expect("invalid PEM-encoded certificate")
             .into_iter()
             .map(rustls::Certificate)
@@ -1332,16 +1712,14 @@ fn init_giganto(certs_toml: &str) -> Result<Endpoint> {
     };
 
     let mut server_root = rustls::RootCertStore::empty();
-    for root in config.certification.roots {
-        let file = fs::read(root).expect("failed to read file");
-        let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-            .expect("invalid PEM-encoded certificate")
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
-        if let Some(cert) = root_cert.first() {
-            server_root.add(cert).expect("failed to add cert");
-        }
+    let file = fs::read(root).expect("failed to read file");
+    let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
+        .expect("invalid PEM-encoded certificate")
+        .into_iter()
+        .map(rustls::Certificate)
+        .collect();
+    if let Some(cert) = root_cert.first() {
+        server_root.add(cert).expect("failed to add cert");
     }
 
     let client_crypto = rustls::ClientConfig::builder()
@@ -1385,13 +1763,41 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Producer;
+fn open_log<P: AsRef<Path>>(input: P) -> Result<File> {
+    let log_file = File::open(input.as_ref())?;
+    info!("input={:?}, input type=LOG", input.as_ref());
 
-    #[tokio::test]
-    async fn null() {
-        let mut producer = Producer::new_null();
-        assert!(producer.produce(b"A message", true).await.is_ok());
+    Ok(log_file)
+}
+
+struct BinaryLines<B> {
+    buf: B,
+}
+
+impl<B> BinaryLines<B> {
+    /// Returns an iterator for binary strings separated by '\n'.
+    fn new(buf: B) -> Self {
+        Self { buf }
+    }
+}
+
+impl<B: BufRead> Iterator for BinaryLines<B> {
+    type Item = Result<Vec<u8>, std::io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = Vec::new();
+        match self.buf.read_until(b'\n', &mut buf) {
+            Ok(0) => None,
+            Ok(_n) => {
+                if matches!(buf.last(), Some(b'\n')) {
+                    buf.pop();
+                    if matches!(buf.last(), Some(b'\r')) {
+                        buf.pop();
+                    }
+                }
+                Some(Ok(buf))
+            }
+            Err(e) => Some(Err(e)),
+        }
     }
 }

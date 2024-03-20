@@ -5,6 +5,19 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Change to read all command line parameters in config toml file.
+  - Removes the option to start from a specific line (`-f`), since skip
+    lines also allow sending from a specific line.
+  - Modify the skip count/send count/last sent line options(`-s`/`-c`/`-r`),
+    which only worked with logs, to work with all conditions.
+  - Modify it so that folder polling is applied first.
+  - Remove the option for output type.(`-o`) The associated functionality
+    is now deprecated.
+
 ## [0.18.0] - 2024-01-25
 
 ### Added
@@ -290,6 +303,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.18.0...main
 [0.18.0]: https://github.com/aicers/reproduce/compare/0.17.5...0.18.0
 [0.17.5]: https://github.com/aicers/reproduce/compare/0.17.4...0.17.5
 [0.17.4]: https://github.com/aicers/reproduce/compare/0.17.3...0.17.4

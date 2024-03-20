@@ -24,7 +24,8 @@ use self::{
     registry_key_rename::ElasticRegistryKeyValueRename,
     registry_value_set::ElasticRegistryValueSet,
 };
-use anyhow::{anyhow, bail, Result};
+use crate::config::ElasticSearch;
+use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
@@ -33,62 +34,33 @@ use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     fs::{self, File},
-    io::{self, Read},
+    io::{self},
     path::Path,
 };
 use tracing::{error, info};
 
-#[derive(Deserialize, Debug)]
-struct Config {
-    elasticsearch: ElasticSearch,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-struct ElasticSearch {
-    url: String,
-    event_codes: Vec<String>,
-    indices: Vec<String>,
-    start_time: String,
-    end_time: String,
-    size: usize,
-    dump_dir: String,
-}
-
 #[allow(clippy::unused_async)]
-pub async fn fetch_elastic_search(auth: &str, config_toml: &str) -> Result<String> {
-    let mut cfg_str = String::new();
+pub async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {
     let now = Utc::now();
     let exec_time = format!("{}", now.format("%F %T"));
 
-    if let Err(e) =
-        File::open(Path::new(config_toml)).and_then(|mut f| f.read_to_string(&mut cfg_str))
-    {
-        bail!("failed to open config file. {:?}", e);
-    }
-    let config = match toml::from_str::<Config>(&cfg_str) {
-        Ok(r) => r,
-        Err(e) => {
-            bail!("failed to parse config file. {:?}", e);
-        }
-    };
-    let size = config.elasticsearch.size;
-    let event_codes = config
-        .elasticsearch
+    let size = elasticsearch.size;
+    let event_codes = elasticsearch
         .event_codes
         .iter()
         .map(std::string::String::as_str)
         .collect::<Vec<&str>>();
-    let dump_dir = format!("{}/{exec_time}", config.elasticsearch.dump_dir);
+    let dump_dir = format!("{}/{exec_time}", elasticsearch.dump_dir);
     fs::create_dir_all(&dump_dir)?;
 
     event_codes.par_iter().for_each(|&event_code| {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-            match fetch_data_from_es(event_code, auth, config.elasticsearch.clone()).await {
+            match fetch_data_from_es(event_code, elasticsearch).await {
                 Ok(data_vec) => {
                     let file_name = format!("{dump_dir}/event{event_code}_log.csv",);
                     info!("Event {event_code}");
@@ -138,13 +110,9 @@ pub async fn fetch_elastic_search(auth: &str, config_toml: &str) -> Result<Strin
 }
 
 /// Query multiple index with `event_code`
-async fn fetch_data_from_es(
-    event_code: &str,
-    auth: &str,
-    config: ElasticSearch,
-) -> Result<Vec<Value>> {
+async fn fetch_data_from_es(event_code: &str, config: &ElasticSearch) -> Result<Vec<Value>> {
     let mut last_ts = 0_u64;
-    let client = build_elastic_client(auth)?;
+    let client = build_elastic_client(&config.elastic_auth)?;
     let mut all_results = Vec::new();
     for index in &config.indices {
         info!("Index: {index}");

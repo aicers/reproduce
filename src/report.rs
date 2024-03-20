@@ -1,4 +1,5 @@
-use crate::{Config, InputType, OutputType};
+use crate::controller::input_type;
+use crate::{Config, InputType};
 use bytesize::ByteSize;
 use chrono::{DateTime, Duration, Utc};
 use std::fs::OpenOptions;
@@ -38,7 +39,7 @@ impl Report {
     }
 
     pub fn start(&mut self) {
-        if !self.config.mode_eval {
+        if !self.config.common.report {
             return;
         }
 
@@ -46,7 +47,7 @@ impl Report {
     }
 
     pub fn process(&mut self, bytes: usize) {
-        if !self.config.mode_eval {
+        if !self.config.common.report {
             return;
         }
 
@@ -60,7 +61,7 @@ impl Report {
     }
 
     pub fn skip(&mut self, bytes: usize) {
-        if !self.config.mode_eval {
+        if !self.config.common.report {
             return;
         }
         self.skip_bytes += bytes;
@@ -74,12 +75,12 @@ impl Report {
     pub fn end(&mut self) -> io::Result<()> {
         const ARRANGE_VAR: usize = 28;
 
-        if !self.config.mode_eval {
+        if !self.config.common.report {
             return Ok(());
         }
 
         let report_dir = Path::new("/report");
-        let topic = &&self.config.giganto_kind;
+        let topic = &&self.config.common.kind;
         let report_path = if report_dir.is_dir() {
             report_dir.join(topic)
         } else {
@@ -105,8 +106,8 @@ impl Report {
             self.time_now,
             width = ARRANGE_VAR,
         ))?;
-        let input_type = self.config.input_type;
-        let input = &&self.config.input;
+        let input_type = input_type(&self.config.common.input);
+        let input = &&self.config.common.input;
         let (header, processed_bytes) = match input_type {
             InputType::Log => {
                 // add 1 byte newline character per line
@@ -123,30 +124,7 @@ impl Report {
             width = ARRANGE_VAR,
         ))?;
 
-        let output_type = self.config.output_type;
-        match output_type {
-            OutputType::None => {
-                report_file.write_all(b"Output(NONE):\n")?;
-            }
-            OutputType::File => {
-                let output = &&self.config.output;
-                let size = if let Ok(meta) = Path::new(input).metadata() {
-                    ByteSize(meta.len()).to_string()
-                } else {
-                    "invalid".to_string()
-                };
-                report_file.write_fmt(format_args!(
-                    "{:width$}{} ({})\n",
-                    "Output(FILE):",
-                    output,
-                    size,
-                    width = ARRANGE_VAR,
-                ))?;
-            }
-            OutputType::Giganto => {
-                report_file.write_all(b"Output(Giganto):\n")?;
-            }
-        }
+        report_file.write_all(b"Output(Giganto):\n")?;
         report_file.write_fmt(format_args!(
             "{:width$}{}/{}/{:.2} bytes\n",
             "Statistics (Min/Max/Avg):",
