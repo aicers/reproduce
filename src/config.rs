@@ -1,32 +1,10 @@
-use std::fmt;
+use anyhow::{Context, Result};
+use serde::{de::Error, Deserialize, Deserializer};
+use std::{net::SocketAddr, path::Path};
 
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Clone)]
-pub struct Config {
-    // user
-    pub mode_eval: bool,        // report statistics
-    pub mode_grow: bool,        // convert while tracking the growing file
-    pub mode_polling_dir: bool, // polling the input directory
-    pub count_skip: usize,      // count to skip
-    pub input: String,          // input: packet/log/elastic/none
-    pub output: String,         // output: giganto/file/none
-    pub offset_prefix: String,  // prefix of offset file to read from and write to
-    pub file_prefix: String,    // file name prefix when sending multiple files or a directory
-    pub config_toml: String,
-    pub giganto_name: String,
-    pub giganto_addr: String,
-    pub giganto_kind: String,
-    pub send_from: u64,
-    pub migration: bool,
-
-    // elastic_search
-    pub elastic_auth: String,
-
-    // internal
-    pub count_sent: usize,
-    pub input_type: InputType,
-    pub output_type: OutputType,
-}
+const DEFAULT_REPORT_MODE: bool = false;
+const DEFAULT_POLLING_MODE: bool = false;
+const DEFAULT_EXPORT_FROM_GIGANTO: bool = false;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputType {
@@ -35,56 +13,90 @@ pub enum InputType {
     Elastic,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutputType {
-    None,
-    File,
-    Giganto,
+#[derive(Deserialize, Debug, Clone)]
+#[allow(unused)]
+pub struct Common {
+    pub cert: String,
+    pub key: String,
+    pub root: String,
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub giganto_ingest_addr: SocketAddr,
+    pub giganto_name: String,
+    pub kind: String,
+    pub input: String,
+    pub report: bool,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            mode_eval: false,
-            mode_grow: false,
-            mode_polling_dir: false,
-            count_skip: 0,
-            input: String::new(),
-            output: String::new(),
-            offset_prefix: String::new(),
-            file_prefix: String::new(),
-            count_sent: 0,
-            input_type: InputType::Log,
-            output_type: OutputType::None,
-            config_toml: String::new(),
-            giganto_name: String::new(),
-            giganto_addr: String::new(),
-            giganto_kind: String::new(),
-            send_from: 1,
-            migration: false,
-            elastic_auth: String::new(),
-        }
+#[derive(Deserialize, Debug, Clone)]
+pub struct File {
+    pub export_from_giganto: Option<bool>,
+    pub polling_mode: bool,
+    pub transfer_count: Option<u64>,
+    pub transfer_skip_count: Option<u64>,
+    pub last_transfer_line_suffix: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Directory {
+    pub file_prefix: Option<String>,
+    pub polling_mode: bool,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ElasticSearch {
+    pub url: String,
+    pub event_codes: Vec<String>,
+    pub indices: Vec<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub size: usize,
+    pub dump_dir: String,
+    pub elastic_auth: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Config {
+    pub common: Common,
+    pub file: Option<File>,
+    pub directory: Option<Directory>,
+    pub elastic: Option<ElasticSearch>,
+}
+
+impl Config {
+    /// Creates a new `Config` instance from a configuration file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if it fails to parse the configuration file correctly or it runs out of parameters.
+    pub fn new(path: &Path) -> Result<Self> {
+        let config = config::Config::builder()
+            .set_default("common.kind", String::new())
+            .context("cannot set the default kind value")?
+            .set_default("common.report", DEFAULT_REPORT_MODE)
+            .context("cannot set the default report value")?
+            .set_default("file.polling_mode", DEFAULT_POLLING_MODE)
+            .context("cannot set the default file polling mode value")?
+            .set_default("directory.polling_mode", DEFAULT_POLLING_MODE)
+            .context("cannot set the default directory polling mode value")?
+            .set_default("file.export_from_giganto", DEFAULT_EXPORT_FROM_GIGANTO)
+            .context("cannot set the default export_from_giganto value")?
+            .add_source(config::File::from(path))
+            .build()
+            .context("cannot build the config")?;
+        Ok(config.try_deserialize()?)
     }
 }
 
-impl fmt::Display for Config {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "mode_eval={}", self.mode_eval)?;
-        writeln!(f, "mode_grow={}", self.mode_grow)?;
-        writeln!(f, "count_sent={}", self.count_sent)?;
-        writeln!(f, "count_skip={}", self.count_skip)?;
-        writeln!(f, "input={}", self.input)?;
-        writeln!(f, "output={}", self.output)?;
-        if !self.offset_prefix.is_empty() {
-            writeln!(f, "offset_prefix={}", self.offset_prefix)?;
-        }
-        if !self.file_prefix.is_empty() {
-            writeln!(f, "file_prefix={}", self.file_prefix.clone())?;
-        }
-        writeln!(f, "config_toml={}", self.config_toml)?;
-        writeln!(f, "giganto_name={}", self.giganto_name)?;
-        writeln!(f, "giganto_addr={}", self.giganto_addr)?;
-        writeln!(f, "giganto_kind={}", self.giganto_kind)?;
-        writeln!(f, "migration={}", self.migration)
-    }
+/// Deserializes a socket address.
+///
+/// # Errors
+///
+/// Returns an error if the address is not in the form of 'IP:PORT'.
+fn deserialize_socket_addr<'de, D>(deserializer: D) -> Result<SocketAddr, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let addr = String::deserialize(deserializer)?;
+    addr.parse()
+        .map_err(|e| D::Error::custom(format!("invalid address \"{addr}\": {e}")))
 }

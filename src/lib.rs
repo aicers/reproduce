@@ -10,7 +10,7 @@ mod syslog;
 mod zeek;
 
 use anyhow::Result;
-pub use config::{Config, InputType, OutputType};
+pub use config::{Config, InputType};
 pub use controller::Controller;
 use csv::StringRecord;
 pub use producer::Producer;

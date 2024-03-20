@@ -42,39 +42,118 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ## Examples
 
-* Convert a zeek log file and send it to Giganto server from specific line:
+* Information about all config fields is as follows
 
-  ```sh
-  reproduce -i LOG_20220921 -o giganto -G 127.0.0.1:38370 -N server_name \
-      -C config.toml -k protocol -f 10
+  ```toml
+  [common]
+  cert = "tests/cert.pem"                  # Path to private key file.
+  key = "tests/key.pem"                    # Path to certificate file.
+  root = "tests/root.pem"                  # Path to CA certificate file.
+  giganto_ingest_addr = "127.0.0.1:38370"  # Address of the giganto ingest.
+  giganto_name = "aicers"                  # Giganto server name.
+  kind ="http"                             # Data kind. Default is empty string.
+  input = "/path/to/file_or_directory"     # Input type. (file/directory/"elastic")
+  report = false             # Flag for transfer stats report. Default is false.
+
+  [file]
+  export_from_giganto = true # Giganto export file type flag. Default is false.
+  polling_mode = false              # File polling mode flag. Default is false.
+  transfer_count = 0                       # The number of line/packet to sent.
+  transfer_skip_count = 0                  # The number of line/packet to skip.
+  last_transfer_line_suffix = "bck"        # A suffix string for the new file
+                                           # where info about the last transfer
+                                           # line will be stored.
+
+  [directory]
+  file_prefix = "http"                     # Prefix of the file name.
+  polling_mode = false        # Directory polling mode flag. Default is false.
+
+  [elastic]
+  url = "http://127.0.0.1:9200/"               # Elasticsearch server url.
+  event_codes = ["1","7","11","17","25","26",] # Target event kind
+  indices = [".ds-winlogbeat-8.8.2-2023.11.29-000001"]  # elasticsearch index.
+  start_time = "2023-08-06T15:00:00.000Z"      # Target start/end time.
+  end_time = "2023-09-07T02:00:00.000Z"
+  size = 100000                                # Fetch size.
+  dump_dir = "tests/dump"                      # Csv dump path.
+  elastic_auth = "admin:admin"                 # Elastic auth info. (id/pw)
+  ```
+
+* Convert a zeek log file and send it to Giganto server:
+
+  ```toml
+  [common]
+  cert = "tests/cert.pem"
+  key = "tests/key.pem"
+  root = "tests/root.pem"
+  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_name = "aicers"
+  kind ="dns"                                # kind in `Network Events` at the bottom.
+  input = "/path/to/zeek_file"
   ```
 
 * Send operation log to Giganto server:
 
-  ```sh
-  reproduce -i AGENT_NAME.log -o giganto -G 127.0.0.1:38370 -N server_name \
-    -C config.toml -k oplog
+  ```toml
+  [common]
+  cert = "tests/cert.pem"
+  key = "tests/key.pem"
+  root = "tests/root.pem"
+  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_name = "aicers"
+  kind ="oplog"                              # Use a fixed kind value.
+  input = "/path/to/oplog_file"
   ```
 
 * Send giganto export file to Giganto server:
 
-  ```sh
-  reproduce -i LOG_20230209 -o giganto -G 127.0.0.1:38370 -N server_name \
-    -C config.toml -k protocol -m
+  ```toml
+  [common]
+  cert = "tests/cert.pem"
+  key = "tests/key.pem"
+  root = "tests/root.pem"
+  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_name = "aicers"
+  kind ="http"                               # kind in `Network Events` at the bottom
+  input = "/path/to/giganto_export_file"
+
+  [file]
+  export_from_giganto = true
   ```
 
 * Send sysmon csv file to Giganto server:
 
-  ```sh
-  reproduce -i EVENT_LOG.csv -o giganto -G 127.0.0.1:38370 -N server_name \
-    -C config.toml -k event_name
+  ```toml
+  [common]
+  cert = "tests/cert.pem"
+  key = "tests/key.pem"
+  root = "tests/root.pem"
+  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_name = "aicers"
+  kind ="image_load"                         # kind in `Sysmon Events` at the bottom.
+  input = "/path/to/sysmon_file"
   ```
 
 * Send sysmon with elastic search to Giganto server:
 
-  ```sh
-  reproduce -i elastic -o giganto -G 127.0.0.1:38370 -N server_name \
-    -C config.toml -E id:password
+  ```toml
+  [common]
+  cert = "tests/cert.pem"
+  key = "tests/key.pem"
+  root = "tests/root.pem"
+  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_name = "aicers"
+  input = "elastic"                          # Use a fixed input value.
+
+  [elastic]
+  url = "http://127.0.0.1:9200/"
+  event_codes = ["1","7","11","17","25","26",]
+  indices = [".ds-winlogbeat-8.8.2-2023.11.29-000001"]
+  start_time = "2023-08-06T15:00:00.000Z"
+  end_time = "2023-09-07T02:00:00.000Z"
+  size = 100000
+  dump_dir = "tests/dump"
+  elastic_auth = "admin:admin"
   ```
 
 ## Defined kind type
