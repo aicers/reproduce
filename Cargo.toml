@@ -28,7 +28,7 @@ rustls = "0.21"                                                                 
 rustls-pemfile = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-strum = "0.25"
+strum = "0.26"
 strum_macros = "0.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8"
