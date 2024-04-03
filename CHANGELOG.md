@@ -17,6 +17,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Modify it so that folder polling is applied first.
   - Remove the option for output type.(`-o`) The associated functionality
     is now deprecated.
+- Changed configuration field names.
+  - `roots` to `root` to handle using a single root.
+  - `giganto_ingest_addr` to `giganto_ingest_srv_addr`.
 
 ## [0.18.0] - 2024-01-25
 

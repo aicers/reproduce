@@ -20,7 +20,7 @@ pub struct Common {
     pub key: String,
     pub root: String,
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub giganto_ingest_addr: SocketAddr,
+    pub giganto_ingest_srv_addr: SocketAddr,
     pub giganto_name: String,
     pub kind: String,
     pub input: String,
