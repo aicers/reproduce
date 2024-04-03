@@ -80,7 +80,7 @@ impl Producer {
         loop {
             let conn = match endpoint
                 .connect(
-                    config.common.giganto_ingest_addr,
+                    config.common.giganto_ingest_srv_addr,
                     &config.common.giganto_name,
                 )?
                 .await
@@ -109,7 +109,7 @@ impl Producer {
             return Ok(Self {
                 giganto: Giganto {
                     giganto_endpoint: endpoint.clone(),
-                    giganto_server: config.common.giganto_ingest_addr,
+                    giganto_server: config.common.giganto_ingest_srv_addr,
                     giganto_info: GigantoInfo {
                         name: config.common.giganto_name.clone(),
                         kind: config.common.kind.clone(),

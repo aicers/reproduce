@@ -49,7 +49,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   cert = "tests/cert.pem"                  # Path to private key file.
   key = "tests/key.pem"                    # Path to certificate file.
   root = "tests/root.pem"                  # Path to CA certificate file.
-  giganto_ingest_addr = "127.0.0.1:38370"  # Address of the giganto ingest.
+  giganto_ingest_srv_addr = "127.0.0.1:38370"  # Address of the giganto ingest.
   giganto_name = "aicers"                  # Giganto server name.
   kind ="http"                             # Data kind. Default is empty string.
   input = "/path/to/file_or_directory"     # Input type. (file/directory/"elastic")
@@ -86,7 +86,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   cert = "tests/cert.pem"
   key = "tests/key.pem"
   root = "tests/root.pem"
-  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "aicers"
   kind ="dns"                                # kind in `Network Events` at the bottom.
   input = "/path/to/zeek_file"
@@ -99,7 +99,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   cert = "tests/cert.pem"
   key = "tests/key.pem"
   root = "tests/root.pem"
-  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "aicers"
   kind ="oplog"                              # Use a fixed kind value.
   input = "/path/to/oplog_file"
@@ -112,7 +112,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   cert = "tests/cert.pem"
   key = "tests/key.pem"
   root = "tests/root.pem"
-  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "aicers"
   kind ="http"                               # kind in `Network Events` at the bottom
   input = "/path/to/giganto_export_file"
@@ -128,7 +128,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   cert = "tests/cert.pem"
   key = "tests/key.pem"
   root = "tests/root.pem"
-  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "aicers"
   kind ="image_load"                         # kind in `Sysmon Events` at the bottom.
   input = "/path/to/sysmon_file"
@@ -141,7 +141,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   cert = "tests/cert.pem"
   key = "tests/key.pem"
   root = "tests/root.pem"
-  giganto_ingest_addr = "127.0.0.1:38370"
+  giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "aicers"
   input = "elastic"                          # Use a fixed input value.
 
