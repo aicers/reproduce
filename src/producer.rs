@@ -33,6 +33,7 @@ use giganto_client::{
     RawEventKind,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
 use std::{
     env,
@@ -53,7 +54,7 @@ use tracing::{error, info, warn};
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_VERSION: &str = "0.15.1";
+const GIGANTO_VERSION: &str = "0.21.0-alpha.1";
 const INTERVAL: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
@@ -1616,7 +1617,6 @@ impl Giganto {
             if self.finish_checker.load(Ordering::SeqCst) {
                 self.giganto_sender
                     .finish()
-                    .await
                     .context("failed to finish stream")?;
                 self.giganto_conn.close(0u32.into(), b"log_done");
                 self.giganto_endpoint.wait_idle().await;
@@ -1683,47 +1683,33 @@ fn init_giganto(cert: &str, key: &str, root: &str) -> Result<Endpoint> {
     };
 
     let pv_key = if Path::new(key).extension().map_or(false, |x| x == "der") {
-        rustls::PrivateKey(key_pem)
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pem))
     } else {
-        let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key_pem)
-            .expect("malformed PKCS #8 private key");
-        if let Some(key) = pkcs8.into_iter().next() {
-            rustls::PrivateKey(key)
-        } else {
-            let rsa = rustls_pemfile::rsa_private_keys(&mut &*key_pem)
-                .expect("malformed PKCS #1 private key");
-            match rsa.into_iter().next() {
-                Some(x) => rustls::PrivateKey(x),
-                None => {
-                    bail!("no private key found");
-                }
-            }
-        }
+        rustls_pemfile::private_key(&mut &*key_pem)
+            .expect("malformed PKCS #1 private key")
+            .expect("no private keys found")
     };
 
-    let cert_chain = if Path::new(&cert).extension().map_or(false, |x| x == "der") {
-        vec![rustls::Certificate(cert_pem)]
+    let cert_chain = if Path::new(cert).extension().map_or(false, |x| x == "der") {
+        vec![CertificateDer::from(cert_pem)]
     } else {
         rustls_pemfile::certs(&mut &*cert_pem)
+            .collect::<Result<_, _>>()
             .expect("invalid PEM-encoded certificate")
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect()
     };
 
     let mut server_root = rustls::RootCertStore::empty();
     let file = fs::read(root).expect("failed to read file");
-    let root_cert: Vec<rustls::Certificate> = rustls_pemfile::certs(&mut &*file)
-        .expect("invalid PEM-encoded certificate")
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect();
+    let root_cert: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
+        .collect::<Result<_, _>>()
+        .context("invalid PEM-encoded certificate")?;
     if let Some(cert) = root_cert.first() {
-        server_root.add(cert).expect("failed to add cert");
+        server_root
+            .add(cert.to_owned())
+            .context("failed to add root cert")?;
     }
 
     let client_crypto = rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(server_root)
         .with_client_auth_cert(cert_chain, pv_key)
         .expect("the server root, cert chain or private key are not valid");
@@ -1731,14 +1717,16 @@ fn init_giganto(cert: &str, key: &str, root: &str) -> Result<Endpoint> {
     let mut transport = TransportConfig::default();
     transport.keep_alive_interval(Some(Duration::from_secs(INTERVAL)));
 
-    let mut client_config = quinn::ClientConfig::new(Arc::new(client_crypto));
+    let mut client_config = quinn::ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+            .expect("Failed to generate QuicClientConfig"),
+    ));
     client_config.transport_config(Arc::new(transport));
 
     let mut endpoint =
-        quinn::Endpoint::client("[::]:0".parse().expect("failed to parse Endpoint addr"))
-            .expect("failed to create endpoint");
+        quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
+            .expect("Failed to create endpoint");
     endpoint.set_default_client_config(client_config);
-
     Ok(endpoint)
 }
 
@@ -1753,7 +1741,7 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
                     info!("ACK: {timestamp}");
                 }
             }
-            Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly)) => {
+            Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly(_))) => {
                 warn!("finished early");
                 break;
             }

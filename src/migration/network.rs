@@ -46,7 +46,12 @@ impl TryFromGigantoRecord for Conn {
         } else {
             return Err(anyhow!("missing protocol"));
         };
-        let duration = if let Some(duration) = rec.get(7) {
+        let conn_state = if let Some(conn_state) = rec.get(7) {
+            conn_state.to_string()
+        } else {
+            return Err(anyhow!("missing conn state"));
+        };
+        let duration = if let Some(duration) = rec.get(8) {
             parse_giganto_timestamp(duration)?
                 .timestamp_nanos_opt()
                 .context("to_timestamp_nanos")?
@@ -54,29 +59,29 @@ impl TryFromGigantoRecord for Conn {
             return Err(anyhow!("missing duration"));
         };
 
-        let service = if let Some(service) = rec.get(8) {
+        let service = if let Some(service) = rec.get(9) {
             service.to_string()
         } else {
             return Err(anyhow!("missing service"));
         };
-        let orig_bytes = if let Some(orig_bytes) = rec.get(9) {
+        let orig_bytes = if let Some(orig_bytes) = rec.get(10) {
             orig_bytes.parse::<u64>().context("invalid source bytes")?
         } else {
             return Err(anyhow!("missing source bytes"));
         };
-        let resp_bytes = if let Some(resp_bytes) = rec.get(10) {
+        let resp_bytes = if let Some(resp_bytes) = rec.get(11) {
             resp_bytes
                 .parse::<u64>()
                 .context("invalid destination bytes")?
         } else {
             return Err(anyhow!("missing destination bytes"));
         };
-        let orig_pkts = if let Some(orig_pkts) = rec.get(11) {
+        let orig_pkts = if let Some(orig_pkts) = rec.get(12) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
             return Err(anyhow!("missing source packets"));
         };
-        let resp_pkts = if let Some(resp_pkts) = rec.get(12) {
+        let resp_pkts = if let Some(resp_pkts) = rec.get(13) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
@@ -91,6 +96,7 @@ impl TryFromGigantoRecord for Conn {
                 resp_addr,
                 resp_port,
                 proto,
+                conn_state,
                 duration,
                 service,
                 orig_bytes,
@@ -442,6 +448,23 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing resp_mime_types"));
         };
+        let post_body = if let Some(post_body) = rec.get(28) {
+            if post_body.eq("-") {
+                vec![0]
+            } else {
+                post_body
+                    .split(',')
+                    .map(|t| t.parse::<u8>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing post_body"));
+        };
+        let state = if let Some(state) = rec.get(29) {
+            state.to_string()
+        } else {
+            return Err(anyhow!("missing state"));
+        };
 
         Ok((
             Self {
@@ -471,6 +494,8 @@ impl TryFromGigantoRecord for Http {
                 orig_mime_types,
                 resp_filenames,
                 resp_mime_types,
+                post_body,
+                state,
             },
             time,
         ))
@@ -623,6 +648,11 @@ impl TryFromGigantoRecord for Smtp {
         } else {
             return Err(anyhow!("missing agent"));
         };
+        let state = if let Some(state) = rec.get(14) {
+            state.to_string()
+        } else {
+            return Err(anyhow!("missing state"));
+        };
 
         Ok((
             Self {
@@ -638,6 +668,7 @@ impl TryFromGigantoRecord for Smtp {
                 to,
                 subject,
                 agent,
+                state,
             },
             time,
         ))
@@ -691,37 +722,27 @@ impl TryFromGigantoRecord for Ntlm {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-        let username = if let Some(username) = rec.get(8) {
+        let protocol = if let Some(protocol) = rec.get(8) {
+            protocol.to_string()
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let username = if let Some(username) = rec.get(9) {
             username.to_string()
         } else {
             return Err(anyhow!("missing username"));
         };
-        let hostname = if let Some(hostname) = rec.get(9) {
+        let hostname = if let Some(hostname) = rec.get(10) {
             hostname.to_string()
         } else {
             return Err(anyhow!("missing hostname"));
         };
-        let domainname = if let Some(domainname) = rec.get(10) {
+        let domainname = if let Some(domainname) = rec.get(11) {
             domainname.to_string()
         } else {
             return Err(anyhow!("missing domainname"));
         };
-        let server_nb_computer_name = if let Some(server_nb_computer_name) = rec.get(11) {
-            server_nb_computer_name.to_string()
-        } else {
-            return Err(anyhow!("missing server_nb_computer_name"));
-        };
-        let server_dns_computer_name = if let Some(server_dns_computer_name) = rec.get(12) {
-            server_dns_computer_name.to_string()
-        } else {
-            return Err(anyhow!("missing server_dns_computer_name"));
-        };
-        let server_tree_name = if let Some(server_tree_name) = rec.get(13) {
-            server_tree_name.to_string()
-        } else {
-            return Err(anyhow!("missing server_tree_name"));
-        };
-        let success = if let Some(success) = rec.get(14) {
+        let success = if let Some(success) = rec.get(12) {
             success.to_string()
         } else {
             return Err(anyhow!("missing success"));
@@ -735,12 +756,10 @@ impl TryFromGigantoRecord for Ntlm {
                 resp_port,
                 proto,
                 last_time,
+                protocol,
                 username,
                 hostname,
                 domainname,
-                server_nb_computer_name,
-                server_dns_computer_name,
-                server_tree_name,
                 success,
             },
             time,
@@ -923,68 +942,70 @@ impl TryFromGigantoRecord for Ssh {
         } else {
             return Err(anyhow!("missing last_time"));
         };
-
-        let version = if let Some(version) = rec.get(8) {
-            version.parse::<i64>().context("invalid version")?
-        } else {
-            return Err(anyhow!("missing version"));
-        };
-        let auth_success = if let Some(auth_success) = rec.get(9) {
-            auth_success.to_string()
-        } else {
-            return Err(anyhow!("missing auth_success"));
-        };
-        let auth_attempts = if let Some(auth_attempts) = rec.get(10) {
-            auth_attempts
-                .parse::<i64>()
-                .context("invalid auth_attempts")?
-        } else {
-            return Err(anyhow!("missing auth_attempts"));
-        };
-        let direction = if let Some(direction) = rec.get(11) {
-            direction.to_string()
-        } else {
-            return Err(anyhow!("missing direction"));
-        };
-        let client = if let Some(client) = rec.get(12) {
+        let client = if let Some(client) = rec.get(8) {
             client.to_string()
         } else {
             return Err(anyhow!("missing client"));
         };
-        let server = if let Some(server) = rec.get(13) {
+        let server = if let Some(server) = rec.get(9) {
             server.to_string()
         } else {
             return Err(anyhow!("missing server"));
         };
-        let cipher_alg = if let Some(cipher_alg) = rec.get(14) {
+        let cipher_alg = if let Some(cipher_alg) = rec.get(10) {
             cipher_alg.to_string()
         } else {
             return Err(anyhow!("missing cipher_alg"));
         };
-        let mac_alg = if let Some(mac_alg) = rec.get(15) {
+        let mac_alg = if let Some(mac_alg) = rec.get(11) {
             mac_alg.to_string()
         } else {
             return Err(anyhow!("missing mac_alg"));
         };
-        let compression_alg = if let Some(compression_alg) = rec.get(16) {
+        let compression_alg = if let Some(compression_alg) = rec.get(12) {
             compression_alg.to_string()
         } else {
             return Err(anyhow!("missing compression_alg"));
         };
-        let kex_alg = if let Some(kex_alg) = rec.get(17) {
+        let kex_alg = if let Some(kex_alg) = rec.get(13) {
             kex_alg.to_string()
         } else {
             return Err(anyhow!("missing kex_alg"));
         };
-        let host_key_alg = if let Some(host_key_alg) = rec.get(18) {
+        let host_key_alg = if let Some(host_key_alg) = rec.get(14) {
             host_key_alg.to_string()
         } else {
             return Err(anyhow!("missing host_key_alg"));
         };
-        let host_key = if let Some(host_key) = rec.get(19) {
-            host_key.to_string()
+        let hassh_algorithms = if let Some(hassh_algorithms) = rec.get(15) {
+            hassh_algorithms.to_string()
         } else {
-            return Err(anyhow!("missing host_key"));
+            return Err(anyhow!("missing hassh_algorithms"));
+        };
+        let hassh = if let Some(hassh) = rec.get(16) {
+            hassh.to_string()
+        } else {
+            return Err(anyhow!("missing hassh"));
+        };
+        let hassh_server_algorithms = if let Some(hassh_server_algorithms) = rec.get(17) {
+            hassh_server_algorithms.to_string()
+        } else {
+            return Err(anyhow!("missing hassh_server_algorithms"));
+        };
+        let hassh_server = if let Some(hassh_server) = rec.get(18) {
+            hassh_server.to_string()
+        } else {
+            return Err(anyhow!("missing hassh_server"));
+        };
+        let client_shka = if let Some(client_shka) = rec.get(19) {
+            client_shka.to_string()
+        } else {
+            return Err(anyhow!("missing client_shka"));
+        };
+        let server_shka = if let Some(server_shka) = rec.get(20) {
+            server_shka.to_string()
+        } else {
+            return Err(anyhow!("missing server_shka"));
         };
 
         Ok((
@@ -995,10 +1016,6 @@ impl TryFromGigantoRecord for Ssh {
                 resp_port,
                 proto,
                 last_time,
-                version,
-                auth_success,
-                auth_attempts,
-                direction,
                 client,
                 server,
                 cipher_alg,
@@ -1006,7 +1023,12 @@ impl TryFromGigantoRecord for Ssh {
                 compression_alg,
                 kex_alg,
                 host_key_alg,
-                host_key,
+                hassh_algorithms,
+                hassh,
+                hassh_server_algorithms,
+                hassh_server,
+                client_shka,
+                server_shka,
             },
             time,
         ))
@@ -1545,76 +1567,112 @@ impl TryFromGigantoRecord for Tls {
         } else {
             return Err(anyhow!("missing version"));
         };
-        let cipher = if let Some(cipher) = rec.get(12) {
+        let client_cipher_suites = if let Some(client_cipher_suites) = rec.get(12) {
+            if client_cipher_suites.eq("-") {
+                vec![0]
+            } else {
+                client_cipher_suites
+                    .split(',')
+                    .map(|t| t.parse::<u16>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing client_cipher_suites"));
+        };
+        let client_extensions = if let Some(client_extensions) = rec.get(13) {
+            if client_extensions.eq("-") {
+                vec![0]
+            } else {
+                client_extensions
+                    .split(',')
+                    .map(|t| t.parse::<u16>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing client_extensions"));
+        };
+        let cipher = if let Some(cipher) = rec.get(14) {
             cipher.parse::<u16>().context("invalid cipher")?
         } else {
             return Err(anyhow!("missing cipher"));
         };
-        let ja3s = if let Some(ja3s) = rec.get(13) {
+        let extensions = if let Some(extensions) = rec.get(15) {
+            if extensions.eq("-") {
+                vec![0]
+            } else {
+                extensions
+                    .split(',')
+                    .map(|t| t.parse::<u16>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing extensions"));
+        };
+        let ja3s = if let Some(ja3s) = rec.get(16) {
             ja3s.to_string()
         } else {
             return Err(anyhow!("missing ja3s"));
         };
-        let serial = if let Some(serial) = rec.get(14) {
+        let serial = if let Some(serial) = rec.get(17) {
             serial.to_string()
         } else {
             return Err(anyhow!("missing serial"));
         };
-        let subject_country = if let Some(subject_country) = rec.get(15) {
+        let subject_country = if let Some(subject_country) = rec.get(18) {
             subject_country.to_string()
         } else {
             return Err(anyhow!("missing subject_country"));
         };
-        let subject_org_name = if let Some(subject_org_name) = rec.get(16) {
+        let subject_org_name = if let Some(subject_org_name) = rec.get(19) {
             subject_org_name.to_string()
         } else {
             return Err(anyhow!("missing subject_org_name"));
         };
-        let subject_common_name = if let Some(subject_common_name) = rec.get(17) {
+        let subject_common_name = if let Some(subject_common_name) = rec.get(20) {
             subject_common_name.to_string()
         } else {
             return Err(anyhow!("missing subject_common_name"));
         };
-        let validity_not_before = if let Some(validity_not_before) = rec.get(18) {
+        let validity_not_before = if let Some(validity_not_before) = rec.get(21) {
             validity_not_before
                 .parse::<i64>()
                 .context("invalid validity_not_before")?
         } else {
             return Err(anyhow!("missing validity_not_before"));
         };
-        let validity_not_after = if let Some(validity_not_after) = rec.get(19) {
+        let validity_not_after = if let Some(validity_not_after) = rec.get(22) {
             validity_not_after
                 .parse::<i64>()
                 .context("invalid validity_not_after")?
         } else {
             return Err(anyhow!("missing validity_not_after"));
         };
-        let subject_alt_name = if let Some(subject_alt_name) = rec.get(20) {
+        let subject_alt_name = if let Some(subject_alt_name) = rec.get(23) {
             subject_alt_name.to_string()
         } else {
             return Err(anyhow!("missing subject_alt_name"));
         };
-        let issuer_country = if let Some(issuer_country) = rec.get(21) {
+        let issuer_country = if let Some(issuer_country) = rec.get(24) {
             issuer_country.to_string()
         } else {
             return Err(anyhow!("missing issuer_country"));
         };
-        let issuer_org_name = if let Some(issuer_org_name) = rec.get(22) {
+        let issuer_org_name = if let Some(issuer_org_name) = rec.get(25) {
             issuer_org_name.to_string()
         } else {
             return Err(anyhow!("missing issuer_org_name"));
         };
-        let issuer_org_unit_name = if let Some(issuer_org_unit_name) = rec.get(23) {
+        let issuer_org_unit_name = if let Some(issuer_org_unit_name) = rec.get(26) {
             issuer_org_unit_name.to_string()
         } else {
             return Err(anyhow!("missing issuer_org_unit_name"));
         };
-        let issuer_common_name = if let Some(issuer_common_name) = rec.get(24) {
+        let issuer_common_name = if let Some(issuer_common_name) = rec.get(27) {
             issuer_common_name.to_string()
         } else {
             return Err(anyhow!("missing issuer_common_name"));
         };
-        let last_alert = if let Some(last_alert) = rec.get(25) {
+        let last_alert = if let Some(last_alert) = rec.get(28) {
             last_alert.parse::<u8>().context("invalid last_alert")?
         } else {
             return Err(anyhow!("missing last_alert"));
@@ -1632,7 +1690,10 @@ impl TryFromGigantoRecord for Tls {
                 alpn_protocol,
                 ja3,
                 version,
+                client_cipher_suites,
+                client_extensions,
                 cipher,
+                extensions,
                 ja3s,
                 serial,
                 subject_country,

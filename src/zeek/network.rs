@@ -88,6 +88,11 @@ impl TryFromZeekRecord for Conn {
         } else {
             return Err(anyhow!("missing destination bytes"));
         };
+        let conn_state = if let Some(conn_state) = rec.get(11) {
+            conn_state.to_string()
+        } else {
+            return Err(anyhow!("missing conn_state"));
+        };
         let orig_pkts = if let Some(orig_pkts) = rec.get(16) {
             if orig_pkts.eq("-") {
                 0
@@ -116,6 +121,7 @@ impl TryFromZeekRecord for Conn {
                 resp_addr,
                 resp_port,
                 proto,
+                conn_state,
                 duration,
                 service,
                 orig_bytes,
@@ -493,6 +499,8 @@ impl TryFromZeekRecord for Http {
                 orig_mime_types,
                 resp_filenames,
                 resp_mime_types,
+                post_body: Vec::new(),
+                state: String::from("-"),
             },
             time,
         ))
@@ -609,21 +617,6 @@ impl TryFromZeekRecord for Ntlm {
         } else {
             return Err(anyhow!("missing domainname"));
         };
-        let server_nb_computer_name = if let Some(server_nb_computer_name) = rec.get(9) {
-            server_nb_computer_name.to_string()
-        } else {
-            return Err(anyhow!("missing server_nb_computer_name"));
-        };
-        let server_dns_computer_name = if let Some(server_dns_computer_name) = rec.get(10) {
-            server_dns_computer_name.to_string()
-        } else {
-            return Err(anyhow!("missing server_dns_computer_name"));
-        };
-        let server_tree_name = if let Some(server_tree_name) = rec.get(11) {
-            server_tree_name.to_string()
-        } else {
-            return Err(anyhow!("missing server_tree_name"));
-        };
         let success = if let Some(success) = rec.get(12) {
             success.to_string()
         } else {
@@ -638,12 +631,10 @@ impl TryFromZeekRecord for Ntlm {
                 resp_port,
                 proto: 0,
                 last_time: 0,
+                protocol: String::from("-"),
                 username,
                 hostname,
                 domainname,
-                server_nb_computer_name,
-                server_dns_computer_name,
-                server_tree_name,
                 success,
             },
             time,
@@ -787,6 +778,7 @@ impl TryFromZeekRecord for Smtp {
                 to,
                 subject,
                 agent,
+                state: String::from("-"),
             },
             time,
         ))
@@ -829,36 +821,6 @@ impl TryFromZeekRecord for Ssh {
         } else {
             return Err(anyhow!("missing destination port"));
         };
-        let version = if let Some(version) = rec.get(6) {
-            if version.eq("-") {
-                0
-            } else {
-                version.parse::<i64>().context("invalid version")?
-            }
-        } else {
-            return Err(anyhow!("missing version"));
-        };
-        let auth_success = if let Some(auth_success) = rec.get(7) {
-            auth_success.to_string()
-        } else {
-            return Err(anyhow!("missing auth_success"));
-        };
-        let auth_attempts = if let Some(auth_attempts) = rec.get(8) {
-            if auth_attempts.eq("-") {
-                0
-            } else {
-                auth_attempts
-                    .parse::<i64>()
-                    .context("invalid auth_attempts")?
-            }
-        } else {
-            return Err(anyhow!("missing auth_attempts"));
-        };
-        let direction = if let Some(direction) = rec.get(9) {
-            direction.to_string()
-        } else {
-            return Err(anyhow!("missing direction"));
-        };
         let client = if let Some(client) = rec.get(10) {
             client.to_string()
         } else {
@@ -894,11 +856,6 @@ impl TryFromZeekRecord for Ssh {
         } else {
             return Err(anyhow!("missing host_key_alg"));
         };
-        let host_key = if let Some(host_key) = rec.get(17) {
-            host_key.to_string()
-        } else {
-            return Err(anyhow!("missing host_key"));
-        };
 
         Ok((
             Self {
@@ -908,10 +865,6 @@ impl TryFromZeekRecord for Ssh {
                 resp_port,
                 proto: 0,
                 last_time: 0,
-                version,
-                auth_success,
-                auth_attempts,
-                direction,
                 client,
                 server,
                 cipher_alg,
@@ -919,7 +872,12 @@ impl TryFromZeekRecord for Ssh {
                 compression_alg,
                 kex_alg,
                 host_key_alg,
-                host_key,
+                hassh_algorithms: String::from("-"),
+                hassh: String::from("-"),
+                hassh_server_algorithms: String::from("-"),
+                hassh_server: String::from("-"),
+                client_shka: String::from("-"),
+                server_shka: String::from("-"),
             },
             time,
         ))
@@ -1318,7 +1276,10 @@ impl TryFromZeekRecord for Tls {
                 alpn_protocol: String::from("-"),
                 ja3: String::from("-"),
                 version,
+                client_cipher_suites: vec![0],
+                client_extensions: vec![0],
                 cipher: 0,
+                extensions: vec![0],
                 ja3s: String::from("-"),
                 serial: String::from("-"),
                 subject_country: String::from("-"),

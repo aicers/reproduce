@@ -5,6 +5,19 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Update giganto-client to version `0.17.0`. Updating to this version
+  results in the following changes.
+  - Bump dependencies.
+    - Update quinn to version `0.11`.
+    - Update rustls to version `0.23`.
+  - Fixed parsing code in zeek log and giganto log due to changes in conn,
+    http, smtp, ntlm, ssh, tls protocol fields.
+  - Changed `GIGANTO_VERSION` to "0.21.0-alpha.1"
+
 ## [0.19.0] - 2024-05-14
 
 ### Changed
@@ -306,6 +319,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.19.0...main
 [0.19.0]: https://github.com/aicers/reproduce/compare/0.18.0...0.19.0
 [0.18.0]: https://github.com/aicers/reproduce/compare/0.17.5...0.18.0
 [0.17.5]: https://github.com/aicers/reproduce/compare/0.17.4...0.17.5
