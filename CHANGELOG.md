@@ -18,6 +18,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     http, smtp, ntlm, ssh, tls protocol fields.
   - Changed `GIGANTO_VERSION` to "0.21.0-alpha.1"
 - Change to send events in unit of 100 for protocol events.
+- Change the rustls crypto library setting to `aws-lc-rs`.
 
 ## [0.19.0] - 2024-05-14
 

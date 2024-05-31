@@ -24,10 +24,7 @@ quinn = { version = "0.11", features = ["ring"] }
 rayon = "1.8"
 regex = "1"
 reqwest = { version = "0.12", features = ["json"] }
-rustls = { version = "0.23", default-features = false, features = [
-    "ring",
-    "std",
-] }
+rustls = "0.23"
 rustls-pemfile = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
