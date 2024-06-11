@@ -1,16 +1,18 @@
 #![allow(clippy::struct_field_names, clippy::too_many_arguments)]
-use crate::{
-    migration::TryFromGigantoRecord,
-    netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
-    operation_log,
-    security_log::{
-        Aiwaf, Axgate, Fgt, Mf2, Nginx, ParseSecurityLog, SecurityLogInfo, ShadowWall, SniperIps,
-        SonicWall, Srx, Tg, Ubuntu, Vforce, Wapples,
+use std::{
+    env,
+    fmt::Debug,
+    fs::{self, File},
+    io::{BufRead, BufReader},
+    net::SocketAddr,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
     },
-    syslog::TryFromSysmonRecord,
-    zeek::TryFromZeekRecord,
-    Config, Report,
+    time::Duration,
 };
+
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
@@ -35,21 +37,21 @@ use giganto_client::{
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
-use std::{
-    env,
-    fmt::Debug,
-    fs::{self, File},
-    io::{BufRead, BufReader},
-    net::SocketAddr,
-    path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
+
+use crate::{
+    migration::TryFromGigantoRecord,
+    netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
+    operation_log,
+    security_log::{
+        Aiwaf, Axgate, Fgt, Mf2, Nginx, ParseSecurityLog, SecurityLogInfo, ShadowWall, SniperIps,
+        SonicWall, Srx, Tg, Ubuntu, Vforce, Wapples,
+    },
+    syslog::TryFromSysmonRecord,
+    zeek::TryFromZeekRecord,
+    Config, Report,
+};
 
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";

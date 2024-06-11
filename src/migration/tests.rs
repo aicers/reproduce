@@ -1,9 +1,10 @@
-use super::TryFromGigantoRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
     Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
 };
+
+use super::TryFromGigantoRecord;
 
 #[test]
 fn giganto_conn() {

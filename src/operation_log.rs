@@ -1,8 +1,9 @@
+use std::{str::FromStr, sync::OnceLock};
+
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{OpLog, OpLogLevel};
 use regex::Regex;
-use std::{str::FromStr, sync::OnceLock};
 
 fn get_log_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();

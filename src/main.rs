@@ -1,6 +1,7 @@
+use std::{env, path::PathBuf, process::exit};
+
 use anyhow::Result;
 use reproduce::{Config, Controller};
-use std::{env, path::PathBuf, process::exit};
 use tokio::task;
 use tracing::{error, info};
 

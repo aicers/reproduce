@@ -1,9 +1,11 @@
-use super::{parse_giganto_timestamp, TryFromGigantoRecord};
+use std::net::IpAddr;
+
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::network::{
     Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
 };
-use std::net::IpAddr;
+
+use super::{parse_giganto_timestamp, TryFromGigantoRecord};
 
 impl TryFromGigantoRecord for Conn {
     #[allow(clippy::too_many_lines)]

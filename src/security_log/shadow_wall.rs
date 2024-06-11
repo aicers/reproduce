@@ -1,10 +1,12 @@
-use super::{
-    ParseSecurityLog, SecurityLogInfo, ShadowWall, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP,
-};
+use std::{net::IpAddr, str::FromStr, sync::OnceLock};
+
 use anyhow::{bail, Context, Result};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
-use std::{net::IpAddr, str::FromStr, sync::OnceLock};
+
+use super::{
+    ParseSecurityLog, SecurityLogInfo, ShadowWall, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP,
+};
 
 fn get_shadow_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();

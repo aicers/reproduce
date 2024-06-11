@@ -1,7 +1,8 @@
-use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::sysmon::DnsEvent;
 use serde::Serialize;
+
+use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
 
 impl TryFromSysmonRecord for DnsEvent {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {

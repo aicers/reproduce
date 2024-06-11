@@ -14,10 +14,11 @@ mod ubuntu;
 mod vforce;
 mod wapples;
 
+use std::net::{IpAddr, Ipv4Addr};
+
 use anyhow::Result;
 use giganto_client::ingest::log::SecuLog;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr};
 
 const PROTO_TCP: u8 = 0x06;
 const PROTO_UDP: u8 = 0x11;
@@ -99,12 +100,11 @@ pub fn proto_to_u8(proto: &str) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use crate::security_log::{Nginx, Ubuntu, PROTO_TCP};
-
     use super::{
         Aiwaf, Axgate, Fgt, Mf2, ParseSecurityLog, SecurityLogInfo, ShadowWall, SniperIps,
         SonicWall, Srx, Tg, Vforce, Wapples,
     };
+    use crate::security_log::{Nginx, Ubuntu, PROTO_TCP};
 
     #[test]
     fn parse_wapples() {

@@ -1,12 +1,14 @@
+use std::{collections::HashMap, io::Write, net::IpAddr};
+
+use anyhow::{Context, Result};
+use num_enum::FromPrimitive;
+use serde::{Deserialize, Serialize};
+use tracing::info;
+
 use super::{
     fields::{FieldTypes, OptionsScopeFieldTypes},
     packet::Netflow9Header,
 };
-use anyhow::{Context, Result};
-use num_enum::FromPrimitive;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Write, net::IpAddr};
-use tracing::info;
 
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Serialize, Deserialize)]

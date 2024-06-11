@@ -19,6 +19,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Changed `GIGANTO_VERSION` to "0.21.0-alpha.1"
 - Change to send events in unit of 100 for protocol events.
 - Change the rustls crypto library setting to `aws-lc-rs`.
+- Apply rustfmt's option `group_imports=StdExternalCrate`.
+  - Modify the code with the command `cargo fmt -- --config group_imports=StdExternalCrate`.
+    This command must be applied automatically or manually before all future pull
+    requests are submitted.
+  - Add `--config group_imports=StdExternalCrate` to the CI process like:
+    - `cargo fmt -- --check --config group_imports=StdExternalCrate`
 
 ## [0.19.0] - 2024-05-14
 
