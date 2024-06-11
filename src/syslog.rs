@@ -13,6 +13,25 @@ mod process_terminate;
 mod registry_key_rename;
 mod registry_value_set;
 
+use std::{
+    fs::{self, File},
+    io::{self},
+    path::Path,
+};
+
+use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use csv::{Reader, ReaderBuilder, StringRecord};
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+use reqwest::{
+    header::{HeaderMap, HeaderValue, AUTHORIZATION},
+    Client,
+};
+use serde::Serialize;
+use serde_json::{json, Value};
+use tracing::{error, info};
+
 use self::{
     dns_query::ElasticDnsEvent, file_create::ElasticFileCreate,
     file_create_stream_hash::ElasticFileCreateStreamHash,
@@ -25,23 +44,6 @@ use self::{
     registry_value_set::ElasticRegistryValueSet,
 };
 use crate::config::ElasticSearch;
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
-use chrono::{DateTime, NaiveDateTime, Utc};
-use csv::{Reader, ReaderBuilder, StringRecord};
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
-use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION},
-    Client,
-};
-use serde::Serialize;
-use serde_json::{json, Value};
-use std::{
-    fs::{self, File},
-    io::{self},
-    path::Path,
-};
-use tracing::{error, info};
 
 #[allow(clippy::unused_async)]
 pub async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {

@@ -1,9 +1,11 @@
-use super::{Aiwaf, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP};
+use std::{net::IpAddr, str::FromStr, sync::OnceLock};
+
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, FixedOffset};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
-use std::{net::IpAddr, str::FromStr, sync::OnceLock};
+
+use super::{Aiwaf, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP};
 
 fn get_aiwaf_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();

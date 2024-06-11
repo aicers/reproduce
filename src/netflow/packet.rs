@@ -1,17 +1,19 @@
-use super::{
-    fields::{DataTypes, FieldTypes, OptionsScopeFieldTypes, FORWARDING_STATUS, TCP_FLAGS},
-    templates::Template,
-    ProcessStats,
+use std::{
+    io::{BufRead, Cursor, Read},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
+
 use anyhow::{anyhow, bail, Result};
 use byteorder::{BigEndian, ReadBytesExt};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use num_enum::FromPrimitive;
 use pcap::Packet;
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{BufRead, Cursor, Read},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+
+use super::{
+    fields::{DataTypes, FieldTypes, OptionsScopeFieldTypes, FORWARDING_STATUS, TCP_FLAGS},
+    templates::Template,
+    ProcessStats,
 };
 
 // TODO: other ports can be used

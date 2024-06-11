@@ -1,9 +1,11 @@
-use super::{ParseSecurityLog, SecurityLogInfo, Ubuntu};
+use std::sync::OnceLock;
+
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Datelike, FixedOffset, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
-use std::sync::OnceLock;
+
+use super::{ParseSecurityLog, SecurityLogInfo, Ubuntu};
 
 fn get_ubuntu_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();

@@ -1,6 +1,7 @@
+use std::{net::SocketAddr, path::Path};
+
 use anyhow::{Context, Result};
 use serde::{de::Error, Deserialize, Deserializer};
-use std::{net::SocketAddr, path::Path};
 
 const DEFAULT_REPORT_MODE: bool = false;
 const DEFAULT_POLLING_MODE: bool = false;

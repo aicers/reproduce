@@ -1,9 +1,10 @@
-use crate::zeek::TryFromZeekRecord;
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
     Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
 };
+
+use crate::zeek::TryFromZeekRecord;
 
 // data from zeek log
 #[test]

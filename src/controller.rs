@@ -1,7 +1,3 @@
-use crate::syslog::open_sysmon_csv_file;
-use crate::zeek::open_raw_event_log_file;
-use crate::{Config, InputType, Producer, Report};
-use anyhow::{anyhow, bail, Result};
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -10,8 +6,14 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
+
+use anyhow::{anyhow, bail, Result};
 use tracing::{error, info, warn};
 use walkdir::WalkDir;
+
+use crate::syslog::open_sysmon_csv_file;
+use crate::zeek::open_raw_event_log_file;
+use crate::{Config, InputType, Producer, Report};
 
 const GIGANTO_ZEEK_KINDS: [&str; 15] = [
     "conn", "http", "rdp", "smtp", "dns", "ntlm", "kerberos", "ssh", "dce_rpc", "ftp", "mqtt",

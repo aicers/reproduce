@@ -1,10 +1,12 @@
-use crate::controller::input_type;
-use crate::{Config, InputType};
-use bytesize::ByteSize;
-use chrono::{DateTime, Duration, Utc};
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+use bytesize::ByteSize;
+use chrono::{DateTime, Duration, Utc};
+
+use crate::controller::input_type;
+use crate::{Config, InputType};
 
 pub struct Report {
     config: Config,

@@ -1,5 +1,6 @@
-use num_enum::FromPrimitive;
 use std::collections::HashMap;
+
+use num_enum::FromPrimitive;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, Hash)]
 #[repr(u8)]

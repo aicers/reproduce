@@ -2,10 +2,11 @@ mod network;
 #[cfg(test)]
 mod tests;
 
+use std::{fs::File, path::Path};
+
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
-use std::{fs::File, path::Path};
 
 const PROTO_TCP: u8 = 0x06;
 const PROTO_UDP: u8 = 0x11;
