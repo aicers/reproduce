@@ -1779,13 +1779,10 @@ fn init_giganto(cert: &str, key: &str, root: &str) -> Result<Endpoint> {
             .context("failed to add root cert")?;
     }
 
-    let client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_root_certificates(server_root)
-    .with_client_auth_cert(cert_chain, pv_key)
-    .expect("the server root, cert chain or private key are not valid");
+    let client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(server_root)
+        .with_client_auth_cert(cert_chain, pv_key)
+        .expect("the server root, cert chain or private key are not valid");
 
     let mut transport = TransportConfig::default();
     transport.keep_alive_interval(Some(Duration::from_secs(INTERVAL)));
