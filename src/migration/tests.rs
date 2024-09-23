@@ -136,7 +136,8 @@ fn giganto_smb() {
 
 #[test]
 fn giganto_nfs() {
-    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	-	-";
+    let data =
+        "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	-	-";
 
     let rec = stringrecord(data);
 
