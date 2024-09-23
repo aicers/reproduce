@@ -187,7 +187,7 @@ fn build_query(event_code: &str, start: &str, end: &str, size: usize, last: u64)
 /// Send a query with `_search` option.
 async fn send_request(client: &Client, query: &Value, url: &str, index: &str) -> Result<Value> {
     client
-        .post(&format!("{url}/{index}/_search"))
+        .post(format!("{url}/{index}/_search"))
         .json(query)
         .send()
         .await?
