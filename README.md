@@ -11,15 +11,23 @@ entries to a Giganto server.
 
 ## Build
 
-REproduce may be built as a single binary for portability. Make sure that the
-musl target is available. The following command installs the Rust compiler for
-`x86_64-unknown-linux-musl` if it is not already installed:
+REproduce may be built as a static binary for portability. Make sure that the
+musl target is available. On Ubuntu-based systems, you will need to install the
+`musl-tools` package, which provides the musl-gcc compiler required by some
+dependencies:
+
+```sh
+sudo apt install musl-tools
+```
+
+Then, install the Rust compiler for `x86_64-unknown-linux-musl` if it is not
+already installed:
 
 ```sh
 rustup target add x86_64-unknown-linux-musl
 ```
 
-Then the portable REproduce binary, `reproduce`, can be created with the
+The portable static REproduce binary, `reproduce`, can be created with the
 following command:
 
 ```sh
