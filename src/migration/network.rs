@@ -2,7 +2,8 @@ use std::net::IpAddr;
 
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
+    Ssh, Tls,
 };
 
 use super::{parse_giganto_timestamp, TryFromGigantoRecord};
@@ -90,6 +91,20 @@ impl TryFromGigantoRecord for Conn {
         } else {
             return Err(anyhow!("missing destination packets"));
         };
+        let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(14) {
+            orig_l2_bytes
+                .parse::<u64>()
+                .context("invalid source l2 bytes")?
+        } else {
+            return Err(anyhow!("missing source l2 bytes"));
+        };
+        let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(15) {
+            resp_l2_bytes
+                .parse::<u64>()
+                .context("invalid destination l2 bytes")?
+        } else {
+            return Err(anyhow!("missing destination l2 bytes"));
+        };
 
         Ok((
             Self {
@@ -105,6 +120,8 @@ impl TryFromGigantoRecord for Conn {
                 resp_bytes,
                 orig_pkts,
                 resp_pkts,
+                orig_l2_bytes,
+                resp_l2_bytes,
             },
             time,
         ))
@@ -1919,6 +1936,359 @@ impl TryFromGigantoRecord for Nfs {
                 last_time,
                 read_files,
                 write_files,
+            },
+            time,
+        ))
+    }
+}
+
+impl TryFromGigantoRecord for Bootp {
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let proto = if let Some(proto) = rec.get(6) {
+            proto.parse::<u8>().context("invalid proto")?
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+        } else {
+            return Err(anyhow!("missing last_time"));
+        };
+        let op = if let Some(op) = rec.get(8) {
+            op.parse::<u8>().context("invalid op")?
+        } else {
+            return Err(anyhow!("missing op"));
+        };
+        let htype = if let Some(htype) = rec.get(9) {
+            htype.parse::<u8>().context("invalid htype")?
+        } else {
+            return Err(anyhow!("missing htype"));
+        };
+        let hops = if let Some(hops) = rec.get(10) {
+            hops.parse::<u8>().context("invalid hops")?
+        } else {
+            return Err(anyhow!("missing hops"));
+        };
+        let xid = if let Some(xid) = rec.get(11) {
+            xid.parse::<u32>().context("invalid xid")?
+        } else {
+            return Err(anyhow!("missing xid"));
+        };
+        let ciaddr = if let Some(ciaddr) = rec.get(12) {
+            ciaddr.parse::<IpAddr>().context("invalid ciaddr")?
+        } else {
+            return Err(anyhow!("missing ciaddr"));
+        };
+        let yiaddr = if let Some(yiaddr) = rec.get(13) {
+            yiaddr.parse::<IpAddr>().context("invalid yiaddr")?
+        } else {
+            return Err(anyhow!("missing yiaddr"));
+        };
+        let siaddr = if let Some(siaddr) = rec.get(14) {
+            siaddr.parse::<IpAddr>().context("invalid siaddr")?
+        } else {
+            return Err(anyhow!("missing siaddr"));
+        };
+        let giaddr = if let Some(giaddr) = rec.get(15) {
+            giaddr.parse::<IpAddr>().context("invalid giaddr")?
+        } else {
+            return Err(anyhow!("missing giaddr"));
+        };
+        let chaddr = if let Some(chaddr) = rec.get(16) {
+            if chaddr.eq("-") {
+                vec![0]
+            } else {
+                chaddr
+                    .split(',')
+                    .map(|t| t.parse::<u8>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing chaddr"));
+        };
+        let sname = if let Some(sname) = rec.get(17) {
+            sname.to_string()
+        } else {
+            return Err(anyhow!("missing sname"));
+        };
+        let file = if let Some(file) = rec.get(18) {
+            file.to_string()
+        } else {
+            return Err(anyhow!("missing file"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                last_time,
+                op,
+                htype,
+                hops,
+                xid,
+                ciaddr,
+                yiaddr,
+                siaddr,
+                giaddr,
+                chaddr,
+                sname,
+                file,
+            },
+            time,
+        ))
+    }
+}
+
+impl TryFromGigantoRecord for Dhcp {
+    #[allow(clippy::too_many_lines)]
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(anyhow!("missing source address"));
+        };
+        let orig_port = if let Some(orig_port) = rec.get(3) {
+            orig_port.parse::<u16>().context("invalid source port")?
+        } else {
+            return Err(anyhow!("missing source port"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(4) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(anyhow!("missing destination address"));
+        };
+        let resp_port = if let Some(resp_port) = rec.get(5) {
+            resp_port
+                .parse::<u16>()
+                .context("invalid destination port")?
+        } else {
+            return Err(anyhow!("missing destination port"));
+        };
+        let proto = if let Some(proto) = rec.get(6) {
+            proto.parse::<u8>().context("invalid proto")?
+        } else {
+            return Err(anyhow!("missing protocol"));
+        };
+        let last_time = if let Some(last_time) = rec.get(7) {
+            parse_giganto_timestamp(last_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+        } else {
+            return Err(anyhow!("missing last_time"));
+        };
+        let msg_type = if let Some(msg_type) = rec.get(8) {
+            msg_type.parse::<u8>().context("invalid msg_type")?
+        } else {
+            return Err(anyhow!("missing msg_type"));
+        };
+
+        let ciaddr = if let Some(ciaddr) = rec.get(9) {
+            ciaddr.parse::<IpAddr>().context("invalid ciaddr")?
+        } else {
+            return Err(anyhow!("missing ciaddr"));
+        };
+        let yiaddr = if let Some(yiaddr) = rec.get(10) {
+            yiaddr.parse::<IpAddr>().context("invalid yiaddr")?
+        } else {
+            return Err(anyhow!("missing yiaddr"));
+        };
+        let siaddr = if let Some(siaddr) = rec.get(11) {
+            siaddr.parse::<IpAddr>().context("invalid siaddr")?
+        } else {
+            return Err(anyhow!("missing siaddr"));
+        };
+        let giaddr = if let Some(giaddr) = rec.get(12) {
+            giaddr.parse::<IpAddr>().context("invalid giaddr")?
+        } else {
+            return Err(anyhow!("missing giaddr"));
+        };
+        let subnet_mask = if let Some(subnet_mask) = rec.get(13) {
+            subnet_mask
+                .parse::<IpAddr>()
+                .context("invalid subnet_mask")?
+        } else {
+            return Err(anyhow!("missing subnet_mask"));
+        };
+        let router = if let Some(router) = rec.get(14) {
+            if router.eq("-") {
+                Vec::new()
+            } else {
+                router
+                    .split(',')
+                    .map(|t| t.parse::<IpAddr>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing router"));
+        };
+        let domain_name_server = if let Some(domain_name_server) = rec.get(15) {
+            if domain_name_server.eq("-") {
+                Vec::new()
+            } else {
+                domain_name_server
+                    .split(',')
+                    .map(|t| t.parse::<IpAddr>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing domain_name_server"));
+        };
+        let req_ip_addr = if let Some(req_ip_addr) = rec.get(16) {
+            req_ip_addr
+                .parse::<IpAddr>()
+                .context("invalid req_ip_addr")?
+        } else {
+            return Err(anyhow!("missing req_ip_addr"));
+        };
+        let lease_time = if let Some(lease_time) = rec.get(17) {
+            lease_time.parse::<u32>().context("invalid lease_time")?
+        } else {
+            return Err(anyhow!("missing lease_time"));
+        };
+        let server_id = if let Some(server_id) = rec.get(18) {
+            server_id.parse::<IpAddr>().context("invalid server_id")?
+        } else {
+            return Err(anyhow!("missing server_id"));
+        };
+        let param_req_list = if let Some(param_req_list) = rec.get(19) {
+            if param_req_list.eq("-") {
+                vec![0]
+            } else {
+                param_req_list
+                    .split(',')
+                    .map(|t| t.parse::<u8>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing param_req_list"));
+        };
+        let message = if let Some(message) = rec.get(20) {
+            message.to_string()
+        } else {
+            return Err(anyhow!("missing message"));
+        };
+        let renewal_time = if let Some(renewal_time) = rec.get(21) {
+            renewal_time
+                .parse::<u32>()
+                .context("invalid renewal_time")?
+        } else {
+            return Err(anyhow!("missing renewal_time"));
+        };
+        let rebinding_time = if let Some(rebinding_time) = rec.get(22) {
+            rebinding_time
+                .parse::<u32>()
+                .context("invalid rebinding_time")?
+        } else {
+            return Err(anyhow!("missing rebinding_time"));
+        };
+        let class_id = if let Some(class_id) = rec.get(23) {
+            if class_id.eq("-") {
+                vec![0]
+            } else {
+                class_id
+                    .split(',')
+                    .map(|t| t.parse::<u8>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing class_id"));
+        };
+        let client_id_type = if let Some(client_id_type) = rec.get(24) {
+            client_id_type
+                .parse::<u8>()
+                .context("invalid client_id_type")?
+        } else {
+            return Err(anyhow!("missing client_id_type"));
+        };
+        let client_id = if let Some(client_id) = rec.get(25) {
+            if client_id.eq("-") {
+                vec![0]
+            } else {
+                client_id
+                    .split(',')
+                    .map(|t| t.parse::<u8>().unwrap())
+                    .collect()
+            }
+        } else {
+            return Err(anyhow!("missing client_id"));
+        };
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                last_time,
+                msg_type,
+                ciaddr,
+                yiaddr,
+                siaddr,
+                giaddr,
+                subnet_mask,
+                router,
+                domain_name_server,
+                req_ip_addr,
+                lease_time,
+                server_id,
+                param_req_list,
+                message,
+                renewal_time,
+                rebinding_time,
+                class_id,
+                client_id_type,
+                client_id,
             },
             time,
         ))

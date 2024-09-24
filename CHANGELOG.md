@@ -9,21 +9,18 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Update giganto-client to version `0.17.0`. Updating to this version
-  results in the following changes.
-  - Bump dependencies.
-    - Update quinn to version `0.11`.
-    - Update rustls to version `0.23`.
-  - Fixed parsing code in zeek log and giganto log due to changes in conn,
+- Updated the version of giganto-client to version 0.20.0. Updating to this
+  version results in the following changes.
+  - Updated the version of quinn, rustls from 0.10, 0.21 to 0.11, 0.23. With the
+    update to this version, the usage of the quinn and rustls crates has
+    changed, so code affected by the update has also been modified.
+  - Modified parsing code in zeek log and giganto log due to changes in conn,
     http, smtp, ntlm, ssh, tls protocol fields.
-  - Changed `GIGANTO_VERSION` to "0.21.0-alpha.1"
+  - Support for sending `giganto` log for new protocols. (`Bootp`,`Dhcp`).
+  - Changed `GIGANTO_VERSION` to "0.21.0"
 - Change to send events in unit of 100 for protocol events.
-- Apply rustfmt's option `group_imports=StdExternalCrate`.
-  - Modify the code with the command `cargo fmt -- --config group_imports=StdExternalCrate`.
-    This command must be applied automatically or manually before all future pull
-    requests are submitted.
-  - Add `--config group_imports=StdExternalCrate` to the CI process like:
-    - `cargo fmt -- --check --config group_imports=StdExternalCrate`
+- Applied code import ordering by `StdExternalCrate`. From now on, all code is
+  expected to be formatted using `cargo fmt -- --config group_imports=StdExternalCrate`.
 
 ## [0.19.0] - 2024-05-14
 

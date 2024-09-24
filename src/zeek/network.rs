@@ -130,6 +130,8 @@ impl TryFromZeekRecord for Conn {
                 resp_bytes,
                 orig_pkts,
                 resp_pkts,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
