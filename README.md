@@ -7,7 +7,7 @@ entries to a Giganto server.
 
 ## Requirements
 
-* Giganto 0.14.0.
+* Giganto 0.21.0.
 
 ## Build
 
@@ -177,6 +177,8 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 || - tls |
 || - smb |
 || - nfs |
+|| - bootp |
+|| - dhcp |
 
 ### Sysmon Events
 

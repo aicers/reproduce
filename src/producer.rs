@@ -23,7 +23,8 @@ use giganto_client::{
         log::Log,
         netflow::{Netflow5, Netflow9},
         network::{
-            Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb,
+            Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         sysmon::{
@@ -56,7 +57,7 @@ use crate::{
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_VERSION: &str = "0.21.0-alpha.1";
+const GIGANTO_VERSION: &str = "0.21.0";
 const INTERVAL: u64 = 5;
 const BATCH_SIZE: usize = 100;
 
@@ -429,7 +430,7 @@ impl Producer {
                         )
                         .await
                 } else {
-                    bail!("mqtt's zeek is not supported".to_string());
+                    bail!("mqtt zeek log is not supported".to_string());
                 }
             }
             "ldap" => {
@@ -500,7 +501,7 @@ impl Producer {
                         )
                         .await
                 } else {
-                    bail!("smb's zeek is not supported".to_string());
+                    bail!("smb zeek log is not supported".to_string());
                 }
             }
             "nfs" => {
@@ -517,7 +518,41 @@ impl Producer {
                         )
                         .await
                 } else {
-                    bail!("nfs's zeek is not supported".to_string());
+                    bail!("nfs zeek log is not supported".to_string());
+                }
+            }
+            "bootp" => {
+                if migration {
+                    self.giganto
+                        .migration::<Bootp>(
+                            iter,
+                            RawEventKind::Bootp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    bail!("bootp zeek log is not supported".to_string());
+                }
+            }
+            "dhcp" => {
+                if migration {
+                    self.giganto
+                        .migration::<Dhcp>(
+                            iter,
+                            RawEventKind::Dhcp,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                        )
+                        .await
+                } else {
+                    bail!("dhcp zeek log is not supported".to_string());
                 }
             }
             _ => bail!("unknown zeek/migration kind"),

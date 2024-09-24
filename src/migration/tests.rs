@@ -1,7 +1,8 @@
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
+    Ssh, Tls,
 };
 
 use super::TryFromGigantoRecord;
@@ -9,7 +10,7 @@ use super::TryFromGigantoRecord;
 #[test]
 fn giganto_conn() {
     let data =
-        "1669735962.571151000	localhost	fe80::2267:7cff:fef0:cb09	133	ff02::2	134	1	sf	0.000000000	-	0	0	1	0";
+        "1669735962.571151000	localhost	fe80::2267:7cff:fef0:cb09	133	ff02::2	134	1	sf	0.000000000	-	0	0	1	0	21515	27889";
 
     let rec = stringrecord(data);
 
@@ -142,6 +143,24 @@ fn giganto_nfs() {
     let rec = stringrecord(data);
 
     assert!(Nfs::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_bootp() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	0	1	2	3	192.168.4.1	192.168.4.2	192.168.4.3	192.168.4.4	0,1,2	sname	file";
+
+    let rec = stringrecord(data);
+
+    assert!(Bootp::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_dhcp() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	0	192.168.4.1	192.168.4.2	192.168.4.3	192.168.4.4	192.168.4.5	192.168.4.11,192.168.4.22	192.168.4.33,192.168.4.44	192.168.4.6	1	192.168.4.7	0,1,2	message	1	1	0,1,2	1	0,1,2";
+
+    let rec = stringrecord(data);
+
+    assert!(Dhcp::try_from_giganto_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {
