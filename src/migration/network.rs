@@ -267,7 +267,7 @@ impl TryFromGigantoRecord for Dns {
         };
         let ttl = if let Some(ttl) = rec.get(19) {
             if ttl.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 ttl.split(',')
                     .map(|t| t.parse::<f32>().unwrap() as i32)
@@ -469,7 +469,7 @@ impl TryFromGigantoRecord for Http {
         };
         let post_body = if let Some(post_body) = rec.get(28) {
             if post_body.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 post_body
                     .split(',')
@@ -1367,7 +1367,7 @@ impl TryFromGigantoRecord for Mqtt {
         };
         let suback_reason = if let Some(suback_reason) = rec.get(13) {
             if suback_reason.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 suback_reason
                     .split(',')
@@ -1588,7 +1588,7 @@ impl TryFromGigantoRecord for Tls {
         };
         let client_cipher_suites = if let Some(client_cipher_suites) = rec.get(12) {
             if client_cipher_suites.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 client_cipher_suites
                     .split(',')
@@ -1600,7 +1600,7 @@ impl TryFromGigantoRecord for Tls {
         };
         let client_extensions = if let Some(client_extensions) = rec.get(13) {
             if client_extensions.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 client_extensions
                     .split(',')
@@ -1617,7 +1617,7 @@ impl TryFromGigantoRecord for Tls {
         };
         let extensions = if let Some(extensions) = rec.get(15) {
             if extensions.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 extensions
                     .split(',')
@@ -2032,7 +2032,7 @@ impl TryFromGigantoRecord for Bootp {
         };
         let chaddr = if let Some(chaddr) = rec.get(16) {
             if chaddr.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 chaddr
                     .split(',')
@@ -2202,7 +2202,7 @@ impl TryFromGigantoRecord for Dhcp {
         };
         let param_req_list = if let Some(param_req_list) = rec.get(19) {
             if param_req_list.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 param_req_list
                     .split(',')
@@ -2233,7 +2233,7 @@ impl TryFromGigantoRecord for Dhcp {
         };
         let class_id = if let Some(class_id) = rec.get(23) {
             if class_id.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 class_id
                     .split(',')
@@ -2252,7 +2252,7 @@ impl TryFromGigantoRecord for Dhcp {
         };
         let client_id = if let Some(client_id) = rec.get(25) {
             if client_id.eq("-") {
-                vec![0]
+                Vec::new()
             } else {
                 client_id
                     .split(',')

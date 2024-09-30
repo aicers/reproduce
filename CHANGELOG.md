@@ -5,6 +5,13 @@ file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed empty value of vector type from `vec![0]` to `Vec::new()` when sending
+  Datelake export file.
+
 ## [0.20.0] - 2024-09-25
 
 ### Changed
@@ -323,6 +330,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.20.0...main
 [0.20.0]: https://github.com/aicers/reproduce/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/aicers/reproduce/compare/0.18.0...0.19.0
 [0.18.0]: https://github.com/aicers/reproduce/compare/0.17.5...0.18.0
