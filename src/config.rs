@@ -19,7 +19,7 @@ pub enum InputType {
 pub struct Common {
     pub cert: String,
     pub key: String,
-    pub root: String,
+    pub ca_certs: Vec<String>,
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub giganto_ingest_srv_addr: SocketAddr,
     pub giganto_name: String,
