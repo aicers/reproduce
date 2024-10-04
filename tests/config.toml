@@ -1,7 +1,7 @@
 [common]
 cert = "tests/cert.pem"
 key = "tests/key.pem"
-root = "tests/root.pem"
+ca_certs = ["tests/root.pem"]
 giganto_ingest_srv_addr = "127.0.0.1:38370"
 giganto_name = "aicers"
 kind = "http"

@@ -75,13 +75,16 @@ impl Producer {
     ///
     /// Connection error, not `TimedOut`
     pub async fn new_giganto(config: &Config) -> Result<Self> {
-        let endpoint =
-            match init_giganto(&config.common.cert, &config.common.key, &config.common.root) {
-                Ok(ret) => ret,
-                Err(e) => {
-                    bail!("failed to create Giganto producer: {:?}", e);
-                }
-            };
+        let endpoint = match init_giganto(
+            &config.common.cert,
+            &config.common.key,
+            &config.common.ca_certs,
+        ) {
+            Ok(ret) => ret,
+            Err(e) => {
+                bail!("failed to create Giganto producer: {:?}", e);
+            }
+        };
         loop {
             let conn = match endpoint
                 .connect(
@@ -1778,7 +1781,7 @@ impl Giganto {
     }
 }
 
-fn init_giganto(cert: &str, key: &str, root: &str) -> Result<Endpoint> {
+fn init_giganto(cert: &str, key: &str, ca_certs: &[String]) -> Result<Endpoint> {
     let Ok((cert_pem, key_pem)) = fs::read(cert).and_then(|x| Ok((x, fs::read(key)?))) else {
         bail!(
             "failed to read (cert, key) file. cert_path:{}, key_path:{}",
@@ -1803,16 +1806,7 @@ fn init_giganto(cert: &str, key: &str, root: &str) -> Result<Endpoint> {
             .expect("invalid PEM-encoded certificate")
     };
 
-    let mut server_root = rustls::RootCertStore::empty();
-    let file = fs::read(root).expect("failed to read file");
-    let root_cert: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
-        .collect::<Result<_, _>>()
-        .context("invalid PEM-encoded certificate")?;
-    if let Some(cert) = root_cert.first() {
-        server_root
-            .add(cert.to_owned())
-            .context("failed to add root cert")?;
-    }
+    let server_root = to_root_cert(ca_certs).unwrap();
 
     let client_crypto = rustls::ClientConfig::builder()
         .with_root_certificates(server_root)
@@ -1854,6 +1848,30 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
         }
     }
     Ok(())
+}
+
+fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCertStore> {
+    let mut ca_certs_files = Vec::new();
+
+    for ca_cert in ca_certs_paths {
+        let file = fs::read(ca_cert)
+            .with_context(|| format!("failed to read root certificate file: {ca_cert}"))?;
+
+        ca_certs_files.push(file);
+    }
+    let mut root_cert = rustls::RootCertStore::empty();
+    for file in ca_certs_files {
+        let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
+            .collect::<Result<_, _>>()
+            .context("invalid PEM-encoded certificate")?;
+        if let Some(cert) = root_certs.first() {
+            root_cert
+                .add(cert.to_owned())
+                .context("failed to add root cert")?;
+        }
+    }
+
+    Ok(root_cert)
 }
 
 fn open_log<P: AsRef<Path>>(input: P) -> Result<File> {

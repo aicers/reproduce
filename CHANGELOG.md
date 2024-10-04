@@ -12,6 +12,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed empty value of vector type from `vec![0]` to `Vec::new()` when sending
   Datelake export file.
 
+### Changed
+
+- Changed configuration field names.
+  - `root` to `ca_certs` to handle multiple CA certs.
+
 ## [0.20.0] - 2024-09-25
 
 ### Changed
