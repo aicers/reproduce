@@ -16,6 +16,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Changed configuration field names.
   - `root` to `ca_certs` to handle multiple CA certs.
+- Renamed `GIGANTO_VERSION` to `REQUIRED_GIGANTO_VERSION`.
 
 ## [0.20.0] - 2024-09-25
 

@@ -57,7 +57,7 @@ use crate::{
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const GIGANTO_VERSION: &str = "0.21.0";
+const REQUIRED_GIGANTO_VERSION: &str = "0.21.0";
 const INTERVAL: u64 = 5;
 const BATCH_SIZE: usize = 100;
 
@@ -102,7 +102,7 @@ impl Producer {
                 Err(e) => panic!("{}", e),
             };
 
-            client_handshake(&conn, GIGANTO_VERSION).await?;
+            client_handshake(&conn, REQUIRED_GIGANTO_VERSION).await?;
 
             let (giganto_send, giganto_recv) = conn
                 .open_bi()
@@ -1760,7 +1760,7 @@ impl Giganto {
                 Err(e) => panic!("{}", e),
             };
 
-            client_handshake(&conn, GIGANTO_VERSION).await?;
+            client_handshake(&conn, REQUIRED_GIGANTO_VERSION).await?;
 
             let (giganto_send, giganto_recv) = conn
                 .open_bi()
