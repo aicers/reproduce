@@ -3,7 +3,7 @@
 REproduce monitors a log file or a directory of log files, and sends appended
 entries to a Giganto server.
 
-[![Coverage Status](https://codecov.io/gh/aicers/reproduce/branch/main/graph/badge.svg?token=2P7VSZ1KFV)](https://codecov.io/gh/aicers/reproduce)
+[![Coverage Status](https://codecov.io/gh/aicers/reproduce/branch/main/graph/badge.svg)](https://codecov.io/gh/aicers/reproduce)
 
 ## Requirements
 
