@@ -57,7 +57,6 @@ impl ParseSecurityLog for Wapples {
 
         Ok((
             SecuLog {
-                source: String::new(),
                 kind: info.kind,
                 log_type: info.log_type,
                 version: info.version,

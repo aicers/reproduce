@@ -66,7 +66,6 @@ impl ParseSecurityLog for Tg {
 
         Ok((
             SecuLog {
-                source: String::new(),
                 kind: info.kind,
                 log_type: info.log_type,
                 version: info.version,

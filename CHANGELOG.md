@@ -11,6 +11,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added `sensor` field to `OpLog`.
 
+### Removed
+
+- Removed the deleted `source` within the `Netflow5`, `Netflow9`, `SecuLog`.
+
 ## [0.20.1] - 2024-10-22
 
 ### Fixed
