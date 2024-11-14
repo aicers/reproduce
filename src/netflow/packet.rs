@@ -423,7 +423,6 @@ impl PktBuf {
             let dst_mask = self.data.read_u8()?;
             self.data.consume(2);
             flows.push(Netflow5 {
-                source: String::new(),
                 src_addr,
                 dst_addr,
                 next_hop,
@@ -543,7 +542,6 @@ impl PktBuf {
                 }
             }
             flows.push(Netflow9 {
-                source: String::new(),
                 sequence: header.flow_sequence,
                 source_id: header.source_id,
                 template_id,
