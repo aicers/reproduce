@@ -121,7 +121,7 @@ impl Controller {
         loop {
             let mut files = files_in_dir(
                 &self.config.common.input,
-                &dir_option.file_prefix,
+                dir_option.file_prefix.as_ref(),
                 &processed,
             );
             if files.is_empty() {
@@ -159,7 +159,7 @@ impl Controller {
         };
         let dir = crate::syslog::fetch_elastic_search(elastic).await?;
 
-        let mut files = files_in_dir(&dir, &None, &[]);
+        let mut files = files_in_dir(&dir, None.as_ref(), &[]);
         if files.is_empty() {
             bail!("no data with elastic");
         }
@@ -348,7 +348,7 @@ fn file_to_kind(path: &Path) -> &'static str {
     }
 }
 
-fn files_in_dir(path: &str, prefix: &Option<String>, skip: &[PathBuf]) -> Vec<PathBuf> {
+fn files_in_dir(path: &str, prefix: Option<&String>, skip: &[PathBuf]) -> Vec<PathBuf> {
     WalkDir::new(path)
         .follow_links(true)
         .into_iter()
