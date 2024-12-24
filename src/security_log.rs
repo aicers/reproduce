@@ -326,22 +326,22 @@ mod tests {
     #[test]
     fn parse_ubuntu() {
         let logs = [
-            r#"Oct 12 00:00:04 safe-web-red systemd[1]: logrotate.service: Succeeded."#,
-            r#"Oct 12 00:00:04 safe-web-red systemd[1]: Finished Rotate log files."#,
-            r#"Oct 12 00:00:04 safe-web-red systemd[1]: man-db.service: Succeeded."#,
-            r#"Oct 12 00:00:04 safe-web-red systemd[1]: Finished Daily man-db regeneration."#,
-            r#"Oct 12 00:17:01 safe-web-red CRON[1497802]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)"#,
-            r#"Oct 12 01:17:01 safe-web-red CRON[1509996]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)"#,
-            r#"Oct 12 01:47:20 safe-web-red systemd[1]: Starting Ubuntu Advantage Timer for running repeated jobs..."#,
-            r#"Oct 12 01:47:21 safe-web-red systemd[1]: ua-timer.service: Succeeded."#,
-            r#"Oct 12 01:47:21 safe-web-red systemd[1]: Finished Ubuntu Advantage Timer for running repeated jobs."#,
-            r#"Oct 12 02:17:01 safe-web-red CRON[1522215]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)"#,
-            r#"Oct 12 03:10:01 safe-web-red CRON[1532988]: (root) CMD (test -e /run/systemd/system || SERVICE_MODE=1 /sbin/e2scrub_all -A -r)"#,
-            r#"Oct 12 03:17:01 safe-web-red CRON[1534414]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)"#,
-            r#"Oct 12 04:08:19 safe-web-red systemd[1]: Starting Message of the Day..."#,
-            r#"Oct 12 04:08:28 safe-web-red 50-motd-news[1544912]:  * Strictly confined Kubernetes makes edge and IoT secure. Learn how MicroK8s"#,
-            r#"Oct 12 04:08:28 safe-web-red 50-motd-news[1544912]:    just raised the bar for easy, resilient and secure K8s cluster deployment."#,
-            r#"Oct 12 04:08:28 safe-web-red 50-motd-news[1544912]:    https://ubuntu.com/engage/secure-kubernetes-at-the-edge"#,
+            r"Oct 12 00:00:04 safe-web-red systemd[1]: logrotate.service: Succeeded.",
+            r"Oct 12 00:00:04 safe-web-red systemd[1]: Finished Rotate log files.",
+            r"Oct 12 00:00:04 safe-web-red systemd[1]: man-db.service: Succeeded.",
+            r"Oct 12 00:00:04 safe-web-red systemd[1]: Finished Daily man-db regeneration.",
+            r"Oct 12 00:17:01 safe-web-red CRON[1497802]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)",
+            r"Oct 12 01:17:01 safe-web-red CRON[1509996]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)",
+            r"Oct 12 01:47:20 safe-web-red systemd[1]: Starting Ubuntu Advantage Timer for running repeated jobs...",
+            r"Oct 12 01:47:21 safe-web-red systemd[1]: ua-timer.service: Succeeded.",
+            r"Oct 12 01:47:21 safe-web-red systemd[1]: Finished Ubuntu Advantage Timer for running repeated jobs.",
+            r"Oct 12 02:17:01 safe-web-red CRON[1522215]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)",
+            r"Oct 12 03:10:01 safe-web-red CRON[1532988]: (root) CMD (test -e /run/systemd/system || SERVICE_MODE=1 /sbin/e2scrub_all -A -r)",
+            r"Oct 12 03:17:01 safe-web-red CRON[1534414]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)",
+            r"Oct 12 04:08:19 safe-web-red systemd[1]: Starting Message of the Day...",
+            r"Oct 12 04:08:28 safe-web-red 50-motd-news[1544912]:  * Strictly confined Kubernetes makes edge and IoT secure. Learn how MicroK8s",
+            r"Oct 12 04:08:28 safe-web-red 50-motd-news[1544912]:    just raised the bar for easy, resilient and secure K8s cluster deployment.",
+            r"Oct 12 04:08:28 safe-web-red 50-motd-news[1544912]:    https://ubuntu.com/engage/secure-kubernetes-at-the-edge",
         ];
 
         let info = SecurityLogInfo {
