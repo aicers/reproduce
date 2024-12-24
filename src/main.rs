@@ -18,7 +18,7 @@ ARG:
 ";
 
 #[tokio::main]
-pub async fn main() -> Result<()> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let config_filename = parse();
     let config = Config::new(config_filename.as_ref())?;

@@ -94,16 +94,16 @@ mod tests {
         assert_eq!(res_info.agent_name, "agent".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));
         assert_eq!(res_info.contents, "infolog".to_string());
-        assert_eq!(res_info.sensor, "".to_string());
+        assert_eq!(res_info.sensor, String::new());
 
         assert_eq!(res_warn.agent_name, "agent".to_string());
         assert!(matches!(res_warn.log_level, OpLogLevel::Warn));
         assert_eq!(res_warn.contents, "warnlog".to_string());
-        assert_eq!(res_warn.sensor, "".to_string());
+        assert_eq!(res_warn.sensor, String::new());
 
         assert_eq!(res_error.agent_name, "agent".to_string());
         assert!(matches!(res_error.log_level, OpLogLevel::Error));
         assert_eq!(res_error.contents, "errorlog".to_string());
-        assert_eq!(res_error.sensor, "".to_string());
+        assert_eq!(res_error.sensor, String::new());
     }
 }
