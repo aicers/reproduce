@@ -2,6 +2,8 @@ mod network;
 #[cfg(test)]
 mod tests;
 
+use std::str::FromStr;
+
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use csv::StringRecord;
@@ -23,4 +25,14 @@ fn parse_giganto_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
     } else {
         Err(anyhow!("invalid timestamp: {}", timestamp))
     }
+}
+
+fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::Err> {
+    let mut v = Vec::new();
+    if s != "-" {
+        for t in s.split(',') {
+            v.push(t.parse()?);
+        }
+    }
+    Ok(v)
 }

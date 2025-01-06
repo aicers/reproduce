@@ -36,11 +36,12 @@ pub struct SecurityLogInfo {
 impl SecurityLogInfo {
     pub fn new(giganto_kind: &str) -> SecurityLogInfo {
         let info: Vec<&str> = giganto_kind.split('_').collect();
-
+        let msg =
+            "verified by `match` expression in the `Producer::send_seculog_to_giganto` method.";
         SecurityLogInfo {
-            kind: (*info.first().unwrap()).to_string(),
-            log_type: (*info.get(1).unwrap()).to_string(),
-            version: (*info.get(2).unwrap()).to_string(),
+            kind: (*info.first().expect(msg)).to_string(),
+            log_type: (*info.get(1).expect(msg)).to_string(),
+            version: (*info.get(2).expect(msg)).to_string(),
         }
     }
 }

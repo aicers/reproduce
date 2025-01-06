@@ -60,7 +60,10 @@ pub async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<Strin
     fs::create_dir_all(&dump_dir)?;
 
     event_codes.par_iter().for_each(|&event_code| {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            error!("failed to init tokio runtime for event_code {event_code}");
+            return;
+        };
         runtime.block_on(async {
             match fetch_data_from_es(event_code, elasticsearch).await {
                 Ok(data_vec) => {

@@ -6,7 +6,7 @@ use giganto_client::ingest::network::{
     Ssh, Tls,
 };
 
-use super::{parse_giganto_timestamp, TryFromGigantoRecord};
+use super::{parse_comma_separated, parse_giganto_timestamp, TryFromGigantoRecord};
 
 impl TryFromGigantoRecord for Conn {
     #[allow(clippy::too_many_lines)]
@@ -265,17 +265,14 @@ impl TryFromGigantoRecord for Dns {
         } else {
             return Err(anyhow!("missing ra_flag"));
         };
-        let ttl = if let Some(ttl) = rec.get(19) {
-            if ttl.eq("-") {
-                Vec::new()
-            } else {
-                ttl.split(',')
-                    .map(|t| t.parse::<f32>().unwrap() as i32)
-                    .collect()
+
+        let mut ttl = Vec::new();
+        let ttl_str = rec.get(19).context("missing ttl")?;
+        if ttl_str != "-" {
+            for t in ttl_str.split(',') {
+                ttl.push(t.parse::<i32>()?);
             }
-        } else {
-            return Err(anyhow!("missing ttl"));
-        };
+        }
 
         Ok((
             Self {
@@ -467,18 +464,8 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing resp_mime_types"));
         };
-        let post_body = if let Some(post_body) = rec.get(28) {
-            if post_body.eq("-") {
-                Vec::new()
-            } else {
-                post_body
-                    .split(',')
-                    .map(|t| t.parse::<u8>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing post_body"));
-        };
+        let post_body = parse_comma_separated(rec.get(28).context("missing post_body")?)
+            .context("invalid post_body")?;
         let state = if let Some(state) = rec.get(29) {
             state.to_string()
         } else {
@@ -1365,18 +1352,8 @@ impl TryFromGigantoRecord for Mqtt {
         } else {
             return Err(anyhow!("missing subscribe"));
         };
-        let suback_reason = if let Some(suback_reason) = rec.get(13) {
-            if suback_reason.eq("-") {
-                Vec::new()
-            } else {
-                suback_reason
-                    .split(',')
-                    .map(|t| t.parse::<u8>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing suback_reason"));
-        };
+        let suback_reason = parse_comma_separated(rec.get(13).context("missing suback_reason")?)
+            .context("invalid suback_reason")?;
 
         Ok((
             Self {
@@ -1586,47 +1563,24 @@ impl TryFromGigantoRecord for Tls {
         } else {
             return Err(anyhow!("missing version"));
         };
-        let client_cipher_suites = if let Some(client_cipher_suites) = rec.get(12) {
-            if client_cipher_suites.eq("-") {
-                Vec::new()
-            } else {
-                client_cipher_suites
-                    .split(',')
-                    .map(|t| t.parse::<u16>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing client_cipher_suites"));
-        };
-        let client_extensions = if let Some(client_extensions) = rec.get(13) {
-            if client_extensions.eq("-") {
-                Vec::new()
-            } else {
-                client_extensions
-                    .split(',')
-                    .map(|t| t.parse::<u16>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing client_extensions"));
-        };
+
+        let client_cipher_suites =
+            parse_comma_separated(rec.get(12).context("missing client_cipher_suites")?)
+                .context("invalid client_cipher_suites")?;
+
+        let client_extensions =
+            parse_comma_separated(rec.get(13).context("missing client_extensions")?)
+                .context("invalid client_extensions")?;
+
         let cipher = if let Some(cipher) = rec.get(14) {
             cipher.parse::<u16>().context("invalid cipher")?
         } else {
             return Err(anyhow!("missing cipher"));
         };
-        let extensions = if let Some(extensions) = rec.get(15) {
-            if extensions.eq("-") {
-                Vec::new()
-            } else {
-                extensions
-                    .split(',')
-                    .map(|t| t.parse::<u16>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing extensions"));
-        };
+
+        let extensions = parse_comma_separated(rec.get(15).context("missing extensions")?)
+            .context("invalid extensions")?;
+
         let ja3s = if let Some(ja3s) = rec.get(16) {
             ja3s.to_string()
         } else {
@@ -2030,18 +1984,10 @@ impl TryFromGigantoRecord for Bootp {
         } else {
             return Err(anyhow!("missing giaddr"));
         };
-        let chaddr = if let Some(chaddr) = rec.get(16) {
-            if chaddr.eq("-") {
-                Vec::new()
-            } else {
-                chaddr
-                    .split(',')
-                    .map(|t| t.parse::<u8>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing chaddr"));
-        };
+
+        let chaddr = parse_comma_separated(rec.get(16).context("missing chaddr")?)
+            .context("invalid chaddr")?;
+
         let sname = if let Some(sname) = rec.get(17) {
             sname.to_string()
         } else {
@@ -2159,30 +2105,14 @@ impl TryFromGigantoRecord for Dhcp {
         } else {
             return Err(anyhow!("missing subnet_mask"));
         };
-        let router = if let Some(router) = rec.get(14) {
-            if router.eq("-") {
-                Vec::new()
-            } else {
-                router
-                    .split(',')
-                    .map(|t| t.parse::<IpAddr>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing router"));
-        };
-        let domain_name_server = if let Some(domain_name_server) = rec.get(15) {
-            if domain_name_server.eq("-") {
-                Vec::new()
-            } else {
-                domain_name_server
-                    .split(',')
-                    .map(|t| t.parse::<IpAddr>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing domain_name_server"));
-        };
+
+        let router = parse_comma_separated(rec.get(14).context("missing router")?)
+            .context("invalid router")?;
+
+        let domain_name_server =
+            parse_comma_separated(rec.get(15).context("missing domain_name_server")?)
+                .context("invalid domain_name_server")?;
+
         let req_ip_addr = if let Some(req_ip_addr) = rec.get(16) {
             req_ip_addr
                 .parse::<IpAddr>()
@@ -2200,18 +2130,10 @@ impl TryFromGigantoRecord for Dhcp {
         } else {
             return Err(anyhow!("missing server_id"));
         };
-        let param_req_list = if let Some(param_req_list) = rec.get(19) {
-            if param_req_list.eq("-") {
-                Vec::new()
-            } else {
-                param_req_list
-                    .split(',')
-                    .map(|t| t.parse::<u8>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing param_req_list"));
-        };
+
+        let param_req_list = parse_comma_separated(rec.get(19).context("missing param_req_list")?)
+            .context("invalid param_req_list")?;
+
         let message = if let Some(message) = rec.get(20) {
             message.to_string()
         } else {
@@ -2231,18 +2153,10 @@ impl TryFromGigantoRecord for Dhcp {
         } else {
             return Err(anyhow!("missing rebinding_time"));
         };
-        let class_id = if let Some(class_id) = rec.get(23) {
-            if class_id.eq("-") {
-                Vec::new()
-            } else {
-                class_id
-                    .split(',')
-                    .map(|t| t.parse::<u8>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing class_id"));
-        };
+
+        let class_id = parse_comma_separated(rec.get(23).context("missing class_id")?)
+            .context("invalid class_id")?;
+
         let client_id_type = if let Some(client_id_type) = rec.get(24) {
             client_id_type
                 .parse::<u8>()
@@ -2250,18 +2164,8 @@ impl TryFromGigantoRecord for Dhcp {
         } else {
             return Err(anyhow!("missing client_id_type"));
         };
-        let client_id = if let Some(client_id) = rec.get(25) {
-            if client_id.eq("-") {
-                Vec::new()
-            } else {
-                client_id
-                    .split(',')
-                    .map(|t| t.parse::<u8>().unwrap())
-                    .collect()
-            }
-        } else {
-            return Err(anyhow!("missing client_id"));
-        };
+        let client_id = parse_comma_separated(rec.get(25).context("missing client_id")?)
+            .context("invalid client_id")?;
 
         Ok((
             Self {
