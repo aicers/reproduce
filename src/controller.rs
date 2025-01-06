@@ -7,7 +7,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use tracing::{error, info, warn};
 use walkdir::WalkDir;
 
@@ -168,8 +168,8 @@ impl Controller {
         for file in files {
             let mut producer = producer(&self.config).await;
             info!("{file:?}");
-            let kind = file_to_kind(&file).to_string();
-            self.run_single(file.as_path(), &mut producer, &kind, false)
+            let kind = file_to_kind(&file)?;
+            self.run_single(file.as_path(), &mut producer, kind, false)
                 .await?;
             std::fs::remove_file(&file)?;
             producer
@@ -321,12 +321,16 @@ impl Controller {
     }
 }
 
-fn file_to_kind(path: &Path) -> &'static str {
-    let re = regex::Regex::new(r"event(\d+)_log.csv").unwrap();
-    let file_name = path.file_name().unwrap().to_str().unwrap();
+fn file_to_kind(path: &Path) -> Result<&str> {
+    let re = regex::Regex::new(r"event(\d+)_log.csv")?;
+    let file_name = path
+        .file_name()
+        .with_context(|| format!("invalid file path: {}", path.display()))?
+        .to_str()
+        .with_context(|| format!("invalid unicode: {}", path.display()))?;
     if let Some(cap) = re.captures(file_name) {
         let num = &cap[1];
-        match num {
+        return Ok(match num {
             "1" => "process_create",
             "2" => "file_create_time",
             "3" => "network_connect",
@@ -342,10 +346,9 @@ fn file_to_kind(path: &Path) -> &'static str {
             "25" => "process_tamper",
             "26" => "file_delete_detected",
             _ => "",
-        }
-    } else {
-        ""
-    }
+        });
+    };
+    Ok("")
 }
 
 fn files_in_dir(path: &str, prefix: Option<&str>, skip: &[PathBuf]) -> Vec<PathBuf> {

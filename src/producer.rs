@@ -1806,7 +1806,7 @@ fn init_giganto(cert: &str, key: &str, ca_certs: &[String]) -> Result<Endpoint> 
             .expect("invalid PEM-encoded certificate")
     };
 
-    let server_root = to_root_cert(ca_certs).unwrap();
+    let server_root = to_root_cert(ca_certs)?;
 
     let client_crypto = rustls::ClientConfig::builder()
         .with_root_certificates(server_root)

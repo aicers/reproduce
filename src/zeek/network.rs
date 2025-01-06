@@ -296,9 +296,15 @@ impl TryFromZeekRecord for Dns {
             if ttl.eq("-") {
                 vec![0]
             } else {
-                ttl.split(',')
-                    .map(|t| t.parse::<f32>().unwrap() as i32)
-                    .collect()
+                let mut ttl_vec = Vec::new();
+                for t in ttl.split(',') {
+                    ttl_vec.push(
+                        t.parse::<f32>()?
+                            .to_i32()
+                            .context("failed to convert f32 to i32")?,
+                    );
+                }
+                ttl_vec
             }
         } else {
             return Err(anyhow!("missing ttl"));
