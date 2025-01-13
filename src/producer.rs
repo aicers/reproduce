@@ -1790,7 +1790,7 @@ fn init_giganto(cert: &str, key: &str, ca_certs: &[String]) -> Result<Endpoint> 
         );
     };
 
-    let pv_key = if Path::new(key).extension().map_or(false, |x| x == "der") {
+    let pv_key = if Path::new(key).extension().is_some_and(|x| x == "der") {
         PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pem))
     } else {
         rustls_pemfile::private_key(&mut &*key_pem)
@@ -1798,7 +1798,7 @@ fn init_giganto(cert: &str, key: &str, ca_certs: &[String]) -> Result<Endpoint> 
             .expect("no private keys found")
     };
 
-    let cert_chain = if Path::new(cert).extension().map_or(false, |x| x == "der") {
+    let cert_chain = if Path::new(cert).extension().is_some_and(|x| x == "der") {
         vec![CertificateDer::from(cert_pem)]
     } else {
         rustls_pemfile::certs(&mut &*cert_pem)
