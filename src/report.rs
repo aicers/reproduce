@@ -82,7 +82,7 @@ impl Report {
         }
 
         let report_dir = Path::new("/report");
-        let topic = &&self.config.common.kind;
+        let topic = format!("{}.report", &self.config.common.kind);
         let report_path = if report_dir.is_dir() {
             report_dir.join(topic)
         } else {
