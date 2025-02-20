@@ -231,7 +231,8 @@ impl Controller {
                             file.polling_mode,
                             dir_polling_mode,
                             file.export_from_giganto,
-                            running.clone(),
+                            running,
+                            &mut report,
                         )
                         .await?
                 } else if kind == OPERATION_LOG {
@@ -256,7 +257,8 @@ impl Controller {
                             dir_polling_mode,
                             offset,
                             count_sent,
-                            running.clone(),
+                            running,
+                            &mut report,
                         )
                         .await?
                 } else if SYSMON_KINDS.contains(&kind) {
@@ -271,11 +273,12 @@ impl Controller {
                             dir_polling_mode,
                             kind,
                             running,
+                            &mut report,
                         )
                         .await?
                 } else if NETFLOW_KIND.contains(&kind) {
                     producer
-                        .send_netflow_to_giganto(filename, offset, count_sent, running)
+                        .send_netflow_to_giganto(filename, offset, count_sent, running, &mut report)
                         .await?
                 } else if SUPPORTED_SECURITY_KIND.contains(&kind) {
                     let seculog = File::open(filename)?;
@@ -288,6 +291,7 @@ impl Controller {
                             offset,
                             count_sent,
                             running,
+                            &mut report,
                         )
                         .await?
                 } else {

@@ -17,6 +17,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - If `log_dir` is specified in debug mode, logs are sent to both stdout and
     the directory.
 
+### Changed
+
+- Extended report statistics to all log processing functions.
+
 ## [0.21.1] - 2025-01-25
 
 ### Changed
