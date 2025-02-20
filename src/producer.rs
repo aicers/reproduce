@@ -144,6 +144,7 @@ impl Producer {
         dir_polling_mode: bool,
         migration: Option<bool>,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64> {
         let Some(migration) = migration else {
             bail!("export_from_giganto parameter is required");
@@ -160,6 +161,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -172,6 +174,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -187,6 +190,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -199,6 +203,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -214,6 +219,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -226,6 +232,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -241,6 +248,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -253,6 +261,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -268,6 +277,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -280,6 +290,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -295,6 +306,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -307,6 +319,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -322,6 +335,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -334,6 +348,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -349,6 +364,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -361,6 +377,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -376,6 +393,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -388,6 +406,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -403,6 +422,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -415,6 +435,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -430,6 +451,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -447,6 +469,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -459,6 +482,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -474,6 +498,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -486,6 +511,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 }
@@ -501,6 +527,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -518,6 +545,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -535,6 +563,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -552,6 +581,7 @@ impl Producer {
                             file_polling_mode,
                             dir_polling_mode,
                             running,
+                            report,
                         )
                         .await
                 } else {
@@ -574,6 +604,7 @@ impl Producer {
         skip: u64,
         count_sent: u64,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64> {
         self.giganto
             .send_oplog(
@@ -584,6 +615,7 @@ impl Producer {
                 skip,
                 count_sent,
                 running,
+                report,
             )
             .await
     }
@@ -601,6 +633,7 @@ impl Producer {
         dir_polling_mode: bool,
         kind: &str,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64> {
         match kind {
             "process_create" => {
@@ -613,6 +646,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -626,6 +660,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -639,6 +674,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -652,6 +688,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -665,6 +702,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -678,6 +716,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -691,6 +730,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -704,6 +744,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -717,6 +758,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -730,6 +772,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -743,6 +786,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -756,6 +800,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -769,6 +814,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -782,6 +828,7 @@ impl Producer {
                         file_polling_mode,
                         dir_polling_mode,
                         running,
+                        report,
                     )
                     .await
             }
@@ -798,6 +845,7 @@ impl Producer {
         skip: u64,
         count_sent: u64,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64> {
         match self.giganto.giganto_info.kind.as_str() {
             "netflow5" => {
@@ -808,6 +856,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -819,6 +868,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -838,6 +888,7 @@ impl Producer {
         skip: u64,
         count_sent: u64,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64> {
         match self.giganto.giganto_info.kind.as_str() {
             "wapples_fw_6.0" => {
@@ -849,6 +900,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -861,6 +913,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -873,6 +926,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -885,6 +939,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -897,6 +952,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -909,6 +965,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -921,6 +978,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -933,6 +991,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -945,6 +1004,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -957,6 +1017,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -969,6 +1030,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -981,6 +1043,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -993,6 +1056,7 @@ impl Producer {
                         skip,
                         count_sent,
                         running,
+                        report,
                     )
                     .await
             }
@@ -1054,6 +1118,7 @@ impl Giganto {
         file_polling_mode: bool,
         dir_polling_mode: bool,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64>
     where
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
@@ -1064,6 +1129,7 @@ impl Giganto {
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         let mut buf = Vec::new();
+        report.start();
 
         while running.load(Ordering::SeqCst) {
             let next_pos = zeek_iter.reader().position().clone();
@@ -1082,6 +1148,8 @@ impl Giganto {
                                 }
 
                                 let record_data = bincode::serialize(&event)?;
+                                report.process(record.as_slice().len());
+
                                 buf.push((timestamp, record_data));
                                 if buf.len() >= BATCH_SIZE {
                                     match self.send_event_in_batch(&buf).await {
@@ -1138,6 +1206,10 @@ impl Giganto {
             failed_cnt
         );
 
+        if let Err(e) = report.end() {
+            warn!("cannot write report: {e}");
+        }
+
         Ok(pos.line())
     }
 
@@ -1150,6 +1222,7 @@ impl Giganto {
         file_polling_mode: bool,
         dir_polling_mode: bool,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64>
     where
         T: Serialize + TryFromGigantoRecord + Unpin + Debug,
@@ -1160,6 +1233,7 @@ impl Giganto {
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         let mut buf = Vec::new();
+        report.start();
 
         while running.load(Ordering::SeqCst) {
             let next_pos = giganto_iter.reader().position().clone();
@@ -1178,6 +1252,8 @@ impl Giganto {
                                 }
 
                                 let record_data = bincode::serialize(&event)?;
+                                report.process(record.as_slice().len());
+
                                 buf.push((timestamp, record_data));
                                 if buf.len() >= BATCH_SIZE {
                                     match self.send_event_in_batch(&buf).await {
@@ -1233,6 +1309,11 @@ impl Giganto {
             success_cnt,
             failed_cnt
         );
+
+        if let Err(e) = report.end() {
+            warn!("cannot write report: {e}");
+        }
+
         Ok(pos.line())
     }
 
@@ -1245,6 +1326,7 @@ impl Giganto {
         skip: u64,
         count_sent: u64,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64> {
         info!("send oplog");
         let mut lines = reader.lines();
@@ -1252,6 +1334,7 @@ impl Giganto {
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
         let mut buf = Vec::new();
+        report.start();
 
         while running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = lines.next() {
@@ -1274,6 +1357,8 @@ impl Giganto {
                 }
 
                 let record_data = bincode::serialize(&oplog_data)?;
+                report.process(line.len());
+
                 buf.push((timestamp, record_data));
                 if buf.len() >= BATCH_SIZE {
                     match self.send_event_in_batch(&buf).await {
@@ -1308,6 +1393,10 @@ impl Giganto {
             cnt, success_cnt, failed_cnt
         );
 
+        if let Err(e) = report.end() {
+            warn!("cannot write report: {e}");
+        }
+
         Ok(cnt)
     }
 
@@ -1320,6 +1409,7 @@ impl Giganto {
         file_polling_mode: bool,
         dir_polling_mode: bool,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64>
     where
         T: Serialize + TryFromSysmonRecord + Unpin + Debug,
@@ -1331,6 +1421,7 @@ impl Giganto {
         let mut last_record = StringRecord::new();
         let mut time_serial = 0_i64;
         let mut buf = Vec::new();
+        report.start();
 
         while running.load(Ordering::SeqCst) {
             let next_pos = sysmon_iter.reader().position().clone();
@@ -1353,6 +1444,8 @@ impl Giganto {
                                 }
 
                                 let record_data = bincode::serialize(&event)?;
+                                report.process(record.as_slice().len());
+
                                 buf.push((timestamp, record_data));
                                 if buf.len() >= BATCH_SIZE {
                                     match self.send_event_in_batch(&buf).await {
@@ -1410,9 +1503,14 @@ impl Giganto {
             failed_cnt
         );
 
+        if let Err(e) = report.end() {
+            warn!("cannot write report: {e}");
+        }
+
         Ok(pos.line())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn send_netflow<T>(
         &mut self,
         protocol: RawEventKind,
@@ -1420,6 +1518,7 @@ impl Giganto {
         skip: u64,
         count_sent: u64,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64>
     where
         T: Serialize + ParseNetflowDatasets + Unpin + Debug,
@@ -1445,6 +1544,7 @@ impl Giganto {
         let mut timestamp_old = 0_u32;
         let mut nanos = 1_u32;
         let mut buf = Vec::new();
+        report.start();
 
         while let Ok(pkt) = handle.next_packet() {
             pkt_cnt += 1;
@@ -1488,6 +1588,8 @@ impl Giganto {
             }
             for (timestamp, event) in events {
                 let record_data = bincode::serialize(&event)?;
+                report.process(pkt.len());
+
                 buf.push((timestamp, record_data));
                 if buf.len() >= BATCH_SIZE {
                     match self.send_event_in_batch(&buf).await {
@@ -1529,6 +1631,11 @@ impl Giganto {
                 }
             }
         }
+
+        if let Err(e) = report.end() {
+            warn!("cannot write report: {e}");
+        }
+
         Ok(pkt_cnt)
     }
 
@@ -1540,6 +1647,7 @@ impl Giganto {
         skip: u64,
         count_sent: u64,
         running: Arc<AtomicBool>,
+        report: &mut Report,
     ) -> Result<u64>
     where
         T: Serialize + ParseSecurityLog + Unpin + Debug,
@@ -1551,6 +1659,8 @@ impl Giganto {
         let mut failed_cnt = 0u64;
         let mut time_serial = 0_i64;
         let mut buf = Vec::new();
+        report.start();
+
         while running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = lines.next() {
                 cnt += 1;
@@ -1579,6 +1689,8 @@ impl Giganto {
                 }
 
                 let record_data = bincode::serialize(&seculog_data)?;
+                report.process(line.len());
+
                 buf.push((timestamp, record_data));
                 if buf.len() >= BATCH_SIZE {
                     match self.send_event_in_batch(&buf).await {
@@ -1611,6 +1723,10 @@ impl Giganto {
             "last line: {}, success: {}, failed: {}",
             cnt, success_cnt, failed_cnt
         );
+
+        if let Err(e) = report.end() {
+            warn!("cannot write report: {e}");
+        }
 
         Ok(cnt)
     }
