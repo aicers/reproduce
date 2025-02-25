@@ -1329,6 +1329,7 @@ dependencies = [
  "strum_macros",
  "tokio",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
  "walkdir",
 ]

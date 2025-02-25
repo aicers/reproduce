@@ -444,7 +444,7 @@ impl PktBuf {
                 sequence: header.flow_sequence,
                 engine_type: header.engine_type,
                 engine_id: header.engine_id,
-                sampling_mode: (header.sampling_interval & 0xC000 >> 8)
+                sampling_mode: ((header.sampling_interval & 0xC000) >> 8)
                     .try_into()
                     .unwrap_or_default(),
                 sampling_rate: header.sampling_interval & 0x3FFF,

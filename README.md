@@ -7,7 +7,7 @@ entries to a Giganto server.
 
 ## Requirements
 
-* Giganto 0.21.0.
+- Giganto 0.23.0 or higher.
 
 ## Usage
 
@@ -17,82 +17,83 @@ To start REproduce, provide a path to the TOML configuration file:
 reproduce <CONFIG_PATH>
 ```
 
-* `<CONFIG_PATH>`: Path to the TOML configuration file.
+- `<CONFIG_PATH>`: Path to the TOML configuration file.
 
 To support pcap parser for netflow v9, templates would be read from
 the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ## Configuration
 
-* Below is a detailed breakdown of all available configuration fields.
+- Below is a detailed breakdown of all available configuration fields.
 
 ### [Common]
 
-* This section is required and must be configured properly for REproduce to
+- This section is required and must be configured properly for REproduce to
   function.
 
 <!-- markdownlint-disable -->
 
-| Field                     | Description                                                                | Required  | Default    |
-| ------------------------- | -------------------------------------------------------------------------- | --------- | ---------- |
-| `cert`                    | Path to the private key file                                               | Yes       | -          |
-| `key`                     | Path to the certificate file                                               | Yes       | -          |
-| `ca_certs`                | List of paths to CA certificate files                                      | Yes       | -          |
-| `giganto_ingest_srv_addr` | IP address and port of the Giganto ingest server                           | Yes       | -          |
-| `giganto_name`            | Name of Giganto server                                                     | Yes       | -          |
-| `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | No        | "" (empty) |
-| `input`                   | Specifies the input source: file, directory, or elastic                    | Yes       | -          |
-| `report`                  | Enables or disables reporting of transfer statistics                       | No        | false      |
+| Field                     | Description                                                                | Required | Default    |
+| ------------------------- | -------------------------------------------------------------------------- | -------- | ---------- |
+| `cert`                    | Path to the private key file                                               | Yes      | -          |
+| `key`                     | Path to the certificate file                                               | Yes      | -          |
+| `ca_certs`                | List of paths to CA certificate files                                      | Yes      | -          |
+| `giganto_ingest_srv_addr` | IP address and port of the Giganto ingest server                           | Yes      | -          |
+| `giganto_name`            | Name of Giganto server                                                     | Yes      | -          |
+| `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | No       | "" (empty) |
+| `input`                   | Specifies the input source: file, directory, or elastic                    | Yes      | -          |
+| `report`                  | Enables or disables reporting of transfer statistics                       | No       | false      |
+| `log_dir`                 | Directory for log files. If not specified, logs are sent to stdout.        | No       | -          |
 
 <!-- markdownlint-enable -->
 
 ### [File]
 
-* This section is required only if you are using file-based input.
+- This section is required only if you are using file-based input.
 
 <!-- markdownlint-disable -->
 
-| Field                       | Description                                                | Required  | Default |
-| --------------------------- | ---------------------------------------------------------- | --------- | ------- |
-| `export_from_giganto`       | Enables processing of files exported from Giganto          | No        | false   |
-| `polling_mode`              | Enables or disables file polling mode                      | No        | false   |
-| `transfer_count`            | Number of lines or packets to send                         | No        | -       |
-| `transfer_skip_count`       | Number of lines or packets to skip before sending          | No        | -       |
-| `last_transfer_line_suffix` | Suffix used for the file storing the last transferred line | No        | -       |
+| Field                       | Description                                                | Required | Default |
+| --------------------------- | ---------------------------------------------------------- | -------- | ------- |
+| `export_from_giganto`       | Enables processing of files exported from Giganto          | No       | false   |
+| `polling_mode`              | Enables or disables file polling mode                      | No       | false   |
+| `transfer_count`            | Number of lines or packets to send                         | No       | -       |
+| `transfer_skip_count`       | Number of lines or packets to skip before sending          | No       | -       |
+| `last_transfer_line_suffix` | Suffix used for the file storing the last transferred line | No       | -       |
 
 <!-- markdownlint-enable -->
 
 ### [Directory]
 
-* This section is required only if you are processing log files from a
+- This section is required only if you are processing log files from a
   directory.
 
 <!-- markdownlint-disable -->
 
-| Field          | Description                                     | Required  | Default |
-| -------------- | ----------------------------------------------- | --------- | ------- |
-| `file_prefix`  | Prefix for filenames when using directory input | No        | -       |
-| `polling_mode` | Enables or disables directory polling mode      | No        | false   |
+| Field          | Description                                     | Required | Default |
+| -------------- | ----------------------------------------------- | -------- | ------- |
+| `file_prefix`  | Prefix for filenames when using directory input | No       | -       |
+| `polling_mode` | Enables or disables directory polling mode      | No       | false   |
 
 <!-- markdownlint-enable -->
 
 ### [Elastic]
 
-* This section is required only if you are fetching logs from an Elasticsearch
+- This section is required only if you are fetching logs from an Elasticsearch
   server.
 
 <!-- markdownlint-disable -->
 
-| Field          | Description                                                  | Required  | Default |
-| -------------- | ------------------------------------------------------------ | --------- | ------- |
-| `url`          | IP address and port of the Elasticsearch server              | Yes       | -       |
-| `event_codes`  | List of target event codes                                   | Yes       | -       |
-| `indices`      | List of Elasticsearch indices to query                       | Yes       | -       |
-| `start_time`   | The start time of target events                              | Yes       | -       |
-| `end_time`     | The end time of target events                                | Yes       | -       |
-| `size`         | Maximum number of records to fetch per query                 | Yes       | -       |
-| `dump_dir`     | Path to the directory where CSV files are saved              | Yes       | -       |
-| `elastic_auth` | Elasticsearch authentication credentials (username:password) | Yes       | -       |
+| Field          | Description                                                  | Required | Default |
+| -------------- | ------------------------------------------------------------ | -------- | ------- |
+| `url`          | IP address and port of the Elasticsearch server              | Yes      | -       |
+| `event_codes`  | List of target event codes                                   | Yes      | -       |
+| `indices`      | List of Elasticsearch indices to query                       | Yes      | -       |
+| `start_time`   | The start time of target events                              | Yes      | -       |
+| `end_time`     | The end time of target events                                | Yes      | -       |
+| `size`         | Maximum number of records to fetch per query                 | Yes      | -       |
+| `dump_dir`     | Path to the directory where CSV files are saved              | Yes      | -       |
+| `elastic_auth` | Elasticsearch authentication credentials (username:password) | Yes      | -       |
 
 <!-- markdownlint-enable -->
 
@@ -100,7 +101,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Convert a Zeek log file and send it to a Giganto server
 
-* Sends a Zeek log file to the Giganto server, setting `kind` to `dns`.
+- Sends a Zeek log file to the Giganto server, setting `kind` to `dns`.
 
   ```toml
   [common]
@@ -115,7 +116,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Send an operation log to a Giganto server
 
-* Sends an operation log file to the Giganto server using the fixed data kind
+- Sends an operation log file to the Giganto server using the fixed data kind
   oplog.
 
   ```toml
@@ -131,7 +132,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Send a Giganto export file to a Giganto server
 
-* Sends a previously exported Giganto file to the Giganto server.
+- Sends a previously exported Giganto file to the Giganto server.
 
   ```toml
   [common]
@@ -149,7 +150,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Send a Sysmon CSV file to a Giganto server
 
-* Sends a Sysmon log file (CSV format) to the Giganto server, specifying the
+- Sends a Sysmon log file (CSV format) to the Giganto server, specifying the
   data kind as image_load.
 
   ```toml
@@ -165,7 +166,7 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Send Sysmon data from Elasticsearch to a Giganto server
 
-* Queries Sysmon event logs from an Elasticsearch server and sends them to the
+- Queries Sysmon event logs from an Elasticsearch server and sends them to the
   Giganto server.
 
   ```toml
@@ -190,69 +191,69 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ## Defined kind type
 
-* Below is a list of supported `kind` values for different event categories.
+- Below is a list of supported `kind` values for different event categories.
 
 ### Network Events
 
-| Category | Kind |
-| --- | --- |
-| Protocol | conn |
-|| http |
-|| rdp |
-|| smtp |
-|| dns |
-|| ntlm |
-|| kerberos |
-|| ssh |
-|| dce_rpc |
-|| ftp |
-|| mqtt |
-|| ldap |
-|| tls |
-|| smb |
-|| nfs |
-|| bootp |
-|| dhcp |
+| Category | Kind     |
+| -------- | -------- |
+| Protocol | conn     |
+|          | http     |
+|          | rdp      |
+|          | smtp     |
+|          | dns      |
+|          | ntlm     |
+|          | kerberos |
+|          | ssh      |
+|          | dce_rpc  |
+|          | ftp      |
+|          | mqtt     |
+|          | ldap     |
+|          | tls      |
+|          | smb      |
+|          | nfs      |
+|          | bootp    |
+|          | dhcp     |
 
 ### Sysmon Events
 
-| Category | Kind | Number |
-| --- | --- | --- |
-| Event name | process_create | event 1 |
-|| file_create_time | event 2 |
-|| network_connect | event 3 |
-|| process_terminate | event 5 |
-|| image_load | event 7 |
-|| file_create | event 11 |
-|| registry_value_set | event 13 |
-|| registry_key_rename | event 14 |
-|| file_create_stream_hash | event 15 |
-|| pipe_event | event 17 |
-|| dns_query | event 22 |
-|| file_delete | event 23 |
-|| process_tamper | event 25 |
-|| file_delete_detected | event 26 |
+| Category   | Kind                    | Number   |
+| ---------- | ----------------------- | -------- |
+| Event name | process_create          | event 1  |
+|            | file_create_time        | event 2  |
+|            | network_connect         | event 3  |
+|            | process_terminate       | event 5  |
+|            | image_load              | event 7  |
+|            | file_create             | event 11 |
+|            | registry_value_set      | event 13 |
+|            | registry_key_rename     | event 14 |
+|            | file_create_stream_hash | event 15 |
+|            | pipe_event              | event 17 |
+|            | dns_query               | event 22 |
+|            | file_delete             | event 23 |
+|            | process_tamper          | event 25 |
+|            | file_delete_detected    | event 26 |
 
 ### Netflow, Logs
 
-| Category | Kind | Description |
-| --- | --- | --- |
-| OpLog | oplog | Operation log of applications |
-| Netflow | netflow5 | Netflow v5 pcap |
-|| netflow9 | Netflow v9 pcap |
-| Security log | wapples_fw_6.0 | PentaSecurity |
-|| mf2_ips_4.0 | SECU-I |
-|| sniper_ips_8.0 | WINS |
-|| aiwaf_waf_4.1 | Monitorapp |
-|| tg_ips_2.7 | Ahnlab |
-|| vforce_ips_4.6 | NexG |
-|| srx_ips_15.1 | Juniper |
-|| sonicwall_fw_6.5 | SonicWALL |
-|| fgt_ips_6.2 | Fortinet |
-|| shadowwall_ips_5.0 | Duruan |
-|| axgate_fw_2.1 | AXGATE |
-| OS log | ubuntu_syslog_20.04 | Ubuntu 20.04 |
-| Web log | nginx_accesslog_1.25.2 | NGINX |
+| Category     | Kind                   | Description                   |
+| ------------ | ---------------------- | ----------------------------- |
+| OpLog        | oplog                  | Operation log of applications |
+| Netflow      | netflow5               | Netflow v5 pcap               |
+|              | netflow9               | Netflow v9 pcap               |
+| Security log | wapples_fw_6.0         | PentaSecurity                 |
+|              | mf2_ips_4.0            | SECU-I                        |
+|              | sniper_ips_8.0         | WINS                          |
+|              | aiwaf_waf_4.1          | Monitorapp                    |
+|              | tg_ips_2.7             | Ahnlab                        |
+|              | vforce_ips_4.6         | NexG                          |
+|              | srx_ips_15.1           | Juniper                       |
+|              | sonicwall_fw_6.5       | SonicWALL                     |
+|              | fgt_ips_6.2            | Fortinet                      |
+|              | shadowwall_ips_5.0     | Duruan                        |
+|              | axgate_fw_2.1          | AXGATE                        |
+| OS log       | ubuntu_syslog_20.04    | Ubuntu 20.04                  |
+| Web log      | nginx_accesslog_1.25.2 | NGINX                         |
 
 ## License
 
