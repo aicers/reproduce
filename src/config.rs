@@ -1,4 +1,7 @@
-use std::{net::SocketAddr, path::Path};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde::{de::Error, Deserialize, Deserializer};
@@ -26,6 +29,7 @@ pub struct Common {
     pub kind: String,
     pub input: String,
     pub report: bool,
+    pub log_dir: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
