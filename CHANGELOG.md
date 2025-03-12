@@ -20,6 +20,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Extended report statistics to all log processing functions.
+- Renamed the log file from reproduce.log to data_broker.log.
 
 ## [0.21.1] - 2025-01-25
 

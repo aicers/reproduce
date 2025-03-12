@@ -47,6 +47,8 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 <!-- markdownlint-enable -->
 
+- `log_dir`: The log file is named data_broker.log.
+
 ### [File]
 
 - This section is required only if you are using file-based input.
@@ -105,11 +107,11 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
   ```toml
   [common]
-  cert = "/CA/cert.pem"
-  key = "/CA/key.pem"
-  ca_certs = ["/CA/ca_cert.pem"]
+  cert = "/opt/clumit/keys/reproduce_cert.pem"
+  key = "/opt/clumit/keys/reproduce_key.pem"
+  ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
-  giganto_name = "aicers"
+  giganto_name = "data-store"
   kind = "dns"                                # Data kind (see `Network Events` section).
   input = "/path/to/zeek_file"
   ```
@@ -121,11 +123,11 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
   ```toml
   [common]
-  cert = "/CA/cert.pem"
-  key = "/CA/key.pem"
-  ca_certs = ["/CA/ca_cert.pem"]
+  cert = "/opt/clumit/keys/reproduce_cert.pem"
+  key = "/opt/clumit/keys/reproduce_key.pem"
+  ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
-  giganto_name = "aicers"
+  giganto_name = "data-store"
   kind = "oplog"                              # Fixed data kind.
   input = "/path/to/oplog_file"
   ```
@@ -136,11 +138,11 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
   ```toml
   [common]
-  cert = "/CA/cert.pem"
-  key = "/CA/key.pem"
-  ca_certs = ["/CA/ca_cert.pem"]
+  cert = "/opt/clumit/keys/reproduce_cert.pem"
+  key = "/opt/clumit/keys/reproduce_key.pem"
+  ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
-  giganto_name = "aicers"
+  giganto_name = "data-store"
   kind = "http"                               # Data kind (see `Network Events` section).
   input = "/path/to/giganto_export_file"
 
@@ -155,11 +157,11 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
   ```toml
   [common]
-  cert = "/CA/cert.pem"
-  key = "/CA/key.pem"
-  ca_certs = ["/CA/ca_cert.pem"]
+  cert = "/opt/clumit/keys/reproduce_cert.pem"
+  key = "/opt/clumit/keys/reproduce_key.pem"
+  ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
-  giganto_name = "aicers"
+  giganto_name = "data-store"
   kind = "image_load"                         # Data kind (see `Sysmon Events` section).
   input = "/path/to/sysmon_file"
   ```
@@ -171,11 +173,11 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
   ```toml
   [common]
-  cert = "/CA/cert.pem"
-  key = "/CA/key.pem"
-  ca_certs = ["/CA/ca_cert.pem"]
+  cert = "/opt/clumit/keys/reproduce_cert.pem"
+  key = "/opt/clumit/keys/reproduce_key.pem"
+  ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
-  giganto_name = "aicers"
+  giganto_name = "data-store"
   input = "elastic"                          # Fixed input type.
 
   [elastic]
