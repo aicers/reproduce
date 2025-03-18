@@ -10,7 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added a `log_dir` configuration to the common section.
-  - If specified, logs will be written to a file named 'reproduce.log' in that
+  - If specified, logs will be written to a file named 'data_broker.log' in that
     directory.
   - If not specified, logs will be sent to stdout.
   - In debug mode, logs are always sent to stdout.
@@ -20,7 +20,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Extended report statistics to all log processing functions.
-- Renamed the log file from reproduce.log to data_broker.log.
 
 ## [0.21.1] - 2025-01-25
 
