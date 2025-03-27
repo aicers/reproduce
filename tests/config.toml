@@ -1,4 +1,3 @@
-[common]
 cert = "tests/cert.pem"
 key = "tests/key.pem"
 ca_certs = ["tests/root.pem"]
