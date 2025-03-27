@@ -28,7 +28,7 @@ ARG:
 async fn main() -> Result<()> {
     let config_filename = parse();
     let config = Config::new(config_filename.as_ref())?;
-    let _guards = init_tracing(config.common.log_dir.as_deref())?;
+    let _guards = init_tracing(config.log_dir.as_deref())?;
     let controller = Controller::new(config);
     info!("reproduce start");
     let _handle = task::spawn(async move {

@@ -16,22 +16,6 @@ pub enum InputType {
     Dir,
     Elastic,
 }
-
-#[derive(Deserialize, Debug, Clone)]
-#[allow(unused)]
-pub struct Common {
-    pub cert: String,
-    pub key: String,
-    pub ca_certs: Vec<String>,
-    #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub giganto_ingest_srv_addr: SocketAddr,
-    pub giganto_name: String,
-    pub kind: String,
-    pub input: String,
-    pub report: bool,
-    pub log_dir: Option<PathBuf>,
-}
-
 #[derive(Deserialize, Debug, Clone)]
 pub struct File {
     pub export_from_giganto: Option<bool>,
@@ -61,7 +45,17 @@ pub struct ElasticSearch {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
-    pub common: Common,
+    pub cert: String,
+    pub key: String,
+    pub ca_certs: Vec<String>,
+    #[serde(deserialize_with = "deserialize_socket_addr")]
+    pub giganto_ingest_srv_addr: SocketAddr,
+    pub giganto_name: String,
+    pub kind: String,
+    pub input: String,
+    pub report: bool,
+    pub log_dir: Option<PathBuf>,
+
     pub file: Option<File>,
     pub directory: Option<Directory>,
     pub elastic: Option<ElasticSearch>,
@@ -75,9 +69,9 @@ impl Config {
     /// Returns an error if it fails to parse the configuration file correctly or it runs out of parameters.
     pub fn new(path: &Path) -> Result<Self> {
         let config = config::Config::builder()
-            .set_default("common.kind", String::new())
+            .set_default("kind", String::new())
             .context("cannot set the default kind value")?
-            .set_default("common.report", DEFAULT_REPORT_MODE)
+            .set_default("report", DEFAULT_REPORT_MODE)
             .context("cannot set the default report value")?
             .set_default("file.polling_mode", DEFAULT_POLLING_MODE)
             .context("cannot set the default file polling mode value")?
