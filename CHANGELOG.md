@@ -7,6 +7,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Moved configuration fields from the nested `Common` struct to the top-level
+  `Config` struct and updated related code accordingly.
+
 ### Fixed
 
 - Fixed oplog transfer failure caused by checking outdated module names.

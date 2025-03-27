@@ -41,7 +41,7 @@ impl Report {
     }
 
     pub fn start(&mut self) {
-        if !self.config.common.report {
+        if !self.config.report {
             return;
         }
 
@@ -49,7 +49,7 @@ impl Report {
     }
 
     pub fn process(&mut self, bytes: usize) {
-        if !self.config.common.report {
+        if !self.config.report {
             return;
         }
 
@@ -63,7 +63,7 @@ impl Report {
     }
 
     pub fn skip(&mut self, bytes: usize) {
-        if !self.config.common.report {
+        if !self.config.report {
             return;
         }
         self.skip_bytes += bytes;
@@ -77,12 +77,12 @@ impl Report {
     pub fn end(&mut self) -> io::Result<()> {
         const ARRANGE_VAR: usize = 28;
 
-        if !self.config.common.report {
+        if !self.config.report {
             return Ok(());
         }
 
         let report_dir = Path::new("/report");
-        let topic = format!("{}.report", &self.config.common.kind);
+        let topic = format!("{}.report", &self.config.kind);
         let report_path = if report_dir.is_dir() {
             report_dir.join(topic)
         } else {
@@ -108,8 +108,8 @@ impl Report {
             self.time_now,
             width = ARRANGE_VAR,
         ))?;
-        let input_type = input_type(&self.config.common.input);
-        let input = &&self.config.common.input;
+        let input_type = input_type(&self.config.input);
+        let input = &&self.config.input;
         let (header, processed_bytes) = match input_type {
             InputType::Log => {
                 // add 1 byte newline character per line

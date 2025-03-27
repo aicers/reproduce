@@ -75,11 +75,7 @@ impl Producer {
     ///
     /// Connection error, not `TimedOut`
     pub async fn new_giganto(config: &Config) -> Result<Self> {
-        let endpoint = match init_giganto(
-            &config.common.cert,
-            &config.common.key,
-            &config.common.ca_certs,
-        ) {
+        let endpoint = match init_giganto(&config.cert, &config.key, &config.ca_certs) {
             Ok(ret) => ret,
             Err(e) => {
                 bail!("failed to create Giganto producer: {:?}", e);
@@ -87,10 +83,7 @@ impl Producer {
         };
         loop {
             let conn = match endpoint
-                .connect(
-                    config.common.giganto_ingest_srv_addr,
-                    &config.common.giganto_name,
-                )?
+                .connect(config.giganto_ingest_srv_addr, &config.giganto_name)?
                 .await
             {
                 Ok(r) => r,
@@ -117,10 +110,10 @@ impl Producer {
             return Ok(Self {
                 giganto: Giganto {
                     giganto_endpoint: endpoint.clone(),
-                    giganto_server: config.common.giganto_ingest_srv_addr,
+                    giganto_server: config.giganto_ingest_srv_addr,
                     giganto_info: GigantoInfo {
-                        name: config.common.giganto_name.clone(),
-                        kind: config.common.kind.clone(),
+                        name: config.giganto_name.clone(),
+                        kind: config.kind.clone(),
                     },
                     giganto_conn: conn,
                     giganto_sender: giganto_send,

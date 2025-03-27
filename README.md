@@ -26,11 +26,6 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 
 - Below is a detailed breakdown of all available configuration fields.
 
-### [Common]
-
-- This section is required and must be configured properly for REproduce to
-  function.
-
 <!-- markdownlint-disable -->
 
 | Field                     | Description                                                                | Required | Default    |
@@ -106,7 +101,6 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 - Sends a Zeek log file to the Giganto server, setting `kind` to `dns`.
 
   ```toml
-  [common]
   cert = "/opt/clumit/keys/reproduce_cert.pem"
   key = "/opt/clumit/keys/reproduce_key.pem"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
@@ -122,7 +116,6 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   oplog.
 
   ```toml
-  [common]
   cert = "/opt/clumit/keys/reproduce_cert.pem"
   key = "/opt/clumit/keys/reproduce_key.pem"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
@@ -137,7 +130,6 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 - Sends a previously exported Giganto file to the Giganto server.
 
   ```toml
-  [common]
   cert = "/opt/clumit/keys/reproduce_cert.pem"
   key = "/opt/clumit/keys/reproduce_key.pem"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
@@ -156,7 +148,6 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   data kind as image_load.
 
   ```toml
-  [common]
   cert = "/opt/clumit/keys/reproduce_cert.pem"
   key = "/opt/clumit/keys/reproduce_key.pem"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
@@ -172,7 +163,6 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
   Giganto server.
 
   ```toml
-  [common]
   cert = "/opt/clumit/keys/reproduce_cert.pem"
   key = "/opt/clumit/keys/reproduce_key.pem"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
