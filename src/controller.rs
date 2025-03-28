@@ -80,7 +80,7 @@ impl Controller {
     ///
     /// Stream finish / Connection close error
     pub async fn run(&self) -> Result<()> {
-        let input_type = input_type(&self.config.common.input);
+        let input_type = input_type(&self.config.input);
 
         if input_type == InputType::Elastic {
             self.run_elastic().await?;
@@ -92,11 +92,11 @@ impl Controller {
                     self.run_split(&mut producer).await?;
                 }
                 InputType::Log => {
-                    let file_name = Path::new(&self.config.common.input).to_path_buf();
+                    let file_name = Path::new(&self.config.input).to_path_buf();
                     self.run_single(
                         file_name.as_ref(),
                         &mut producer,
-                        &self.config.common.kind.clone(),
+                        &self.config.kind.clone(),
                         false,
                     )
                     .await?;
@@ -120,7 +120,7 @@ impl Controller {
         };
         loop {
             let mut files = files_in_dir(
-                &self.config.common.input,
+                &self.config.input,
                 dir_option.file_prefix.as_deref(),
                 &processed,
             );
@@ -139,7 +139,7 @@ impl Controller {
                 self.run_single(
                     file.as_path(),
                     producer,
-                    &self.config.common.kind,
+                    &self.config.kind,
                     dir_option.polling_mode,
                 )
                 .await?;
@@ -211,7 +211,7 @@ impl Controller {
         let offset = if let Some(count_skip) = file.transfer_skip_count {
             count_skip
         } else if let Some(ref offset_suffix) = file.last_transfer_line_suffix {
-            let filename = self.config.common.input.clone() + "_" + offset_suffix;
+            let filename = self.config.input.clone() + "_" + offset_suffix;
             u64::try_from(read_offset(&filename))?
         } else {
             0
@@ -315,7 +315,7 @@ impl Controller {
 
         if let Some(ref offset_suffix) = file.last_transfer_line_suffix {
             if let Err(e) = write_offset(
-                &(self.config.common.input.clone() + "_" + offset_suffix),
+                &(self.config.input.clone() + "_" + offset_suffix),
                 last_line,
             ) {
                 warn!("cannot write to offset file: {e}");
