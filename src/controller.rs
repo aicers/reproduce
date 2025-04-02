@@ -20,13 +20,13 @@ const GIGANTO_ZEEK_KINDS: [&str; 17] = [
     "ldap", "tls", "smb", "nfs", "bootp", "dhcp",
 ];
 const AGENTS_LIST: [&str; 7] = [
-    "review",
-    "giganto",
-    "piglet",
-    "hog",
-    "crusher",
-    "reconverge",
-    "tivan",
+    "manager",
+    "data_store",
+    "sensor",
+    "semi_supervised",
+    "time_series_generator",
+    "unsupervised",
+    "ti_container",
 ];
 const OPERATION_LOG: &str = "oplog";
 const SYSMON_KINDS: [&str; 14] = [
