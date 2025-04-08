@@ -87,18 +87,18 @@ impl TryFromSysmonRecord for DnsEvent {
 }
 
 #[derive(Serialize)]
-pub struct ElasticDnsEvent {
-    pub agent_name: Option<String>,
-    pub agent_id: Option<String>,
-    pub event_action: Option<String>,
-    pub utc_time: Option<String>,
-    pub process_guid: Option<String>,
-    pub process_id: Option<String>,
-    pub query_name: Option<String>,
-    pub query_status: Option<String>,
-    pub query_results: Option<String>,
-    pub image: Option<String>,
-    pub user: Option<String>,
+pub(super) struct ElasticDnsEvent {
+    agent_name: Option<String>,
+    agent_id: Option<String>,
+    event_action: Option<String>,
+    utc_time: Option<String>,
+    process_guid: Option<String>,
+    process_id: Option<String>,
+    query_name: Option<String>,
+    query_status: Option<String>,
+    query_results: Option<String>,
+    image: Option<String>,
+    user: Option<String>,
 }
 
 impl EventToCsv for ElasticDnsEvent {

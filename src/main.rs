@@ -1,3 +1,14 @@
+mod config;
+mod controller;
+mod migration;
+mod netflow;
+mod operation_log;
+mod producer;
+mod report;
+mod security_log;
+mod syslog;
+mod zeek;
+
 use std::{
     env,
     fs::OpenOptions,
@@ -6,7 +17,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use reproduce::{Config, Controller};
+use config::{Config, InputType};
+use controller::Controller;
+use producer::Producer;
+use report::Report;
 use tokio::task;
 use tracing::{error, info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;

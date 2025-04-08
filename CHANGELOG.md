@@ -16,6 +16,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Fixed oplog transfer failure caused by checking outdated module names.
 
+### Removed
+
+- Removed `lib.rs`, as the crate no longer exposes a public interface.
+- Removed `TryFromCsvRecord` trait since it is no longer used.
+
 ## [0.21.2] - 2025-03-14
 
 ### Added

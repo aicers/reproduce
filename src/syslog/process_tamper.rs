@@ -67,16 +67,16 @@ impl TryFromSysmonRecord for ProcessTampering {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub struct ElasticProcessTampering {
-    pub agent_name: Option<String>,
-    pub agent_id: Option<String>,
-    pub event_action: Option<String>,
-    pub utc_time: Option<String>,
-    pub process_guid: Option<String>,
-    pub process_id: Option<String>,
-    pub image: Option<String>,
-    pub types: Option<String>,
-    pub user: Option<String>,
+pub(super) struct ElasticProcessTampering {
+    agent_name: Option<String>,
+    agent_id: Option<String>,
+    event_action: Option<String>,
+    utc_time: Option<String>,
+    process_guid: Option<String>,
+    process_id: Option<String>,
+    image: Option<String>,
+    types: Option<String>,
+    user: Option<String>,
 }
 
 impl EventToCsv for ElasticProcessTampering {
