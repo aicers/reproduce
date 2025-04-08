@@ -89,19 +89,19 @@ impl TryFromSysmonRecord for FileCreateStreamHash {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub struct ElasticFileCreateStreamHash {
-    pub agent_name: Option<String>,
-    pub agent_id: Option<String>,
-    pub event_action: Option<String>,
-    pub utc_time: Option<String>,
-    pub process_guid: Option<String>,
-    pub process_id: Option<String>,
-    pub image: Option<String>,
-    pub target_filename: Option<String>,
-    pub creation_utc_time: Option<String>,
-    pub hash: Option<String>,
-    pub contents: Option<String>,
-    pub user: Option<String>,
+pub(super) struct ElasticFileCreateStreamHash {
+    agent_name: Option<String>,
+    agent_id: Option<String>,
+    event_action: Option<String>,
+    utc_time: Option<String>,
+    process_guid: Option<String>,
+    process_id: Option<String>,
+    image: Option<String>,
+    target_filename: Option<String>,
+    creation_utc_time: Option<String>,
+    hash: Option<String>,
+    contents: Option<String>,
+    user: Option<String>,
 }
 
 impl EventToCsv for ElasticFileCreateStreamHash {

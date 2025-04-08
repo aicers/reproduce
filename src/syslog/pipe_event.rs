@@ -73,17 +73,17 @@ impl TryFromSysmonRecord for PipeEvent {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub struct ElasticPipeEvent {
-    pub agent_name: Option<String>,
-    pub agent_id: Option<String>,
-    pub event_action: Option<String>,
-    pub utc_time: Option<String>,
-    pub event_type: Option<String>,
-    pub process_guid: Option<String>,
-    pub process_id: Option<String>,
-    pub pipe_name: Option<String>,
-    pub image: Option<String>,
-    pub user: Option<String>,
+pub(super) struct ElasticPipeEvent {
+    agent_name: Option<String>,
+    agent_id: Option<String>,
+    event_action: Option<String>,
+    utc_time: Option<String>,
+    event_type: Option<String>,
+    process_guid: Option<String>,
+    process_id: Option<String>,
+    pipe_name: Option<String>,
+    image: Option<String>,
+    user: Option<String>,
 }
 
 impl EventToCsv for ElasticPipeEvent {

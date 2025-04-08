@@ -88,18 +88,18 @@ impl TryFromSysmonRecord for FileDeleteDetected {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub struct ElasticFileDeleteDetected {
-    pub agent_name: Option<String>,
-    pub agent_id: Option<String>,
-    pub event_action: Option<String>,
-    pub utc_time: Option<String>,
-    pub process_guid: Option<String>,
-    pub process_id: Option<String>,
-    pub user: Option<String>,
-    pub image: Option<String>,
-    pub target_filename: Option<String>,
-    pub hashes: Option<String>,
-    pub is_executable: Option<String>,
+pub(super) struct ElasticFileDeleteDetected {
+    agent_name: Option<String>,
+    agent_id: Option<String>,
+    event_action: Option<String>,
+    utc_time: Option<String>,
+    process_guid: Option<String>,
+    process_id: Option<String>,
+    user: Option<String>,
+    image: Option<String>,
+    target_filename: Option<String>,
+    hashes: Option<String>,
+    is_executable: Option<String>,
 }
 
 impl EventToCsv for ElasticFileDeleteDetected {
