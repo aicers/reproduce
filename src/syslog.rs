@@ -103,7 +103,7 @@ pub async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<Strin
                             "26" => process_event_data::<ElasticFileDeleteDetected>(
                                 data, &file_name, size,
                             ),
-                            _ => continue,
+                            _ => {}
                         }
                     }
                 }
