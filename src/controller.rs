@@ -351,7 +351,7 @@ fn file_to_kind(path: &Path) -> Result<&str> {
             "26" => "file_delete_detected",
             _ => "",
         });
-    };
+    }
     Ok("")
 }
 
