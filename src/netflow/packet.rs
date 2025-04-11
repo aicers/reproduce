@@ -29,7 +29,7 @@ const NETFLOW_V5_RECORD_LENGTH: u64 = 48;
 
 type TypeLengthPairs = (u16, u64, Vec<(u16, u16)>);
 
-pub struct PktBuf {
+pub(crate) struct PktBuf {
     data: Cursor<Vec<u8>>,
     len: u64,
     iph: IpHeader,
@@ -73,13 +73,13 @@ struct UdpHeader {
     dst_port: u16,
 }
 
-pub enum NetflowHeader {
+pub(crate) enum NetflowHeader {
     V5(Netflow5Header),
     V9(Netflow9Header),
 }
 
 impl NetflowHeader {
-    pub fn timestamp(&self) -> (u32, u32) {
+    pub(crate) fn timestamp(&self) -> (u32, u32) {
         match self {
             NetflowHeader::V5(x) => (x.unix_secs, x.unix_nanos),
             NetflowHeader::V9(x) => (x.unix_secs, 0),
@@ -88,16 +88,16 @@ impl NetflowHeader {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Netflow5Header {
-    pub version: u16,
-    pub count: u16,
-    pub sys_uptime: u32, // milliseconds
-    pub unix_secs: u32,  // seconds
-    pub unix_nanos: u32,
-    pub flow_sequence: u32,
-    pub engine_type: u8,
-    pub engine_id: u8,
-    pub sampling_interval: u16,
+pub(crate) struct Netflow5Header {
+    version: u16,
+    pub(super) count: u16,
+    sys_uptime: u32,           // milliseconds
+    pub(super) unix_secs: u32, // seconds
+    unix_nanos: u32,
+    flow_sequence: u32,
+    engine_type: u8,
+    engine_id: u8,
+    sampling_interval: u16,
 }
 
 impl std::fmt::Display for Netflow5Header {
@@ -131,13 +131,13 @@ Flowset:
 */
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Netflow9Header {
-    pub version: u16,
-    pub count: u16,
-    pub sys_uptime: u32,
-    pub unix_secs: u32,
-    pub flow_sequence: u32,
-    pub source_id: u32,
+pub(crate) struct Netflow9Header {
+    version: u16,
+    pub(super) count: u16,
+    sys_uptime: u32,
+    pub(super) unix_secs: u32,
+    flow_sequence: u32,
+    pub(super) source_id: u32,
 }
 
 impl std::fmt::Display for Netflow9Header {
@@ -152,7 +152,7 @@ impl std::fmt::Display for Netflow9Header {
 }
 
 impl PktBuf {
-    pub fn new(pkt: &Packet<'_>) -> Self {
+    pub(crate) fn new(pkt: &Packet<'_>) -> Self {
         Self {
             data: Cursor::new(pkt.data.to_vec()),
             len: u64::try_from(pkt.len()).unwrap_or_default(),
@@ -160,7 +160,7 @@ impl PktBuf {
         }
     }
 
-    pub fn src_addr(&self) -> IpAddr {
+    pub(super) fn src_addr(&self) -> IpAddr {
         self.iph.addr_pair.src
     }
 
@@ -226,7 +226,7 @@ impl PktBuf {
         Ok(UdpHeader { dst_port })
     }
 
-    pub fn is_netflow(&mut self) -> ProcessStats {
+    pub(crate) fn is_netflow(&mut self) -> ProcessStats {
         // L2
         let Ok(ethertype) = self.parse_ethernet() else {
             return ProcessStats::InvalidPackets;
@@ -258,7 +258,7 @@ impl PktBuf {
         }
     }
 
-    pub fn parse_netflow_header(&mut self) -> Result<NetflowHeader> {
+    pub(crate) fn parse_netflow_header(&mut self) -> Result<NetflowHeader> {
         let version = self.data.read_u16::<BigEndian>()?;
         let count = self.data.read_u16::<BigEndian>()?;
         let sys_uptime = self.data.read_u32::<BigEndian>()?;
@@ -298,7 +298,7 @@ impl PktBuf {
         }
     }
 
-    pub fn parse_netflow_v9_flowset_header(&mut self) -> Result<(u16, u16)> {
+    pub(super) fn parse_netflow_v9_flowset_header(&mut self) -> Result<(u16, u16)> {
         let flowset_id = self.data.read_u16::<BigEndian>()?;
         let flowset_length = self.data.read_u16::<BigEndian>()?;
         Ok((flowset_id, flowset_length))
@@ -323,7 +323,7 @@ impl PktBuf {
         Ok((count, u64::from(length), fields))
     }
 
-    pub fn parse_netflow_template(
+    pub(super) fn parse_netflow_template(
         &mut self,
         flowset_length: u16,
         header: &Netflow9Header,
@@ -350,7 +350,7 @@ impl PktBuf {
         Ok(fds)
     }
 
-    pub fn parse_netflow_options_template(
+    pub(super) fn parse_netflow_options_template(
         &mut self,
         flowset_length: u16,
         header: &Netflow9Header,
@@ -395,7 +395,10 @@ impl PktBuf {
         Ok(fds)
     }
 
-    pub fn parse_netflow_v5_datasets(&mut self, header: &Netflow5Header) -> Result<Vec<Netflow5>> {
+    pub(super) fn parse_netflow_v5_datasets(
+        &mut self,
+        header: &Netflow5Header,
+    ) -> Result<Vec<Netflow5>> {
         let mut flows = vec![];
         let mut dataset_count = 0;
         while let Some(remained) = self.remained() {
@@ -455,7 +458,7 @@ impl PktBuf {
     }
 
     // TODO: Parse multiple(template set + data set) in a packet
-    pub fn parse_netflow_v9_datasets(
+    pub(super) fn parse_netflow_v9_datasets(
         &mut self,
         template: &Template,
         header: &Netflow9Header,

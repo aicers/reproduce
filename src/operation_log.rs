@@ -27,7 +27,7 @@ fn parse_log_level(level: &str) -> Result<OpLogLevel> {
     }
 }
 
-pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
+pub(super) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
     let caps = get_log_regex().captures(line).context("invalid log line")?;
 
     let log_level = match caps.name("level") {

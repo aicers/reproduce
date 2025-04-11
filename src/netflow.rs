@@ -7,12 +7,12 @@ use anyhow::{bail, Result};
 use chrono::DateTime;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 #[allow(clippy::module_name_repetitions)]
-pub use packet::{NetflowHeader, PktBuf};
-pub use statistics::{ProcessStats, Stats};
-pub use templates::TemplatesBox;
+pub(super) use packet::{NetflowHeader, PktBuf};
+pub(super) use statistics::{ProcessStats, Stats};
+pub(super) use templates::TemplatesBox;
 use tracing::{error, warn};
 
-pub trait ParseNetflowDatasets: Sized {
+pub(super) trait ParseNetflowDatasets: Sized {
     fn parse_netflow_datasets(
         pkt_cnt: u64,
         templates: &mut TemplatesBox,

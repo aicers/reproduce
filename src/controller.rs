@@ -384,7 +384,7 @@ fn files_in_dir(path: &str, prefix: Option<&str>, skip: &[PathBuf]) -> Vec<PathB
         .collect()
 }
 
-pub fn input_type(input: &str) -> InputType {
+pub(super) fn input_type(input: &str) -> InputType {
     if input == "elastic" {
         InputType::Elastic
     } else {

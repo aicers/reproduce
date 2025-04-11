@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use csv::StringRecord;
 
-pub trait TryFromGigantoRecord: Sized {
+pub(super) trait TryFromGigantoRecord: Sized {
     fn try_from_giganto_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 

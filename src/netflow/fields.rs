@@ -3,7 +3,7 @@ use strum_macros::EnumString;
 
 #[derive(Copy, Clone, Debug, EnumString, FromPrimitive, PartialEq)]
 #[repr(u16)]
-pub enum FieldTypes {
+pub(super) enum FieldTypes {
     InBytes = 1,
     InPackets = 2,
     Flows = 3,
@@ -103,7 +103,7 @@ pub enum FieldTypes {
 }
 
 impl FieldTypes {
-    pub fn get_types(self) -> DataTypes {
+    pub(super) fn get_types(self) -> DataTypes {
         match self {
             FieldTypes::TCPFlags => DataTypes::TcpFlags,
             FieldTypes::IPv4SrcAddr
@@ -125,7 +125,7 @@ impl FieldTypes {
 }
 
 #[derive(PartialEq)]
-pub enum DataTypes {
+pub(super) enum DataTypes {
     Ascii,
     ForwardingStatus,
     Integer,
@@ -137,7 +137,7 @@ pub enum DataTypes {
 
 #[derive(Copy, Clone, Debug, EnumString, FromPrimitive, PartialEq)]
 #[repr(u16)]
-pub enum OptionsScopeFieldTypes {
+pub(super) enum OptionsScopeFieldTypes {
     System = 1,
     Interface = 2,
     LineCard = 3,
@@ -148,7 +148,7 @@ pub enum OptionsScopeFieldTypes {
 }
 
 // FORWARDING STATUS. 1Byte: Status(2bit) + ReasonCode(6bit)
-pub static FORWARDING_STATUS: [(u8, &str); 24] = [
+pub(super) static FORWARDING_STATUS: [(u8, &str); 24] = [
     (0, "Unknown"),
     (64, "Forwarded (Unknown)"),
     (65, "Forwarded (Fragmented)"),
@@ -175,7 +175,7 @@ pub static FORWARDING_STATUS: [(u8, &str); 24] = [
     (195, "Consumed (Terminate For us)"),
 ];
 
-pub static TCP_FLAGS: [(u8, &str); 8] = [
+pub(super) static TCP_FLAGS: [(u8, &str); 8] = [
     (0x01, "FIN"),
     (0x02, "SYN"),
     (0x04, "RST"),

@@ -17,48 +17,48 @@ pub enum InputType {
     Elastic,
 }
 #[derive(Deserialize, Debug, Clone)]
-pub struct File {
-    pub export_from_giganto: Option<bool>,
-    pub polling_mode: bool,
-    pub transfer_count: Option<u64>,
-    pub transfer_skip_count: Option<u64>,
-    pub last_transfer_line_suffix: Option<String>,
+pub(super) struct File {
+    pub(super) export_from_giganto: Option<bool>,
+    pub(super) polling_mode: bool,
+    pub(super) transfer_count: Option<u64>,
+    pub(super) transfer_skip_count: Option<u64>,
+    pub(super) last_transfer_line_suffix: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct Directory {
-    pub file_prefix: Option<String>,
-    pub polling_mode: bool,
+pub(super) struct Directory {
+    pub(super) file_prefix: Option<String>,
+    pub(super) polling_mode: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct ElasticSearch {
-    pub url: String,
-    pub event_codes: Vec<String>,
-    pub indices: Vec<String>,
-    pub start_time: String,
-    pub end_time: String,
-    pub size: usize,
-    pub dump_dir: String,
-    pub elastic_auth: String,
+pub(super) struct ElasticSearch {
+    pub(super) url: String,
+    pub(super) event_codes: Vec<String>,
+    pub(super) indices: Vec<String>,
+    pub(super) start_time: String,
+    pub(super) end_time: String,
+    pub(super) size: usize,
+    pub(super) dump_dir: String,
+    pub(super) elastic_auth: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
-    pub cert: String,
-    pub key: String,
-    pub ca_certs: Vec<String>,
+    pub(super) cert: String,
+    pub(super) key: String,
+    pub(super) ca_certs: Vec<String>,
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub giganto_ingest_srv_addr: SocketAddr,
-    pub giganto_name: String,
-    pub kind: String,
-    pub input: String,
-    pub report: bool,
+    pub(super) giganto_ingest_srv_addr: SocketAddr,
+    pub(super) giganto_name: String,
+    pub(super) kind: String,
+    pub(super) input: String,
+    pub(super) report: bool,
     pub log_dir: Option<PathBuf>,
 
-    pub file: Option<File>,
-    pub directory: Option<Directory>,
-    pub elastic: Option<ElasticSearch>,
+    pub(super) file: Option<File>,
+    pub(super) directory: Option<Directory>,
+    pub(super) elastic: Option<ElasticSearch>,
 }
 
 impl Config {

@@ -4,7 +4,7 @@ use num_enum::FromPrimitive;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, Hash)]
 #[repr(u8)]
-pub enum ProcessStats {
+pub(crate) enum ProcessStats {
     Packets = 0,
     Events = 1,
     V9Templates = 2,
@@ -24,18 +24,18 @@ pub enum ProcessStats {
 }
 
 #[derive(Debug)]
-pub struct Stats {
+pub(crate) struct Stats {
     stats: HashMap<ProcessStats, usize>,
 }
 
 impl Stats {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             stats: HashMap::new(),
         }
     }
 
-    pub fn add(&mut self, kind: ProcessStats, cnt: usize) {
+    pub(crate) fn add(&mut self, kind: ProcessStats, cnt: usize) {
         self.stats
             .entry(kind)
             .and_modify(|c| *c += cnt)

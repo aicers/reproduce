@@ -82,18 +82,18 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
 }
 
 #[derive(Serialize)]
-pub struct ElasticFileCreationTimeChanged {
-    pub agent_name: Option<String>,
-    pub agent_id: Option<String>,
-    pub event_action: Option<String>,
-    pub utc_time: Option<String>,
-    pub process_guid: Option<String>,
-    pub process_id: Option<String>,
-    pub image: Option<String>,
-    pub target_filename: Option<String>,
-    pub creation_utc_time: Option<String>,
-    pub previous_creation_utc_time: Option<String>,
-    pub user: Option<String>,
+pub(super) struct ElasticFileCreationTimeChanged {
+    agent_name: Option<String>,
+    agent_id: Option<String>,
+    event_action: Option<String>,
+    utc_time: Option<String>,
+    process_guid: Option<String>,
+    process_id: Option<String>,
+    image: Option<String>,
+    target_filename: Option<String>,
+    creation_utc_time: Option<String>,
+    previous_creation_utc_time: Option<String>,
+    user: Option<String>,
 }
 
 impl EventToCsv for ElasticFileCreationTimeChanged {

@@ -27,14 +27,14 @@ const DEFAULT_PORT: u16 = 0;
 const DEFAULT_IPADDR: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
 #[derive(Debug, Clone)]
-pub struct SecurityLogInfo {
-    pub(crate) kind: String,
-    pub(crate) log_type: String,
-    pub(crate) version: String,
+pub(super) struct SecurityLogInfo {
+    kind: String,
+    log_type: String,
+    version: String,
 }
 
 impl SecurityLogInfo {
-    pub fn new(giganto_kind: &str) -> SecurityLogInfo {
+    pub(super) fn new(giganto_kind: &str) -> SecurityLogInfo {
         let info: Vec<&str> = giganto_kind.split('_').collect();
         let msg =
             "verified by `match` expression in the `Producer::send_seculog_to_giganto` method.";
@@ -47,50 +47,50 @@ impl SecurityLogInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Wapples;
+pub(super) struct Wapples;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Mf2;
+pub(super) struct Mf2;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SniperIps;
+pub(super) struct SniperIps;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Aiwaf;
+pub(super) struct Aiwaf;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Tg;
+pub(super) struct Tg;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Vforce;
+pub(super) struct Vforce;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Srx;
+pub(super) struct Srx;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SonicWall;
+pub(super) struct SonicWall;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Fgt;
+pub(super) struct Fgt;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ShadowWall;
+pub(super) struct ShadowWall;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Axgate;
+pub(super) struct Axgate;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Ubuntu;
+pub(super) struct Ubuntu;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Nginx;
+pub(super) struct Nginx;
 
-pub trait ParseSecurityLog {
+pub(super) trait ParseSecurityLog {
     fn parse_security_log(line: &str, serial: i64, info: SecurityLogInfo)
         -> Result<(SecuLog, i64)>; // agent: &str
 }
 
-pub fn proto_to_u8(proto: &str) -> u8 {
+fn proto_to_u8(proto: &str) -> u8 {
     match proto {
         "TCP" | "tcp" => PROTO_TCP,
         "UDP" | "udp" => PROTO_UDP,
