@@ -54,7 +54,7 @@ pub struct Config {
     pub(super) kind: String,
     pub(super) input: String,
     pub(super) report: bool,
-    pub log_dir: Option<PathBuf>,
+    pub log_path: Option<PathBuf>,
 
     pub(super) file: Option<File>,
     pub(super) directory: Option<Directory>,
