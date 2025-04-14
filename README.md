@@ -19,8 +19,8 @@ reproduce <CONFIG_PATH>
 
 - `<CONFIG_PATH>`: Path to the TOML configuration file.
 
-To support pcap parser for netflow v9, templates would be read from
-the environment variable `NETFLOW_TEMPLATES_PATH`.
+To support pcap parser for netflow v9, templates would be read from the
+environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ## Configuration
 
