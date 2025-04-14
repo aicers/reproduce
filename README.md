@@ -38,11 +38,9 @@ the environment variable `NETFLOW_TEMPLATES_PATH`.
 | `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | No       | "" (empty) |
 | `input`                   | Specifies the input source: file, directory, or elastic                    | Yes      | -          |
 | `report`                  | Enables or disables reporting of transfer statistics                       | No       | false      |
-| `log_dir`                 | Directory for log files. If not specified, logs are sent to stdout.        | No       | -          |
+| `log_path`                | Path to the log file. If not specified, logs are sent to stdout.           | No       | -          |
 
 <!-- markdownlint-enable -->
-
-- `log_dir`: The log file is named data_broker.log.
 
 ### [File]
 

@@ -11,6 +11,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Moved configuration fields from the nested `Common` struct to the top-level
   `Config` struct and updated related code accordingly.
+- Replaced `log_dir` with `log_path` in command line arguments. Now the log file
+  path can be specified directly rather than combining a directory and a fixed
+  filename.
+- Removed dependency on LOG_FILENAME environment variable by eliminating the
+  .cargo/config.toml file.
 
 ### Fixed
 
