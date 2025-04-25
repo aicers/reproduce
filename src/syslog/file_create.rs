@@ -79,7 +79,7 @@ impl TryFromSysmonRecord for FileCreate {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub(super) struct ElasticFileCreate {
+pub(crate) struct ElasticFileCreate {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

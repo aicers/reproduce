@@ -79,7 +79,7 @@ impl TryFromSysmonRecord for RegistryValueSet {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub(super) struct ElasticRegistryValueSet {
+pub(crate) struct ElasticRegistryValueSet {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

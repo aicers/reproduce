@@ -12,7 +12,7 @@ const PROTO_TCP: u8 = 0x06;
 const PROTO_UDP: u8 = 0x11;
 const PROTO_ICMP: u8 = 0x01;
 
-pub(super) trait TryFromZeekRecord: Sized {
+pub(crate) trait TryFromZeekRecord: Sized {
     fn try_from_zeek_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
@@ -31,7 +31,7 @@ fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
     }
 }
 
-pub(super) fn open_raw_event_log_file(path: &Path) -> Result<Reader<File>> {
+pub(crate) fn open_raw_event_log_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
         .delimiter(b'\t')

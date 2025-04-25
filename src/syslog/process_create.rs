@@ -183,7 +183,7 @@ impl TryFromSysmonRecord for ProcessCreate {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub(super) struct ElasticProcessCreate {
+pub(crate) struct ElasticProcessCreate {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

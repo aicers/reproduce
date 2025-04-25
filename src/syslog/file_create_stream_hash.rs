@@ -89,7 +89,7 @@ impl TryFromSysmonRecord for FileCreateStreamHash {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub(super) struct ElasticFileCreateStreamHash {
+pub(crate) struct ElasticFileCreateStreamHash {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

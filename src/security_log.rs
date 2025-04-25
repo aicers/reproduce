@@ -27,14 +27,14 @@ const DEFAULT_PORT: u16 = 0;
 const DEFAULT_IPADDR: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
 #[derive(Debug, Clone)]
-pub(super) struct SecurityLogInfo {
+pub(crate) struct SecurityLogInfo {
     kind: String,
     log_type: String,
     version: String,
 }
 
 impl SecurityLogInfo {
-    pub(super) fn new(giganto_kind: &str) -> SecurityLogInfo {
+    pub(crate) fn new(giganto_kind: &str) -> SecurityLogInfo {
         let info: Vec<&str> = giganto_kind.split('_').collect();
         let msg =
             "verified by `match` expression in the `Producer::send_seculog_to_giganto` method.";
@@ -47,45 +47,45 @@ impl SecurityLogInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Wapples;
+pub(crate) struct Wapples;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Mf2;
+pub(crate) struct Mf2;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct SniperIps;
+pub(crate) struct SniperIps;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Aiwaf;
+pub(crate) struct Aiwaf;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Tg;
+pub(crate) struct Tg;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Vforce;
+pub(crate) struct Vforce;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Srx;
+pub(crate) struct Srx;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct SonicWall;
+pub(crate) struct SonicWall;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Fgt;
+pub(crate) struct Fgt;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct ShadowWall;
+pub(crate) struct ShadowWall;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Axgate;
+pub(crate) struct Axgate;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Ubuntu;
+pub(crate) struct Ubuntu;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct Nginx;
+pub(crate) struct Nginx;
 
-pub(super) trait ParseSecurityLog {
+pub(crate) trait ParseSecurityLog {
     fn parse_security_log(line: &str, serial: i64, info: SecurityLogInfo)
         -> Result<(SecuLog, i64)>; // agent: &str
 }

@@ -87,7 +87,7 @@ impl TryFromSysmonRecord for DnsEvent {
 }
 
 #[derive(Serialize)]
-pub(super) struct ElasticDnsEvent {
+pub(crate) struct ElasticDnsEvent {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

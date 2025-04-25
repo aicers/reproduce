@@ -130,7 +130,7 @@ impl TryFromSysmonRecord for ImageLoaded {
 }
 
 #[derive(Serialize)]
-pub(super) struct ElasticImageLoaded {
+pub(crate) struct ElasticImageLoaded {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,
