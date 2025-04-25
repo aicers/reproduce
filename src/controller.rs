@@ -62,13 +62,13 @@ const SUPPORTED_SECURITY_KIND: [&str; 13] = [
     "nginx_accesslog_1.25.2",
 ];
 
-pub struct Controller {
+pub(crate) struct Controller {
     config: Config,
 }
 
 impl Controller {
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub(crate) fn new(config: Config) -> Self {
         Self { config }
     }
 
@@ -79,7 +79,7 @@ impl Controller {
     /// # Panics
     ///
     /// Stream finish / Connection close error
-    pub async fn run(&self) -> Result<()> {
+    pub(crate) async fn run(&self) -> Result<()> {
         let input_type = input_type(&self.config.input);
 
         if input_type == InputType::Elastic {
@@ -384,7 +384,7 @@ fn files_in_dir(path: &str, prefix: Option<&str>, skip: &[PathBuf]) -> Vec<PathB
         .collect()
 }
 
-pub(super) fn input_type(input: &str) -> InputType {
+pub(crate) fn input_type(input: &str) -> InputType {
     if input == "elastic" {
         InputType::Elastic
     } else {

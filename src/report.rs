@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use crate::controller::input_type;
 use crate::{Config, InputType};
 
-pub(super) struct Report {
+pub(crate) struct Report {
     config: Config,
     sum_bytes: usize,
     min_bytes: usize,
@@ -24,7 +24,7 @@ pub(super) struct Report {
 
 impl Report {
     #[must_use]
-    pub(super) fn new(config: Config) -> Self {
+    pub(crate) fn new(config: Config) -> Self {
         Report {
             config,
             sum_bytes: 0,
@@ -40,7 +40,7 @@ impl Report {
         }
     }
 
-    pub(super) fn start(&mut self) {
+    pub(crate) fn start(&mut self) {
         if !self.config.report {
             return;
         }
@@ -48,7 +48,7 @@ impl Report {
         self.time_start = Utc::now();
     }
 
-    pub(super) fn process(&mut self, bytes: usize) {
+    pub(crate) fn process(&mut self, bytes: usize) {
         if !self.config.report {
             return;
         }
@@ -75,7 +75,7 @@ impl Report {
     ///
     /// * `io::Error` when writing to the report file fails.
     #[allow(clippy::too_many_lines)]
-    pub(super) fn end(&mut self) -> io::Result<()> {
+    pub(crate) fn end(&mut self) -> io::Result<()> {
         const ARRANGE_VAR: usize = 28;
 
         if !self.config.report {

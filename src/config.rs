@@ -11,54 +11,54 @@ const DEFAULT_POLLING_MODE: bool = false;
 const DEFAULT_EXPORT_FROM_GIGANTO: bool = false;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InputType {
+pub(crate) enum InputType {
     Log,
     Dir,
     Elastic,
 }
 #[derive(Deserialize, Debug, Clone)]
-pub(super) struct File {
-    pub(super) export_from_giganto: Option<bool>,
-    pub(super) polling_mode: bool,
-    pub(super) transfer_count: Option<u64>,
-    pub(super) transfer_skip_count: Option<u64>,
-    pub(super) last_transfer_line_suffix: Option<String>,
+pub(crate) struct File {
+    pub(crate) export_from_giganto: Option<bool>,
+    pub(crate) polling_mode: bool,
+    pub(crate) transfer_count: Option<u64>,
+    pub(crate) transfer_skip_count: Option<u64>,
+    pub(crate) last_transfer_line_suffix: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub(super) struct Directory {
-    pub(super) file_prefix: Option<String>,
-    pub(super) polling_mode: bool,
+pub(crate) struct Directory {
+    pub(crate) file_prefix: Option<String>,
+    pub(crate) polling_mode: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub(super) struct ElasticSearch {
-    pub(super) url: String,
-    pub(super) event_codes: Vec<String>,
-    pub(super) indices: Vec<String>,
-    pub(super) start_time: String,
-    pub(super) end_time: String,
-    pub(super) size: usize,
-    pub(super) dump_dir: String,
-    pub(super) elastic_auth: String,
+pub(crate) struct ElasticSearch {
+    pub(crate) url: String,
+    pub(crate) event_codes: Vec<String>,
+    pub(crate) indices: Vec<String>,
+    pub(crate) start_time: String,
+    pub(crate) end_time: String,
+    pub(crate) size: usize,
+    pub(crate) dump_dir: String,
+    pub(crate) elastic_auth: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct Config {
-    pub(super) cert: String,
-    pub(super) key: String,
-    pub(super) ca_certs: Vec<String>,
+pub(crate) struct Config {
+    pub(crate) cert: String,
+    pub(crate) key: String,
+    pub(crate) ca_certs: Vec<String>,
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub(super) giganto_ingest_srv_addr: SocketAddr,
-    pub(super) giganto_name: String,
-    pub(super) kind: String,
-    pub(super) input: String,
-    pub(super) report: bool,
-    pub log_path: Option<PathBuf>,
+    pub(crate) giganto_ingest_srv_addr: SocketAddr,
+    pub(crate) giganto_name: String,
+    pub(crate) kind: String,
+    pub(crate) input: String,
+    pub(crate) report: bool,
+    pub(crate) log_path: Option<PathBuf>,
 
-    pub(super) file: Option<File>,
-    pub(super) directory: Option<Directory>,
-    pub(super) elastic: Option<ElasticSearch>,
+    pub(crate) file: Option<File>,
+    pub(crate) directory: Option<Directory>,
+    pub(crate) elastic: Option<ElasticSearch>,
 }
 
 impl Config {
@@ -67,7 +67,7 @@ impl Config {
     /// # Errors
     ///
     /// Returns an error if it fails to parse the configuration file correctly or it runs out of parameters.
-    pub fn new(path: &Path) -> Result<Self> {
+    pub(crate) fn new(path: &Path) -> Result<Self> {
         let config = config::Config::builder()
             .set_default("kind", String::new())
             .context("cannot set the default kind value")?

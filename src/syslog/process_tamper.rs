@@ -67,7 +67,7 @@ impl TryFromSysmonRecord for ProcessTampering {
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Serialize)]
-pub(super) struct ElasticProcessTampering {
+pub(crate) struct ElasticProcessTampering {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

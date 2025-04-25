@@ -46,7 +46,7 @@ use self::{
 use crate::config::ElasticSearch;
 
 #[allow(clippy::unused_async)]
-pub(super) async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {
+pub(crate) async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {
     let now = Utc::now();
     let exec_time = format!("{}", now.format("%F %T"));
 
@@ -241,7 +241,7 @@ fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
     }
 }
 
-pub(super) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
+pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
         .delimiter(b'\t')
@@ -249,7 +249,7 @@ pub(super) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
         .from_path(path)?)
 }
 
-pub(super) trait TryFromSysmonRecord: Sized {
+pub(crate) trait TryFromSysmonRecord: Sized {
     fn try_from_sysmon_record(rec: &StringRecord, serial: i64) -> Result<(Self, i64)>;
 }
 

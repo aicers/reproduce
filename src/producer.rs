@@ -62,8 +62,8 @@ const INTERVAL: u64 = 5;
 const BATCH_SIZE: usize = 100;
 
 #[allow(clippy::large_enum_variant)]
-pub(super) struct Producer {
-    pub(super) giganto: Giganto,
+pub(crate) struct Producer {
+    pub(crate) giganto: Giganto,
 }
 
 impl Producer {
@@ -74,7 +74,7 @@ impl Producer {
     ///  # Panics
     ///
     /// Connection error, not `TimedOut`
-    pub(super) async fn new_giganto(config: &Config) -> Result<Self> {
+    pub(crate) async fn new_giganto(config: &Config) -> Result<Self> {
         let endpoint = match init_giganto(&config.cert, &config.key, &config.ca_certs) {
             Ok(ret) => ret,
             Err(e) => {
@@ -128,7 +128,7 @@ impl Producer {
     ///
     /// Returns an error if any writing operation fails.
     #[allow(clippy::too_many_lines)]
-    pub(super) async fn send_raw_to_giganto(
+    pub(crate) async fn send_raw_to_giganto(
         &mut self,
         iter: StringRecordsIntoIter<File>,
         skip: u64,
@@ -588,7 +588,7 @@ impl Producer {
     /// # Errors
     ///
     /// Returns an error if any writing operation fails.
-    pub(super) async fn send_oplog_to_giganto(
+    pub(crate) async fn send_oplog_to_giganto(
         &mut self,
         reader: BufReader<File>,
         agent: &str,
@@ -617,7 +617,7 @@ impl Producer {
     ///
     /// Returns an error if any writing operation fails.
     #[allow(clippy::too_many_lines)]
-    pub(super) async fn send_sysmon_to_giganto(
+    pub(crate) async fn send_sysmon_to_giganto(
         &mut self,
         iter: StringRecordsIntoIter<File>,
         skip: u64,
@@ -832,7 +832,7 @@ impl Producer {
     /// # Errors
     ///
     /// Returns an error if it failed to parse netflow pcap.
-    pub(super) async fn send_netflow_to_giganto(
+    pub(crate) async fn send_netflow_to_giganto(
         &mut self,
         filename: &Path,
         skip: u64,
@@ -873,7 +873,7 @@ impl Producer {
     ///
     /// Returns an error if any writing operation fails.
     #[allow(clippy::too_many_lines)]
-    pub(super) async fn send_seculog_to_giganto(
+    pub(crate) async fn send_seculog_to_giganto(
         &mut self,
         reader: BufReader<File>,
         file_polling_mode: bool,
@@ -1060,7 +1060,7 @@ impl Producer {
     /// # Errors
     ///
     /// Returns an error if any writing log fails.
-    pub(super) async fn send_log_to_giganto(
+    pub(crate) async fn send_log_to_giganto(
         &mut self,
         file_name: &Path,
         file_polling_mode: bool,
@@ -1085,7 +1085,7 @@ impl Producer {
 }
 
 #[derive(Debug)]
-pub(super) struct Giganto {
+pub(crate) struct Giganto {
     giganto_endpoint: Endpoint,
     giganto_server: SocketAddr,
     giganto_info: GigantoInfo,
@@ -1826,7 +1826,7 @@ impl Giganto {
         Ok(())
     }
 
-    pub(super) async fn finish(&mut self) -> Result<()> {
+    pub(crate) async fn finish(&mut self) -> Result<()> {
         self.send_finish().await?;
         let mut force_finish_count = 0;
         loop {

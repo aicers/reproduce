@@ -12,7 +12,7 @@ pub(super) use statistics::{ProcessStats, Stats};
 pub(super) use templates::TemplatesBox;
 use tracing::{error, warn};
 
-pub(super) trait ParseNetflowDatasets: Sized {
+pub(crate) trait ParseNetflowDatasets: Sized {
     fn parse_netflow_datasets(
         pkt_cnt: u64,
         templates: &mut TemplatesBox,

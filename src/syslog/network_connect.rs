@@ -173,7 +173,7 @@ impl TryFromSysmonRecord for NetworkConnection {
 }
 
 #[derive(Serialize)]
-pub(super) struct ElasticNetworkConnection {
+pub(crate) struct ElasticNetworkConnection {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

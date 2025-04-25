@@ -160,7 +160,7 @@ impl PktBuf {
         }
     }
 
-    pub(super) fn src_addr(&self) -> IpAddr {
+    pub(crate) fn src_addr(&self) -> IpAddr {
         self.iph.addr_pair.src
     }
 

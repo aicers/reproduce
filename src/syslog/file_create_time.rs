@@ -82,7 +82,7 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
 }
 
 #[derive(Serialize)]
-pub(super) struct ElasticFileCreationTimeChanged {
+pub(crate) struct ElasticFileCreationTimeChanged {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,

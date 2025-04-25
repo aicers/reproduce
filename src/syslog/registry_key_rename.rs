@@ -78,7 +78,7 @@ impl TryFromSysmonRecord for RegistryKeyValueRename {
 }
 
 #[derive(Serialize)]
-pub(super) struct ElasticRegistryKeyValueRename {
+pub(crate) struct ElasticRegistryKeyValueRename {
     agent_name: Option<String>,
     agent_id: Option<String>,
     event_action: Option<String>,
