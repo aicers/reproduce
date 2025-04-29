@@ -2,8 +2,8 @@
 
 This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
-this project adheres to [Semantic
-Versioning](https://semver.org/spec/v2.0.0.html).
+this project adheres to
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
@@ -91,20 +91,21 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   - Changed `GIGANTO_VERSION` to "0.21.0"
 - Change to send events in unit of 100 for protocol events.
 - Applied code import ordering by `StdExternalCrate`. From now on, all code is
-  expected to be formatted using `cargo fmt -- --config group_imports=StdExternalCrate`.
+  expected to be formatted using
+  `cargo fmt -- --config group_imports=StdExternalCrate`.
 
 ## [0.19.0] - 2024-05-14
 
 ### Changed
 
 - Change to read all command line parameters in config toml file.
-  - Removes the option to start from a specific line (`-f`), since skip
-    lines also allow sending from a specific line.
+  - Removes the option to start from a specific line (`-f`), since skip lines
+    also allow sending from a specific line.
   - Modify the skip count/send count/last sent line options(`-s`/`-c`/`-r`),
     which only worked with logs, to work with all conditions.
   - Modify it so that folder polling is applied first.
-  - Remove the option for output type.(`-o`) The associated functionality
-    is now deprecated.
+  - Remove the option for output type.(`-o`) The associated functionality is now
+    deprecated.
 - Changed configuration field names.
   - `roots` to `root` to handle using a single root.
   - `giganto_ingest_addr` to `giganto_ingest_srv_addr`.
@@ -145,21 +146,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added the line number to convert error message.
 - Supports sysmon csv log.
-  - kind:
-    "process_create",
-    "file_create_time",
-    "network_connect",
-    "process_terminate",
-    "image_load",
-    "file_create",
-    "registry_value_set",
-    "registry_key_rename",
-    "file_create_stream_hash",
-    "pipe_event",
-    "dns_query",
-    "file_delete",
-    "process_tamper",
-    "file_delete_detected"
+  - kind: "process_create", "file_create_time", "network_connect",
+    "process_terminate", "image_load", "file_create", "registry_value_set",
+    "registry_key_rename", "file_create_stream_hash", "pipe_event", "dns_query",
+    "file_delete", "process_tamper", "file_delete_detected"
 
 ### Changed
 
@@ -190,10 +180,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Support for sending `giganto` log for new protocols. (`smb`, `nfs`).
-  For `nfs`, zeek log does not exist, and for `smb`, the protocol generates
-  multiple types of logs (conn.log/kerberos.log/smb_files.log, etc.), So it
-  only supports sending Giganto's log files.
+- Support for sending `giganto` log for new protocols. (`smb`, `nfs`). For
+  `nfs`, zeek log does not exist, and for `smb`, the protocol generates multiple
+  types of logs (conn.log/kerberos.log/smb_files.log, etc.), So it only supports
+  sending Giganto's log files.
 
 ## [0.16.0] - 2023-06-27
 
@@ -207,11 +197,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Support for sending `giganto`/`zeek` log for new protocols.
-  (`ldap`, `tls`, `ftp`). The structure of `Tls` was defined based on the field
-  values sent by aicer's packet extraction program. As a result, many fields
-  will be insufficient when transmitted by conventional `zeek log`(ssl.log),
-  and the insufficient fields will be filled with the default value("-"/0) and
+- Support for sending `giganto`/`zeek` log for new protocols. (`ldap`, `tls`,
+  `ftp`). The structure of `Tls` was defined based on the field values sent by
+  aicer's packet extraction program. As a result, many fields will be
+  insufficient when transmitted by conventional `zeek log`(ssl.log), and the
+  insufficient fields will be filled with the default value("-"/0) and
   transmitted.
 
 ## [0.15.0] - 2023-05-18
@@ -219,7 +209,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Modified to only send giganto-version during handshake process by removing
-  ‘-reproduce’ because the agent name is included in the certificate.
+  `-reproduce` because the agent name is included in the certificate.
 - Bump giganto-client, quinn, rustls to latest version.
 
 ## [0.14.0] - 2023-03-30
@@ -242,13 +232,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Send zeek conn, http, rdp, smtp to giganto with kind option
-  `"conn", "http", "rdp", "smtp", "ntlm", "kerberos"`
-  `"ssh", "dce_rpc"`
-- Add zeeklog skip option
-  `-f` option read line from given line number (at least 1),
-- Send operation log to giganto with kind option
-  `"oplog"`
+- Send zeek conn, http, rdp, smtp to giganto with kind option "conn", "http",
+  "rdp", "smtp", "ntlm", "kerberos","ssh", "dce_rpc"
+- Add zeeklog skip option `-f` option read line from given line number (at least
+  1),
+- Send operation log to giganto with kind option `"oplog"`
 
 ### Changed
 
@@ -270,11 +258,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Support for x86_64-unknown-linux-musl.
 - Support Giganto server.
-  `-o "giganto" -C "tests/config.toml"` to test
-  `-G` option to set giganto server address (default: 127.0.0.1:38370)
-  `-N` option is giganto server name, (default: localhost)
-  `-C` option is certificate path toml file
-  `-k` option to set log kind to giganto, like topic of Kafka
+
+  - `-o "giganto" -C "tests/config.toml"` to test
+  - `-G` option to set giganto server address (default: 127.0.0.1:38370)
+  - `-N` option is giganto server name, (default: localhost)
+  - `-C` option is certificate path toml file
+  - `-k` option to set log kind to giganto, like topic of Kafka
 
   ```toml
   [certification]
@@ -309,9 +298,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- "event_id = time(32bit) + serial-number(24bit) + data-origin(8bit)"
-  The "time" is current time of system, and "data-origin" is attached also.
-  And "serial-number" is rotating from 0 to max 24bit number.
+- "event_id = time(32bit) + serial-number(24bit) + data-origin(8bit)" The "time"
+  is current time of system, and "data-origin" is attached also. And
+  "serial-number" is rotating from 0 to max 24bit number.
 
   The value of "event_id" is not continuous because of this.
 
@@ -319,7 +308,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   "time" value is changed), the serial number starts from 0 again, so the
   "event_id" that follows is less than the "event_id" of the previous event.
 
-  Patch: the "event_id" created later has a larger value than before, at all time.
+  Patch: the "event_id" created later has a larger value than before, at all
+  time.
 
 ## [0.9.9] - 2020-06-17
 
@@ -343,9 +333,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Add '-j' option: user can set the initial event_id number. Without this
+- Add `-j` option: user can set the initial event_id number. Without this
   option, event_id will be begin at 1 or skip_count+1.
-- Add '-v' option: REproduce watches the input directory and sends it when new
+- Add `-v` option: REproduce watches the input directory and sends it when new
   files are found.
 - Instead of the name 'report.txt', use the Kafka topic name as the file name.
 
@@ -386,8 +376,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- The event_id for pcap changed to the number of packets read from that PCAP file.
-  In previous version event_id was session number.
+- The event_id for pcap changed to the number of packets read from that PCAP
+  file. In previous version event_id was session number.
 - `report.txt` file will be created in `/report/` directory if it is exist, like
   `/report/report.txt`. If not, REproduce will try to open in the current
   directory where REproduce is running in. If you want to run REproduce in
