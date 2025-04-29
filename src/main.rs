@@ -84,14 +84,10 @@ fn parse() -> PathBuf {
 fn version() -> String {
     format!("REproduce {}", env!("CARGO_PKG_VERSION"))
 }
-
-/// Initializes the tracing subscriber and returns a `WorkerGuard` that flushes the log when
-/// dropped.
+/// Initializes the tracing subscriber and returns a `WorkerGuard`.
 ///
+/// Logs will be written to the file specified by `log_path` if provided.
 /// If `log_path` is `None`, logs will be printed to stdout.
-///
-/// If the runtime is in debug mode, logs will be printed to stdout in addition to the specified
-/// `log_path`.
 fn init_tracing(log_path: Option<&Path>) -> Result<WorkerGuard> {
     let (layer, guard) = if let Some(log_path) = log_path {
         let file = OpenOptions::new()
