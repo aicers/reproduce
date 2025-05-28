@@ -2,8 +2,7 @@
 
 This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
-this project adheres to
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.22.0] - 2025-05-23
 
@@ -12,8 +11,7 @@ this project adheres to
 - Moved configuration fields from the nested `Common` struct to the top-level
   `Config` struct and updated related code accordingly.
 - Replaced `log_dir` with `log_path` in command line arguments. Now the log file
-  path can be specified directly rather than combining a directory and a fixed
-  filename.
+  path can be specified directly rather than combining a directory and a fixed filename.
 - Removed dependency on LOG_FILENAME environment variable by eliminating the
   .cargo/config.toml file.
 
@@ -91,8 +89,7 @@ this project adheres to
   - Changed `GIGANTO_VERSION` to "0.21.0"
 - Change to send events in unit of 100 for protocol events.
 - Applied code import ordering by `StdExternalCrate`. From now on, all code is
-  expected to be formatted using
-  `cargo fmt -- --config group_imports=StdExternalCrate`.
+  expected to be formatted using `cargo fmt -- --config group_imports=StdExternalCrate`.
 
 ## [0.19.0] - 2024-05-14
 
@@ -197,12 +194,11 @@ this project adheres to
 
 ### Added
 
-- Support for sending `giganto`/`zeek` log for new protocols. (`ldap`, `tls`,
-  `ftp`). The structure of `Tls` was defined based on the field values sent by
-  aicer's packet extraction program. As a result, many fields will be
-  insufficient when transmitted by conventional `zeek log`(ssl.log), and the
-  insufficient fields will be filled with the default value("-"/0) and
-  transmitted.
+- Support for sending `giganto`/`zeek` log for new protocols. (`ldap`, `tls`, `ftp`).
+  The structure of `Tls` was defined based on the field values sent by aicer's
+  packet extraction program. As a result, many fields will be insufficient when
+  transmitted by conventional `zeek log`(ssl.log), and the insufficient fields
+  will be filled with the default value("-"/0) and transmitted.
 
 ## [0.15.0] - 2023-05-18
 
@@ -299,8 +295,8 @@ this project adheres to
 ### Changed
 
 - "event_id = time(32bit) + serial-number(24bit) + data-origin(8bit)" The "time"
-  is current time of system, and "data-origin" is attached also. And
-  "serial-number" is rotating from 0 to max 24bit number.
+  is current time of system, and "data-origin" is attached also. And "serial-number"
+  is rotating from 0 to max 24bit number.
 
   The value of "event_id" is not continuous because of this.
 
@@ -308,8 +304,7 @@ this project adheres to
   "time" value is changed), the serial number starts from 0 again, so the
   "event_id" that follows is less than the "event_id" of the previous event.
 
-  Patch: the "event_id" created later has a larger value than before, at all
-  time.
+  Patch: the "event_id" created later has a larger value than before, at all time.
 
 ## [0.9.9] - 2020-06-17
 
@@ -324,8 +319,8 @@ this project adheres to
 ### Changed
 
 - "event_id" format is changed.
-- previous format: event_id(64bit) = datasource id(upper 16bit) + sequence
-  number(lower 48bit)
+- previous format: event_id(64bit) = datasource id(upper 16bit) +
+  sequence number(lower 48bit)
 - new format: event_id(64bit) = current system time in seconds(upper 32bit) +
   sequence number (lower 24bit) + datasource id(lowest 8bit)
 
@@ -376,8 +371,8 @@ this project adheres to
 
 ### Changed
 
-- The event_id for pcap changed to the number of packets read from that PCAP
-  file. In previous version event_id was session number.
+- The event_id for pcap changed to the number of packets read from that PCAP file.
+  In previous version event_id was session number.
 - `report.txt` file will be created in `/report/` directory if it is exist, like
   `/report/report.txt`. If not, REproduce will try to open in the current
   directory where REproduce is running in. If you want to run REproduce in
