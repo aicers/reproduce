@@ -60,8 +60,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### [Directory]
 
-- This section is required only if you are processing log files from a
-  directory.
+- This section is required only if you are processing log files from a directory.
 
 <!-- markdownlint-disable -->
 
@@ -74,8 +73,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### [Elastic]
 
-- This section is required only if you are fetching logs from an Elasticsearch
-  server.
+- This section is required only if you are fetching logs from an Elasticsearch server.
 
 <!-- markdownlint-disable -->
 
@@ -110,8 +108,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Send an operation log to a Giganto server
 
-- Sends an operation log file to the Giganto server using the fixed data kind
-  oplog.
+- Sends an operation log file to the Giganto server using the fixed data kind oplog.
 
   ```toml
   cert = "/opt/clumit/keys/reproduce_cert.pem"
@@ -260,8 +257,7 @@ the specific language governing permissions and limitations under the License.
 ## Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the [Apache-2.0
-license][apache-license], shall be licensed as above, without any additional
-terms or conditions.
+for inclusion in the work by you, as defined in the [Apache-2.0 license][apache-license],
+shall be licensed as above, without any additional terms or conditions.
 
 [apache-license]: http://www.apache.org/licenses/LICENSE-2.0
