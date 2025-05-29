@@ -26,7 +26,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 - Below is a detailed breakdown of all available configuration fields.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field                     | Description                                                                | Required | Default    |
 | ------------------------- | -------------------------------------------------------------------------- | -------- | ---------- |
@@ -40,13 +40,13 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | `report`                  | Enables or disables reporting of transfer statistics                       | No       | false      |
 | `log_path`                | Path to the log file. If not specified, logs are sent to stdout.           | No       | -          |
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-enable MD013 -->
 
 ### [File]
 
 - This section is required only if you are using file-based input.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field                       | Description                                                | Required | Default |
 | --------------------------- | ---------------------------------------------------------- | -------- | ------- |
@@ -56,26 +56,26 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | `transfer_skip_count`       | Number of lines or packets to skip before sending          | No       | -       |
 | `last_transfer_line_suffix` | Suffix used for the file storing the last transferred line | No       | -       |
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-enable MD013 -->
 
 ### [Directory]
 
 - This section is required only if you are processing log files from a directory.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field          | Description                                     | Required | Default |
 | -------------- | ----------------------------------------------- | -------- | ------- |
 | `file_prefix`  | Prefix for filenames when using directory input | No       | -       |
 | `polling_mode` | Enables or disables directory polling mode      | No       | false   |
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-enable MD013 -->
 
 ### [Elastic]
 
 - This section is required only if you are fetching logs from an Elasticsearch server.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field          | Description                                                  | Required | Default |
 | -------------- | ------------------------------------------------------------ | -------- | ------- |
@@ -88,7 +88,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | `dump_dir`     | Path to the directory where CSV files are saved              | Yes      | -       |
 | `elastic_auth` | Elasticsearch authentication credentials (username:password) | Yes      | -       |
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-enable MD013 -->
 
 ## Examples
 
