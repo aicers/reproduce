@@ -26,7 +26,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 - Below is a detailed breakdown of all available configuration fields.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field                     | Description                                                                | Required | Default    |
 | ------------------------- | -------------------------------------------------------------------------- | -------- | ---------- |
@@ -46,7 +46,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 - This section is required only if you are using file-based input.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field                       | Description                                                | Required | Default |
 | --------------------------- | ---------------------------------------------------------- | -------- | ------- |
@@ -62,7 +62,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 - This section is required only if you are processing log files from a directory.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field          | Description                                     | Required | Default |
 | -------------- | ----------------------------------------------- | -------- | ------- |
@@ -75,7 +75,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 - This section is required only if you are fetching logs from an Elasticsearch server.
 
-<!-- markdownlint-disable -->
+<!-- markdownlint-disable MD013 -->
 
 | Field          | Description                                                  | Required | Default |
 | -------------- | ------------------------------------------------------------ | -------- | ------- |
