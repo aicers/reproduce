@@ -4,6 +4,14 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Updated field name from `referrer` to `referer` in HTTP log processing to
+  align with HTTP standard specification (RFC 7231) for the Referer header
+  field.
+
 ## [0.22.0] - 2025-05-23
 
 ### Changed
@@ -379,6 +387,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.22.0...main
 [0.22.0]: https://github.com/aicers/reproduce/compare/0.21.2...0.22.0
 [0.21.2]: https://github.com/aicers/reproduce/compare/0.21.1...0.21.2
 [0.21.1]: https://github.com/aicers/reproduce/compare/0.21.0...0.21.1
