@@ -363,10 +363,10 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing uri"));
         };
-        let referrer = if let Some(referrer) = rec.get(11) {
-            referrer.to_string()
+        let referer = if let Some(referer) = rec.get(11) {
+            referer.to_string()
         } else {
-            return Err(anyhow!("missing referrer"));
+            return Err(anyhow!("missing referer"));
         };
         let version = if let Some(version) = rec.get(12) {
             version.to_string()
@@ -483,7 +483,7 @@ impl TryFromGigantoRecord for Http {
                 method,
                 host,
                 uri,
-                referrer,
+                referer,
                 version,
                 user_agent,
                 request_len,

@@ -19,7 +19,7 @@ fn zeek_conn() {
 
 #[test]
 fn zeek_http() {
-    // ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	trans_depth	method	host	uri	referrer	version	user_agent	origin	request_body_len	response_body_len	status_code	status_msg	info_code	info_msg	tags	username	password	proxied	orig_fuids	orig_filenames	orig_mime_types	resp_fuids	resp_filenames	resp_mime_types
+    // ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	trans_depth	method	host	uri	referer	version	user_agent	origin	request_body_len	response_body_len	status_code	status_msg	info_code	info_msg	tags	username	password	proxied	orig_fuids	orig_filenames	orig_mime_types	resp_fuids	resp_filenames	resp_mime_types
     let data = "1669773412.689790	CHhAvVGS1DHFjwGM9	127.0.0.1	42960	127.0.0.1	80	1	GET	-	/zeek.html	-	-	-	-	0	0	-	-	-	-	(empty)	-	-	-	-	-	-	-	-	-";
 
     let rec = stringrecord(data);

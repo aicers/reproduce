@@ -387,10 +387,10 @@ impl TryFromZeekRecord for Http {
         } else {
             return Err(anyhow!("missing uri"));
         };
-        let referrer = if let Some(referrer) = rec.get(10) {
-            referrer.to_string()
+        let referer = if let Some(referer) = rec.get(10) {
+            referer.to_string()
         } else {
-            return Err(anyhow!("missing referrer"));
+            return Err(anyhow!("missing referer"));
         };
         let version = if let Some(version) = rec.get(11) {
             version.to_string()
@@ -492,7 +492,7 @@ impl TryFromZeekRecord for Http {
                 method,
                 host,
                 uri,
-                referrer,
+                referer,
                 version,
                 user_agent,
                 request_len,
