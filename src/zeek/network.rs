@@ -59,16 +59,17 @@ impl TryFromZeekRecord for Conn {
         } else {
             return Err(anyhow!("missing service"));
         };
-        let duration = if let Some(duration) = rec.get(8) {
+        let end_time = if let Some(duration) = rec.get(8) {
             if duration.eq("-") {
                 0
             } else {
-                ((duration.parse::<f64>().context("invalid duration")? * 1_000_000_000.0).round())
-                    .to_i64()
-                    .expect("valid")
+                time + ((duration.parse::<f64>().context("invalid duration")? * 1_000_000_000.0)
+                    .round())
+                .to_i64()
+                .expect("valid")
             }
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(anyhow!("missing end_time"));
         };
         let orig_bytes = if let Some(orig_bytes) = rec.get(9) {
             if orig_bytes.eq("-") {
@@ -124,7 +125,7 @@ impl TryFromZeekRecord for Conn {
                 resp_port,
                 proto,
                 conn_state,
-                duration,
+                end_time,
                 service,
                 orig_bytes,
                 resp_bytes,
@@ -317,7 +318,7 @@ impl TryFromZeekRecord for Dns {
                 resp_addr,
                 resp_port,
                 proto,
-                last_time: rtt,
+                end_time: rtt,
                 query,
                 answer,
                 trans_id,
@@ -488,7 +489,7 @@ impl TryFromZeekRecord for Http {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 method,
                 host,
                 uri,
@@ -561,7 +562,7 @@ impl TryFromZeekRecord for Kerberos {
                 resp_addr,
                 resp_port,
                 proto: PROTO_UDP,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 client_time: 0,
                 server_time: 0,
                 error_code: 0,
@@ -640,7 +641,7 @@ impl TryFromZeekRecord for Ntlm {
                 resp_addr,
                 resp_port,
                 proto: 0,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 protocol: String::new(),
                 username,
                 hostname,
@@ -700,7 +701,7 @@ impl TryFromZeekRecord for Rdp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 cookie,
             },
             time,
@@ -781,7 +782,7 @@ impl TryFromZeekRecord for Smtp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 mailfrom,
                 date,
                 from,
@@ -874,7 +875,7 @@ impl TryFromZeekRecord for Ssh {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 client,
                 server,
                 cipher_alg,
@@ -963,7 +964,7 @@ impl TryFromZeekRecord for DceRpc {
                 resp_addr,
                 resp_port,
                 proto: 0,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 rtt,
                 named_pipe,
                 endpoint,
@@ -1074,7 +1075,7 @@ impl TryFromZeekRecord for Ftp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 user,
                 password,
                 command,
@@ -1205,7 +1206,7 @@ impl TryFromZeekRecord for Ldap {
                 resp_addr,
                 resp_port,
                 proto,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 message_id,
                 version,
                 opcode,
@@ -1281,7 +1282,7 @@ impl TryFromZeekRecord for Tls {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                last_time: i64::MAX,
+                end_time: i64::MAX,
                 server_name,
                 alpn_protocol: String::new(),
                 ja3: String::new(),
