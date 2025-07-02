@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-bincode = "1"
+bincode = "2"
 byteorder = "1"
 bytesize = "2"
 chrono = "0.4"
