@@ -88,7 +88,7 @@ impl Producer {
             {
                 Ok(r) => r,
                 Err(quinn::ConnectionError::TimedOut) => {
-                    info!("server timeout, reconnecting...");
+                    info!("Server timeout, reconnecting...");
                     tokio::time::sleep(Duration::from_secs(INTERVAL)).await;
                     continue;
                 }
@@ -1116,7 +1116,7 @@ impl Giganto {
     where
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
     {
-        info!("send zeek");
+        info!("Send zeek");
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
@@ -1161,7 +1161,7 @@ impl Giganto {
                             }
                             Err(e) => {
                                 failed_cnt += 1;
-                                error!("failed to convert data #{}: {e}", next_pos.line());
+                                warn!("Failed to convert data #{}: {e}", next_pos.line());
                             }
                         }
                     }
@@ -1170,7 +1170,7 @@ impl Giganto {
                     }
                     Err(e) => {
                         failed_cnt += 1;
-                        error!("invalid record: {e}");
+                        warn!("Invalid record: {e}");
                     }
                 }
                 pos = next_pos;
@@ -1193,14 +1193,14 @@ impl Giganto {
         }
 
         info!(
-            "last line: {}, success line: {}, failed line: {} ",
+            "Last line: {}, Success: {}, Failed: {}",
             pos.line(),
             success_cnt,
             failed_cnt
         );
 
         if let Err(e) = report.end() {
-            warn!("cannot write report: {e}");
+            warn!("Cannot write report: {e}");
         }
 
         Ok(pos.line())
@@ -1220,7 +1220,7 @@ impl Giganto {
     where
         T: Serialize + TryFromGigantoRecord + Unpin + Debug,
     {
-        info!("migration");
+        info!("Migration");
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
@@ -1265,7 +1265,7 @@ impl Giganto {
                             }
                             Err(e) => {
                                 failed_cnt += 1;
-                                error!("failed to convert data #{}: {e}", next_pos.line());
+                                warn!("Failed to convert data #{}: {e}", next_pos.line());
                             }
                         }
                     }
@@ -1274,7 +1274,7 @@ impl Giganto {
                     }
                     Err(e) => {
                         failed_cnt += 1;
-                        error!("invalid record: {e}");
+                        warn!("Invalid record: {e}");
                     }
                 }
                 pos = next_pos;
@@ -1297,14 +1297,14 @@ impl Giganto {
         }
 
         info!(
-            "last line: {}, success line: {}, failed line: {} ",
+            "Last line: {}, Success: {}, Failed: {}",
             pos.line(),
             success_cnt,
             failed_cnt
         );
 
         if let Err(e) = report.end() {
-            warn!("cannot write report: {e}");
+            warn!("Cannot write report: {e}");
         }
 
         Ok(pos.line())
@@ -1321,7 +1321,7 @@ impl Giganto {
         running: Arc<AtomicBool>,
         report: &mut Report,
     ) -> Result<u64> {
-        info!("send oplog");
+        info!("Send oplog");
         let mut lines = reader.lines();
         let mut cnt = 0;
         let mut success_cnt = 0u64;
@@ -1382,12 +1382,12 @@ impl Giganto {
         }
 
         info!(
-            "last line: {}, success: {}, failed: {}",
+            "Last line: {}, Success: {}, Failed: {}",
             cnt, success_cnt, failed_cnt
         );
 
         if let Err(e) = report.end() {
-            warn!("cannot write report: {e}");
+            warn!("Cannot write report: {e}");
         }
 
         Ok(cnt)
@@ -1407,7 +1407,7 @@ impl Giganto {
     where
         T: Serialize + TryFromSysmonRecord + Unpin + Debug,
     {
-        info!("send sysmon, {protocol:?}");
+        info!("Send sysmon, {protocol:?}");
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
@@ -1457,7 +1457,7 @@ impl Giganto {
                             }
                             Err(e) => {
                                 failed_cnt += 1;
-                                error!("failed to convert data #{}: {e}", next_pos.line());
+                                warn!("Failed to convert data #{}: {e}", next_pos.line());
                             }
                         }
                     }
@@ -1466,7 +1466,7 @@ impl Giganto {
                     }
                     Err(e) => {
                         failed_cnt += 1;
-                        error!("invalid record: {e}");
+                        warn!("Invalid record: {e}");
                     }
                 }
                 pos = next_pos;
@@ -1490,14 +1490,14 @@ impl Giganto {
 
         self.init_msg = true;
         info!(
-            "last line: {}, success line: {}, failed line: {} ",
+            "Last line: {}, Success: {}, Failed: {}",
             pos.line(),
             success_cnt,
             failed_cnt
         );
 
         if let Err(e) = report.end() {
-            warn!("cannot write report: {e}");
+            warn!("Cannot write report: {e}");
         }
 
         Ok(pos.line())
@@ -1516,7 +1516,7 @@ impl Giganto {
     where
         T: Serialize + ParseNetflowDatasets + Unpin + Debug,
     {
-        info!("send netflow");
+        info!("Send netflow");
         let tmpl_path = env::var("NETFLOW_TEMPLATES_PATH");
         let mut templates = if let Ok(tmpl_path) = tmpl_path.as_ref() {
             TemplatesBox::from_path(tmpl_path).unwrap_or_default()
@@ -1616,7 +1616,7 @@ impl Giganto {
             ProcessStats::Packets,
             pkt_cnt.try_into().unwrap_or_default(),
         );
-        info!("netflow pcap processing statistics: {:?}", stats);
+        info!("Netflow pcap processing statistics: {:?}", stats);
         if !templates.is_empty() {
             if let Ok(tmpl_path) = tmpl_path.as_ref() {
                 if let Err(e) = templates.save(tmpl_path) {
@@ -1626,7 +1626,7 @@ impl Giganto {
         }
 
         if let Err(e) = report.end() {
-            warn!("cannot write report: {e}");
+            warn!("Cannot write report: {e}");
         }
 
         Ok(pkt_cnt)
@@ -1645,7 +1645,7 @@ impl Giganto {
     where
         T: Serialize + ParseSecurityLog + Unpin + Debug,
     {
-        info!("send seculog");
+        info!("Send seculog");
         let mut lines = reader.lines();
         let mut cnt = 0;
         let mut success_cnt = 0u64;
@@ -1713,12 +1713,12 @@ impl Giganto {
             self.send_event_in_batch(&buf).await?;
         }
         info!(
-            "last line: {}, success: {}, failed: {}",
+            "Last line: {}, Success: {}, Failed: {}",
             cnt, success_cnt, failed_cnt
         );
 
         if let Err(e) = report.end() {
-            warn!("cannot write report: {e}");
+            warn!("Cannot write report: {e}");
         }
 
         Ok(cnt)
@@ -1748,7 +1748,7 @@ impl Giganto {
                     line
                 }
                 Some(Err(e)) => {
-                    error!("failed to convert input data: {e}");
+                    error!("Failed to convert input data: {e}");
                     break;
                 }
                 None => {
@@ -1772,7 +1772,7 @@ impl Giganto {
             }
         }
         if let Err(e) = report.end() {
-            warn!("cannot write report: {e}");
+            warn!("Cannot write report: {e}");
         }
         Ok(conv_cnt + skip)
     }
@@ -1847,7 +1847,7 @@ impl Giganto {
                 break;
             }
         }
-        info!("Giganto end");
+        info!("Data Store ended");
         Ok(())
     }
 
@@ -1862,7 +1862,7 @@ impl Giganto {
             {
                 Ok(r) => r,
                 Err(quinn::ConnectionError::TimedOut) => {
-                    info!("server timeout, reconnecting...");
+                    info!("Server timeout, reconnecting...");
                     tokio::time::sleep(Duration::from_secs(INTERVAL)).await;
                     continue;
                 }
@@ -1944,13 +1944,13 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
             Ok(timestamp) => {
                 if timestamp == CHANNEL_CLOSE_TIMESTAMP {
                     finish_checker.store(true, Ordering::SeqCst);
-                    info!("finish ACK: {timestamp}");
+                    info!("Finish ACK: {timestamp}");
                 } else {
                     info!("ACK: {timestamp}");
                 }
             }
             Err(RecvError::ReadError(quinn::ReadExactError::FinishedEarly(_))) => {
-                warn!("finished early");
+                warn!("Finished early");
                 break;
             }
             Err(e) => bail!("receive ACK err: {}", e),
