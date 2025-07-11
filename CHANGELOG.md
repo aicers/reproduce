@@ -14,6 +14,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   structures to better reflect its meaning as the session end time.
 - Updated giganto-client dependency to support the new field names.
 
+### Fixed
+
+- Enhanced Sysmon event timestamp handling to prevent data loss and duplication
+  when events share the same millisecond timestamp. Implemented a deduplication
+  mechanism that tracks the previous event timestamp and applies incremental
+  offsets to ensure unique timestamps for each event.
+
 ## [0.22.1] - 2025-06-18
 
 ### Changed
