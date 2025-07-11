@@ -61,7 +61,7 @@ pub(crate) async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Resul
 
     event_codes.par_iter().for_each(|&event_code| {
         let Ok(runtime) = tokio::runtime::Runtime::new() else {
-            error!("failed to init tokio runtime for event_code {event_code}");
+            error!("Failed to init tokio runtime for event_code {event_code}");
             return;
         };
         runtime.block_on(async {
@@ -208,7 +208,7 @@ fn process_event_data<T: EventToCsv + Serialize>(data: &Value, file_name: &str, 
 }
 
 fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) -> io::Result<()> {
-    info!("{file_name}");
+    info!("CSV file name: {file_name}");
     if entries.is_empty() {
         return Ok(());
     }

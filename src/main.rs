@@ -44,15 +44,15 @@ async fn main() -> Result<()> {
     let config = Config::new(config_filename.as_ref())?;
     let _guard = init_tracing(config.log_path.as_deref())?;
     let controller = Controller::new(config);
-    info!("reproduce start");
+    info!("Data Broker started");
     let _handle = task::spawn(async move {
         if let Err(e) = controller.run().await {
-            error!("ERROR: {e}");
+            error!("Terminated with error: {e}");
             std::process::exit(1);
         }
     })
     .await;
-    info!("reproduce end");
+    info!("Data Broker completed");
     Ok(())
 }
 

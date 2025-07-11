@@ -10,7 +10,7 @@ use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 pub(super) use packet::{NetflowHeader, PktBuf};
 pub(super) use statistics::{ProcessStats, Stats};
 pub(super) use templates::TemplatesBox;
-use tracing::{error, warn};
+use tracing::warn;
 
 pub(crate) trait ParseNetflowDatasets: Sized {
     fn parse_netflow_datasets(
@@ -121,7 +121,7 @@ impl ParseNetflowDatasets for Netflow9 {
                     }
                     stats.add(ProcessStats::Events, usize::from(header.count));
                 } else {
-                    error!("no template for flow key ({:?})", flow_key);
+                    warn!("No template for flow key ({:?})", flow_key);
                     stats.add(ProcessStats::TemplateNotFound, 1);
                 }
             }
