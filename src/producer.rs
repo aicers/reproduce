@@ -1414,7 +1414,7 @@ impl Giganto {
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
         let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 1_i64;
+        let mut timestamp_offset = 0_i64;
         let mut buf = Vec::new();
         report.start();
 
@@ -1463,12 +1463,11 @@ impl Giganto {
                             } else {
                                 // Different timestamp, update reference and reset offset
                                 reference_timestamp = Some(current_timestamp);
-                                timestamp_offset = 1;
+                                timestamp_offset = 0;
                             }
                         } else {
                             // First event, set reference timestamp
                             reference_timestamp = Some(current_timestamp);
-                            timestamp_offset = 1;
                         }
 
                         match T::try_from_sysmon_record(&record, timestamp_offset) {
