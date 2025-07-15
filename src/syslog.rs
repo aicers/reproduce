@@ -233,7 +233,7 @@ fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) ->
     Ok(())
 }
 
-fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
     if let Ok(ndt) = NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S%.f") {
         Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
     } else {

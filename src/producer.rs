@@ -1393,6 +1393,7 @@ impl Giganto {
         Ok(cnt)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn send_sysmon<T>(
         &mut self,
         mut sysmon_iter: StringRecordsIntoIter<File>,
@@ -1412,7 +1413,8 @@ impl Giganto {
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
-        let mut time_serial = 0_i64;
+        let mut reference_timestamp: Option<i64> = None;
+        let mut timestamp_offset = 0_i64;
         let mut buf = Vec::new();
         report.start();
 
@@ -1425,11 +1427,50 @@ impl Giganto {
                 match result {
                     Ok(record) if record != last_record => {
                         last_record = record.clone();
-                        time_serial += 1;
-                        if time_serial > 999 {
-                            time_serial = 1;
+
+                        // Extract timestamp from record and implement deduplication logic
+                        let current_timestamp = if let Some(utc_time) = record.get(3) {
+                            match crate::syslog::parse_sysmon_time(utc_time) {
+                                Ok(datetime) => {
+                                    if let Some(timestamp) = datetime.timestamp_nanos_opt() {
+                                        timestamp
+                                    } else {
+                                        failed_cnt += 1;
+                                        error!(
+                                            "failed to convert timestamp to nanos #{}",
+                                            next_pos.line()
+                                        );
+                                        continue;
+                                    }
+                                }
+                                Err(e) => {
+                                    failed_cnt += 1;
+                                    error!("failed to parse sysmon time #{}: {e}", next_pos.line());
+                                    continue;
+                                }
+                            }
+                        } else {
+                            failed_cnt += 1;
+                            error!("missing time field #{}", next_pos.line());
+                            continue;
+                        };
+
+                        // Implement timestamp deduplication logic
+                        if let Some(ref_ts) = reference_timestamp {
+                            if current_timestamp == ref_ts {
+                                // Same timestamp, increment offset
+                                timestamp_offset += 1;
+                            } else {
+                                // Different timestamp, update reference and reset offset
+                                reference_timestamp = Some(current_timestamp);
+                                timestamp_offset = 0;
+                            }
+                        } else {
+                            // First event, set reference timestamp
+                            reference_timestamp = Some(current_timestamp);
                         }
-                        match T::try_from_sysmon_record(&record, time_serial) {
+
+                        match T::try_from_sysmon_record(&record, timestamp_offset) {
                             Ok((event, timestamp)) => {
                                 if self.init_msg {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
