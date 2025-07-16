@@ -109,7 +109,7 @@ impl TemplatesBox {
             let key = (src_addr, tmpl.header.source_id, tmpl.template_id);
             if self.templates.insert(key, tmpl.clone()).is_none() {
                 info!(
-                    "packet #{}: New template {:?} is appended. {}",
+                    "Packet #{}: New template {:?} is appended: {}",
                     pkt_cnt, key, tmpl
                 );
             }

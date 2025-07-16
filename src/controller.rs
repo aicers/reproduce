@@ -8,7 +8,7 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
 use crate::syslog::open_sysmon_csv_file;
@@ -129,13 +129,13 @@ impl Controller {
                     tokio::time::sleep(Duration::from_millis(10_000)).await;
                     continue;
                 }
-                error!("no input file");
+                error!("No input file");
                 break;
             }
 
             files.sort_unstable();
             for file in files {
-                info!("{file:?}");
+                info!("File: {file:?}");
                 self.run_single(
                     file.as_path(),
                     producer,
@@ -167,7 +167,7 @@ impl Controller {
         files.sort_unstable();
         for file in files {
             let mut producer = producer(&self.config).await;
-            info!("{file:?}");
+            info!("File: {file:?}");
             let kind = file_to_kind(&file)?;
             self.run_single(file.as_path(), &mut producer, kind, false)
                 .await?;
@@ -318,7 +318,7 @@ impl Controller {
                 &(self.config.input.clone() + "_" + offset_suffix),
                 last_line,
             ) {
-                warn!("cannot write to offset file: {e}");
+                warn!("Cannot write to offset file: {e}");
             }
         }
         Ok(())
@@ -402,7 +402,7 @@ fn read_offset(filename: &str) -> usize {
         let mut content = String::new();
         if f.read_to_string(&mut content).is_ok() {
             if let Ok(offset) = content.parse() {
-                info!("offset file found. Skipping {offset} entries.");
+                info!("Found offset file, skipping {offset} entries");
                 return offset;
             }
         }
@@ -417,11 +417,11 @@ fn write_offset(filename: &str, offset: u64) -> Result<()> {
 }
 
 async fn producer(config: &Config) -> Producer {
-    info!("output type=GIGANTO");
+    debug!("output type=GIGANTO");
     match Producer::new_giganto(config).await {
         Ok(p) => p,
         Err(e) => {
-            error!("cannot create Giganto producer: {e}");
+            error!("Cannot create producer: {e}");
             std::process::exit(1);
         }
     }
