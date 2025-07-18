@@ -16,7 +16,7 @@ pub(crate) trait TryFromZeekRecord: Sized {
     fn try_from_zeek_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
-fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
     if let Some(i) = timestamp.find('.') {
         let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
         let micros = timestamp[i + 1..]

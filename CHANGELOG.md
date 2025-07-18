@@ -20,6 +20,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   when events share the same millisecond timestamp. Implemented a deduplication
   mechanism that tracks the previous event timestamp and applies incremental
   offsets to ensure unique timestamps for each event.
+- Fixed Zeek log timestamp deduplication to prevent event loss when multiple
+  events share the same microsecond timestamp. Added nanosecond-level incremental
+  offsets to ensure unique timestamps for each Zeek log event sent to Giganto.
 
 ## [0.22.1] - 2025-06-18
 
