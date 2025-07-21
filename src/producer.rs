@@ -2127,6 +2127,29 @@ mod tests {
             .unwrap()
     }
 
+    fn apply_timestamp_deduplication(
+        timestamps: &[i64],
+        reference_timestamp: &mut Option<i64>,
+        timestamp_offset: &mut i64,
+    ) -> Vec<i64> {
+        timestamps
+            .iter()
+            .map(|&ts| {
+                if let Some(ref_ts) = *reference_timestamp {
+                    if ts == ref_ts {
+                        *timestamp_offset += 1;
+                    } else {
+                        *reference_timestamp = Some(ts);
+                        *timestamp_offset = 0;
+                    }
+                } else {
+                    *reference_timestamp = Some(ts);
+                }
+                ts + *timestamp_offset
+            })
+            .collect()
+    }
+
     #[test]
     fn test_zeek_timestamp_deduplication() {
         // Test that duplicate timestamps get incremented by 1 nanosecond
@@ -2142,35 +2165,17 @@ mod tests {
         // Both should have the same timestamp initially (before deduplication)
         assert_eq!(ts1, ts2);
 
-        // Test the deduplication logic manually
+        // Test the deduplication logic using the helper function
         let mut reference_timestamp: Option<i64> = None;
         let mut timestamp_offset = 0_i64;
-
-        // Process first record
-        if let Some(ref_ts) = reference_timestamp {
-            if ts1 == ref_ts {
-                timestamp_offset += 1;
-            } else {
-                reference_timestamp = Some(ts1);
-                timestamp_offset = 0;
-            }
-        } else {
-            reference_timestamp = Some(ts1);
-        }
-        let final_ts1 = ts1 + timestamp_offset;
-
-        // Process second record (same timestamp)
-        if let Some(ref_ts) = reference_timestamp {
-            if ts2 == ref_ts {
-                timestamp_offset += 1;
-            } else {
-                timestamp_offset = 0;
-            }
-        }
-        let final_ts2 = ts2 + timestamp_offset;
+        let final_timestamps = apply_timestamp_deduplication(
+            &[ts1, ts2],
+            &mut reference_timestamp,
+            &mut timestamp_offset,
+        );
 
         // After deduplication, second timestamp should be incremented by 1 nanosecond
-        assert_eq!(final_ts2, final_ts1 + 1);
+        assert_eq!(final_timestamps[1], final_timestamps[0] + 1);
     }
 
     #[test]
@@ -2185,36 +2190,18 @@ mod tests {
         // Different timestamps should not be modified by deduplication logic
         assert_ne!(ts1, ts2);
 
-        // Test the deduplication logic manually
+        // Test the deduplication logic using the helper function
         let mut reference_timestamp: Option<i64> = None;
         let mut timestamp_offset = 0_i64;
-
-        // Process first record
-        if let Some(ref_ts) = reference_timestamp {
-            if ts1 == ref_ts {
-                timestamp_offset += 1;
-            } else {
-                reference_timestamp = Some(ts1);
-                timestamp_offset = 0;
-            }
-        } else {
-            reference_timestamp = Some(ts1);
-        }
-        let final_ts1 = ts1 + timestamp_offset;
-
-        // Process second record (different timestamp)
-        if let Some(ref_ts) = reference_timestamp {
-            if ts2 == ref_ts {
-                timestamp_offset += 1;
-            } else {
-                timestamp_offset = 0;
-            }
-        }
-        let final_ts2 = ts2 + timestamp_offset;
+        let final_timestamps = apply_timestamp_deduplication(
+            &[ts1, ts2],
+            &mut reference_timestamp,
+            &mut timestamp_offset,
+        );
 
         // Both timestamps should remain unchanged
-        assert_eq!(final_ts1, ts1);
-        assert_eq!(final_ts2, ts2);
+        assert_eq!(final_timestamps[0], ts1);
+        assert_eq!(final_timestamps[1], ts2);
     }
 
     #[test]
