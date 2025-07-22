@@ -1102,6 +1102,7 @@ struct GigantoInfo {
 }
 
 impl Giganto {
+    #[allow(clippy::too_many_lines)]
     async fn send_zeek<T>(
         &mut self,
         mut zeek_iter: StringRecordsIntoIter<File>,
@@ -1121,6 +1122,8 @@ impl Giganto {
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
         let mut last_record = StringRecord::new();
+        let mut reference_timestamp: Option<i64> = None;
+        let mut timestamp_offset = 0_i64;
         let mut buf = Vec::new();
         report.start();
 
@@ -1133,8 +1136,50 @@ impl Giganto {
                 match result {
                     Ok(record) if record != last_record => {
                         last_record = record.clone();
+
+                        // Extract timestamp from record and implement deduplication logic
+                        let current_timestamp = if let Some(timestamp) = record.get(0) {
+                            match crate::zeek::parse_zeek_timestamp(timestamp) {
+                                Ok(datetime) => {
+                                    if let Some(timestamp) = datetime.timestamp_nanos_opt() {
+                                        timestamp
+                                    } else {
+                                        failed_cnt += 1;
+                                        error!("timestamp conversion failed #{}", next_pos.line());
+                                        continue;
+                                    }
+                                }
+                                Err(e) => {
+                                    failed_cnt += 1;
+                                    error!("timestamp parsing failed #{}: {e}", next_pos.line());
+                                    continue;
+                                }
+                            }
+                        } else {
+                            failed_cnt += 1;
+                            error!("missing timestamp field #{}", next_pos.line());
+                            continue;
+                        };
+
+                        // Implement timestamp deduplication logic
+                        if let Some(ref_ts) = reference_timestamp {
+                            if current_timestamp == ref_ts {
+                                // Same timestamp, increment offset
+                                timestamp_offset += 1;
+                            } else {
+                                // Different timestamp, update reference and reset offset
+                                reference_timestamp = Some(current_timestamp);
+                                timestamp_offset = 0;
+                            }
+                        } else {
+                            // First event, set reference timestamp
+                            reference_timestamp = Some(current_timestamp);
+                        }
+
                         match T::try_from_zeek_record(&record) {
-                            Ok((event, timestamp)) => {
+                            Ok((event, mut timestamp)) => {
+                                // Apply timestamp offset for deduplication
+                                timestamp += timestamp_offset;
                                 if self.init_msg {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;
@@ -2060,5 +2105,114 @@ impl<B: BufRead> Iterator for BinaryLines<B> {
             }
             Err(e) => Some(Err(e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use csv::{ReaderBuilder, StringRecord};
+    use giganto_client::ingest::network::Conn;
+
+    use super::*;
+
+    fn create_zeek_record(timestamp: &str, uid: &str) -> StringRecord {
+        let data = format!("{timestamp}\t{uid}\t192.168.1.77\t57655\t209.197.168.151\t1024\ttcp\tirc-dcc-data\t2.256935\t124\t42208\tSF\t-\t-\t0\tShAdDaFf\t28\t1592\t43\t44452\t-");
+        ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(data.as_bytes())
+            .into_records()
+            .next()
+            .unwrap()
+            .unwrap()
+    }
+
+    fn apply_timestamp_deduplication(
+        timestamps: &[i64],
+        reference_timestamp: &mut Option<i64>,
+        timestamp_offset: &mut i64,
+    ) -> Vec<i64> {
+        timestamps
+            .iter()
+            .map(|&ts| {
+                if let Some(ref_ts) = *reference_timestamp {
+                    if ts == ref_ts {
+                        *timestamp_offset += 1;
+                    } else {
+                        *reference_timestamp = Some(ts);
+                        *timestamp_offset = 0;
+                    }
+                } else {
+                    *reference_timestamp = Some(ts);
+                }
+                ts + *timestamp_offset
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_zeek_timestamp_deduplication() {
+        // Test that duplicate timestamps get incremented by 1 nanosecond
+        let timestamp = "1562093121.655728"; // Same timestamp for both records
+
+        let record1 = create_zeek_record(timestamp, "C6nQDk3TAW2xcVQtQ1");
+        let record2 = create_zeek_record(timestamp, "C6nQDk3TAW2xcVQtQ2");
+
+        // Parse both records
+        let (_, ts1) = Conn::try_from_zeek_record(&record1).unwrap();
+        let (_, ts2) = Conn::try_from_zeek_record(&record2).unwrap();
+
+        // Both should have the same timestamp initially (before deduplication)
+        assert_eq!(ts1, ts2);
+
+        // Test the deduplication logic using the helper function
+        let mut reference_timestamp: Option<i64> = None;
+        let mut timestamp_offset = 0_i64;
+        let final_timestamps = apply_timestamp_deduplication(
+            &[ts1, ts2],
+            &mut reference_timestamp,
+            &mut timestamp_offset,
+        );
+
+        // After deduplication, second timestamp should be incremented by 1 nanosecond
+        assert_eq!(final_timestamps[1], final_timestamps[0] + 1);
+    }
+
+    #[test]
+    fn test_zeek_different_timestamps_no_deduplication() {
+        // Test that different timestamps are not modified
+        let record1 = create_zeek_record("1562093121.655728", "C6nQDk3TAW2xcVQtQ1");
+        let record2 = create_zeek_record("1562093122.655729", "C6nQDk3TAW2xcVQtQ2");
+
+        let (_, ts1) = Conn::try_from_zeek_record(&record1).unwrap();
+        let (_, ts2) = Conn::try_from_zeek_record(&record2).unwrap();
+
+        // Different timestamps should not be modified by deduplication logic
+        assert_ne!(ts1, ts2);
+
+        // Test the deduplication logic using the helper function
+        let mut reference_timestamp: Option<i64> = None;
+        let mut timestamp_offset = 0_i64;
+        let final_timestamps = apply_timestamp_deduplication(
+            &[ts1, ts2],
+            &mut reference_timestamp,
+            &mut timestamp_offset,
+        );
+
+        // Both timestamps should remain unchanged
+        assert_eq!(final_timestamps[0], ts1);
+        assert_eq!(final_timestamps[1], ts2);
+    }
+
+    #[test]
+    fn test_parse_zeek_timestamp_public() {
+        // Test that parse_zeek_timestamp is accessible
+        let timestamp = "1562093121.655728";
+        let result = crate::zeek::parse_zeek_timestamp(timestamp);
+        assert!(result.is_ok());
+
+        let datetime = result.unwrap();
+        assert_eq!(datetime.timestamp(), 1_562_093_121);
+        assert_eq!(datetime.timestamp_subsec_micros(), 655_728);
     }
 }
