@@ -1140,7 +1140,8 @@ impl Giganto {
                                     self.init_msg = false;
                                 }
 
-                                let record_data = bincode::serialize(&event)?;
+                                let config = bincode::config::standard();
+                                let record_data = bincode::serde::encode_to_vec(&event, config)?;
                                 report.process(record.as_slice().len());
 
                                 buf.push((timestamp, record_data));
@@ -1244,7 +1245,8 @@ impl Giganto {
                                     self.init_msg = false;
                                 }
 
-                                let record_data = bincode::serialize(&event)?;
+                                let config = bincode::config::standard();
+                                let record_data = bincode::serde::encode_to_vec(&event, config)?;
                                 report.process(record.as_slice().len());
 
                                 buf.push((timestamp, record_data));
@@ -1349,7 +1351,8 @@ impl Giganto {
                     self.init_msg = false;
                 }
 
-                let record_data = bincode::serialize(&oplog_data)?;
+                let config = bincode::config::standard();
+                let record_data = bincode::serde::encode_to_vec(&oplog_data, config)?;
                 report.process(line.len());
 
                 buf.push((timestamp, record_data));
@@ -1436,7 +1439,8 @@ impl Giganto {
                                     self.init_msg = false;
                                 }
 
-                                let record_data = bincode::serialize(&event)?;
+                                let config = bincode::config::standard();
+                                let record_data = bincode::serde::encode_to_vec(&event, config)?;
                                 report.process(record.as_slice().len());
 
                                 buf.push((timestamp, record_data));
@@ -1580,7 +1584,8 @@ impl Giganto {
                 self.init_msg = false;
             }
             for (timestamp, event) in events {
-                let record_data = bincode::serialize(&event)?;
+                let config = bincode::config::standard();
+                let record_data = bincode::serde::encode_to_vec(&event, config)?;
                 report.process(pkt.len());
 
                 buf.push((timestamp, record_data));
@@ -1681,7 +1686,8 @@ impl Giganto {
                     self.init_msg = false;
                 }
 
-                let record_data = bincode::serialize(&seculog_data)?;
+                let config = bincode::config::standard();
+                let record_data = bincode::serde::encode_to_vec(&seculog_data, config)?;
                 report.process(line.len());
 
                 buf.push((timestamp, record_data));
@@ -1791,7 +1797,8 @@ impl Giganto {
         let timestamp = Utc::now()
             .timestamp_nanos_opt()
             .context("to_timestamp_nanos")?;
-        let record_data = bincode::serialize(&send_log)?;
+        let config = bincode::config::standard();
+        let record_data = bincode::serde::encode_to_vec(&send_log, config)?;
         let buf = vec![(timestamp, record_data)];
 
         match self.send_event_in_batch(&buf).await {
@@ -1807,12 +1814,17 @@ impl Giganto {
     }
 
     async fn send_event_in_batch(&mut self, events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
-        let buf = bincode::serialize(&events)?;
+        let config = bincode::config::standard();
+        let buf = bincode::serde::encode_to_vec(events, config).map_err(|_| {
+            SendError::WriteError(quinn::WriteError::Stopped(quinn::VarInt::from_u32(0)))
+        })?;
         send_raw(&mut self.giganto_sender, &buf).await
     }
 
     async fn send_finish(&mut self) -> Result<()> {
-        let record_data = bincode::serialize(CHANNEL_CLOSE_MESSAGE)?;
+        let config = bincode::config::standard();
+        let record_data = bincode::serde::encode_to_vec(CHANNEL_CLOSE_MESSAGE, config)
+            .map_err(|e| anyhow::anyhow!("bincode encoding error: {e:?}"))?;
         let buf = vec![(CHANNEL_CLOSE_TIMESTAMP, record_data)];
         match self.send_event_in_batch(&buf).await {
             Err(SendError::WriteError(_)) => {
