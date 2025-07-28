@@ -432,7 +432,7 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing cache_control"));
         };
-        let orig_filenames = if let Some(orig_filenames) = rec.get(24) {
+        let orig_filenames: Vec<String> = if let Some(orig_filenames) = rec.get(24) {
             orig_filenames
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -440,7 +440,7 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing orig_filenames"));
         };
-        let orig_mime_types = if let Some(orig_mime_types) = rec.get(25) {
+        let orig_mime_types: Vec<String> = if let Some(orig_mime_types) = rec.get(25) {
             orig_mime_types
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -448,7 +448,7 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing orig_mime_types"));
         };
-        let resp_filenames = if let Some(resp_filenames) = rec.get(26) {
+        let resp_filenames: Vec<String> = if let Some(resp_filenames) = rec.get(26) {
             resp_filenames
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -456,7 +456,7 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing resp_filenames"));
         };
-        let resp_mime_types = if let Some(resp_mime_types) = rec.get(27) {
+        let resp_mime_types: Vec<String> = if let Some(resp_mime_types) = rec.get(27) {
             resp_mime_types
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -464,8 +464,14 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing resp_mime_types"));
         };
-        let post_body = parse_comma_separated(rec.get(28).context("missing post_body")?)
+        let body = parse_comma_separated(rec.get(28).context("missing post_body")?)
             .context("invalid post_body")?;
+
+        // Merge orig and resp fields into unified fields
+        let mut filenames = orig_filenames;
+        filenames.extend(resp_filenames);
+        let mut mime_types = orig_mime_types;
+        mime_types.extend(resp_mime_types);
         let state = if let Some(state) = rec.get(29) {
             state.to_string()
         } else {
@@ -496,11 +502,9 @@ impl TryFromGigantoRecord for Http {
                 content_encoding,
                 content_type,
                 cache_control,
-                orig_filenames,
-                orig_mime_types,
-                resp_filenames,
-                resp_mime_types,
-                post_body,
+                filenames,
+                mime_types,
+                body,
                 state,
             },
             time,
