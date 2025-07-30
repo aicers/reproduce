@@ -13,6 +13,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Renamed `duration` field to `end_time` in connection (`Conn`) raw event
   structures to better reflect its meaning as the session end time.
 - Updated giganto-client dependency to support the new field names.
+- Consolidated HTTP event fields for better data organization: merged
+  `orig_mime_types` and `resp_mime_types` into unified `mime_types` field,
+  merged `orig_filenames` and `resp_filenames` into unified `filenames` field,
+  and renamed `post_body` field to `body`.
 
 ### Fixed
 

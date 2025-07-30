@@ -449,7 +449,7 @@ impl TryFromZeekRecord for Http {
         } else {
             return Err(anyhow!("missing password"));
         };
-        let orig_filenames = if let Some(orig_filenames) = rec.get(25) {
+        let orig_filenames: Vec<String> = if let Some(orig_filenames) = rec.get(25) {
             orig_filenames
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -457,7 +457,7 @@ impl TryFromZeekRecord for Http {
         } else {
             return Err(anyhow!("missing orig_filenames"));
         };
-        let orig_mime_types = if let Some(orig_mime_types) = rec.get(26) {
+        let orig_mime_types: Vec<String> = if let Some(orig_mime_types) = rec.get(26) {
             orig_mime_types
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -465,7 +465,7 @@ impl TryFromZeekRecord for Http {
         } else {
             return Err(anyhow!("missing orig_mime_types"));
         };
-        let resp_filenames = if let Some(resp_filenames) = rec.get(28) {
+        let resp_filenames: Vec<String> = if let Some(resp_filenames) = rec.get(28) {
             resp_filenames
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -473,7 +473,7 @@ impl TryFromZeekRecord for Http {
         } else {
             return Err(anyhow!("missing resp_filenames"));
         };
-        let resp_mime_types = if let Some(resp_mime_types) = rec.get(29) {
+        let resp_mime_types: Vec<String> = if let Some(resp_mime_types) = rec.get(29) {
             resp_mime_types
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -481,6 +481,12 @@ impl TryFromZeekRecord for Http {
         } else {
             return Err(anyhow!("missing resp_mime_types"));
         };
+
+        // Merge orig and resp fields into unified fields
+        let mut filenames = orig_filenames;
+        filenames.extend(resp_filenames);
+        let mut mime_types = orig_mime_types;
+        mime_types.extend(resp_mime_types);
 
         Ok((
             Self {
@@ -506,11 +512,9 @@ impl TryFromZeekRecord for Http {
                 content_encoding: String::new(),
                 content_type: String::new(),
                 cache_control: String::new(),
-                orig_filenames,
-                orig_mime_types,
-                resp_filenames,
-                resp_mime_types,
-                post_body: Vec::new(),
+                filenames,
+                mime_types,
+                body: Vec::new(),
                 state: String::new(),
             },
             time,

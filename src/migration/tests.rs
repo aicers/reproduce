@@ -19,7 +19,7 @@ fn giganto_conn() {
 
 #[test]
 fn giganto_http() {
-    let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	0.000000000	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-	-	-	10,10,10	-";
+    let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	0.000000000	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-	10,10,10	-";
 
     let rec = stringrecord(data);
 

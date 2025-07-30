@@ -432,41 +432,25 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing cache_control"));
         };
-        let orig_filenames = if let Some(orig_filenames) = rec.get(24) {
-            orig_filenames
+        let filenames = if let Some(filenames) = rec.get(24) {
+            filenames
                 .split(',')
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing orig_filenames"));
+            return Err(anyhow!("missing filenames"));
         };
-        let orig_mime_types = if let Some(orig_mime_types) = rec.get(25) {
-            orig_mime_types
+        let mime_types = if let Some(mime_types) = rec.get(25) {
+            mime_types
                 .split(',')
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing orig_mime_types"));
+            return Err(anyhow!("missing mime_types"));
         };
-        let resp_filenames = if let Some(resp_filenames) = rec.get(26) {
-            resp_filenames
-                .split(',')
-                .map(std::string::ToString::to_string)
-                .collect()
-        } else {
-            return Err(anyhow!("missing resp_filenames"));
-        };
-        let resp_mime_types = if let Some(resp_mime_types) = rec.get(27) {
-            resp_mime_types
-                .split(',')
-                .map(std::string::ToString::to_string)
-                .collect()
-        } else {
-            return Err(anyhow!("missing resp_mime_types"));
-        };
-        let post_body = parse_comma_separated(rec.get(28).context("missing post_body")?)
-            .context("invalid post_body")?;
-        let state = if let Some(state) = rec.get(29) {
+        let body =
+            parse_comma_separated(rec.get(26).context("missing body")?).context("invalid body")?;
+        let state = if let Some(state) = rec.get(27) {
             state.to_string()
         } else {
             return Err(anyhow!("missing state"));
@@ -496,11 +480,9 @@ impl TryFromGigantoRecord for Http {
                 content_encoding,
                 content_type,
                 cache_control,
-                orig_filenames,
-                orig_mime_types,
-                resp_filenames,
-                resp_mime_types,
-                post_body,
+                filenames,
+                mime_types,
+                body,
                 state,
             },
             time,
