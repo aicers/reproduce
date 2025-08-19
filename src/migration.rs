@@ -29,7 +29,7 @@ fn parse_giganto_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
 
 fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::Err> {
     let mut v = Vec::new();
-    if s != "-" {
+    if s != "-" && !s.is_empty() {
         for t in s.split(',') {
             v.push(t.parse()?);
         }
