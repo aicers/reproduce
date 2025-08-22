@@ -5,7 +5,7 @@ use giganto_client::ingest::network::{
     Ssh, Tls,
 };
 
-use super::TryFromGigantoRecord;
+use super::{parse_comma_separated, TryFromGigantoRecord};
 
 #[test]
 fn giganto_conn() {
@@ -20,6 +20,15 @@ fn giganto_conn() {
 #[test]
 fn giganto_http() {
     let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	0.000000000	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-	10,10,10	-";
+
+    let rec = stringrecord(data);
+
+    assert!(Http::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_http_empty_body() {
+    let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	0.000000000	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-		-";
 
     let rec = stringrecord(data);
 
@@ -170,4 +179,32 @@ fn stringrecord(data: &str) -> StringRecord {
         .from_reader(data.as_bytes());
 
     rdr.into_records().next().unwrap().unwrap()
+}
+
+#[test]
+fn test_parse_comma_separated_empty_string() {
+    let result: Result<Vec<u32>, _> = parse_comma_separated("");
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), Vec::<u32>::new());
+}
+
+#[test]
+fn test_parse_comma_separated_dash() {
+    let result: Result<Vec<u32>, _> = parse_comma_separated("-");
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), Vec::<u32>::new());
+}
+
+#[test]
+fn test_parse_comma_separated_valid_values() {
+    let result: Result<Vec<u32>, _> = parse_comma_separated("10,20,30");
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), vec![10, 20, 30]);
+}
+
+#[test]
+fn test_parse_comma_separated_single_value() {
+    let result: Result<Vec<u32>, _> = parse_comma_separated("42");
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), vec![42]);
 }
