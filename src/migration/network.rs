@@ -6,7 +6,9 @@ use giganto_client::ingest::network::{
     Ssh, Tls,
 };
 
-use super::{parse_comma_separated, parse_giganto_timestamp, TryFromGigantoRecord};
+use super::{
+    parse_comma_separated, parse_giganto_timestamp, parse_post_body, TryFromGigantoRecord,
+};
 
 impl TryFromGigantoRecord for Conn {
     #[allow(clippy::too_many_lines)]
@@ -448,8 +450,7 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(anyhow!("missing mime_types"));
         };
-        let body =
-            parse_comma_separated(rec.get(26).context("missing body")?).context("invalid body")?;
+        let body = parse_post_body(rec.get(26).context("missing body")?);
         let state = if let Some(state) = rec.get(27) {
             state.to_string()
         } else {
