@@ -27,6 +27,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed Zeek log timestamp deduplication to prevent event loss when multiple
   events share the same microsecond timestamp. Added nanosecond-level incremental
   offsets to ensure unique timestamps for each Zeek log event sent to Giganto.
+- Fixed HTTP `body` field parsing in Giganto export files to handle empty
+  strings and raw string data properly instead of incorrectly treating it as
+  comma-separated values.
 
 ## [0.22.1] - 2025-06-18
 

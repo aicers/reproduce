@@ -36,3 +36,11 @@ fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::
     }
     Ok(v)
 }
+
+fn parse_post_body(s: &str) -> Vec<u8> {
+    if s != "-" && !s.is_empty() {
+        s.as_bytes().to_vec()
+    } else {
+        Vec::new()
+    }
+}
