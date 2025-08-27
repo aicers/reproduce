@@ -1,8 +1,8 @@
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
-    Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb,
+    Smtp, Ssh, Tls,
 };
 
 use super::TryFromGigantoRecord;
@@ -170,6 +170,15 @@ fn giganto_dhcp() {
     let rec = stringrecord(data);
 
     assert!(Dhcp::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_radius() {
+    let data = "1756197618.963374000	localhost	127.0.0.1	53031	192.0.2.1	1812	17	1440447766.441298000	1440447766.441298000	103	1	255	40b664dbf5d681b2adbd1769515118c8		115,116,101,118,101	219,198,196,183,88,190,20,240,5,179,135,124,158,47,182,1	-	192.168.0.28	123	-	-	0	";
+
+    let rec = stringrecord(data);
+
+    assert!(Radius::try_from_giganto_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {
