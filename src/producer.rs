@@ -23,8 +23,8 @@ use giganto_client::{
         log::Log,
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb,
-            Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
+            Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         sysmon::{
@@ -57,7 +57,7 @@ use crate::{
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const REQUIRED_GIGANTO_VERSION: &str = "0.23.0";
+const REQUIRED_GIGANTO_VERSION: &str = "0.26.0-alpha.1";
 const INTERVAL: u64 = 5;
 const BATCH_SIZE: usize = 100;
 
@@ -579,6 +579,24 @@ impl Producer {
                         .await
                 } else {
                     bail!("dhcp zeek log is not supported".to_string());
+                }
+            }
+            "radius" => {
+                if migration {
+                    self.giganto
+                        .migration::<Radius>(
+                            iter,
+                            RawEventKind::Radius,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    bail!("radius zeek log is not supported");
                 }
             }
             _ => bail!("unknown zeek/migration kind"),

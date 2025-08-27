@@ -6,6 +6,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Support for sending `giganto` log for new protocols. (`radius`)
+
 ### Changed
 
 - Renamed `last_time` field to `end_time` in raw event structures to improve
