@@ -6,6 +6,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Support RADIUS protocol for sending giganto logs.
+
 ### Changed
 
 - Updated FTP event structure to support multiple commands per session instead

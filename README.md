@@ -201,6 +201,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 |          | nfs      |
 |          | bootp    |
 |          | dhcp     |
+|          | radius   |
 
 ### Sysmon Events
 
