@@ -86,7 +86,13 @@ impl Producer {
                 .connect(config.giganto_ingest_srv_addr, &config.giganto_name)?
                 .await
             {
-                Ok(r) => r,
+                Ok(r) => {
+                    info!(
+                        "Connected to data store ingest server at {}",
+                        config.giganto_ingest_srv_addr
+                    );
+                    r
+                }
                 Err(quinn::ConnectionError::TimedOut) => {
                     info!("Server timeout, reconnecting...");
                     tokio::time::sleep(Duration::from_secs(INTERVAL)).await;
@@ -1117,7 +1123,7 @@ impl Giganto {
     where
         T: Serialize + TryFromZeekRecord + Unpin + Debug,
     {
-        info!("Send zeek");
+        info!("Send zeek-generated network event");
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();
@@ -1238,7 +1244,8 @@ impl Giganto {
         }
 
         info!(
-            "Last line: {}, Success: {}, Failed: {}",
+            "Sent zeek-generated network events to data store.\n\
+            Last line: {}, Success: {}, Failed: {}",
             pos.line(),
             success_cnt,
             failed_cnt
@@ -1427,7 +1434,8 @@ impl Giganto {
         }
 
         info!(
-            "Last line: {}, Success: {}, Failed: {}",
+            "Sent operation logs to data store.\n\
+            Last line: {}, Success: {}, Failed: {}",
             cnt, success_cnt, failed_cnt
         );
 
@@ -1576,7 +1584,8 @@ impl Giganto {
 
         self.init_msg = true;
         info!(
-            "Last line: {}, Success: {}, Failed: {}",
+            "Sent sysmon events to data store.\n\
+            Last line: {}, Success: {}, Failed: {}",
             pos.line(),
             success_cnt,
             failed_cnt
@@ -1702,7 +1711,11 @@ impl Giganto {
             ProcessStats::Packets,
             pkt_cnt.try_into().unwrap_or_default(),
         );
-        info!("Netflow pcap processing statistics: {:?}", stats);
+        info!(
+            "Sent netflows to data store.\n\
+            Statistics: {:?}",
+            stats
+        );
         if !templates.is_empty() {
             if let Ok(tmpl_path) = tmpl_path.as_ref() {
                 if let Err(e) = templates.save(tmpl_path) {
@@ -1799,7 +1812,8 @@ impl Giganto {
             self.send_event_in_batch(&buf).await?;
         }
         info!(
-            "Last line: {}, Success: {}, Failed: {}",
+            "Sent security logs to data store.\n\
+            Last line: {}, Success: {}, Failed: {}",
             cnt, success_cnt, failed_cnt
         );
 
