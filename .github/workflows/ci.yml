@@ -15,9 +15,7 @@ jobs:
       - name: Install libraries
         run: sudo apt-get install libhyperscan-dev libpcap-dev
       - name: Install Rust
-        uses: hecrj/setup-rust-action@v1
-        with:
-          rust-version: stable
+        uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
@@ -34,9 +32,7 @@ jobs:
       - name: Install libraries
         run: sudo apt-get install libhyperscan-dev libpcap-dev
       - name: Install Rust
-        uses: hecrj/setup-rust-action@v1
-        with:
-          rust-version: stable
+        uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
       - name: Build
         run: cargo build --verbose
@@ -49,9 +45,7 @@ jobs:
       - name: Install libraries
         run: sudo apt-get install libhyperscan-dev libpcap-dev
       - name: Install Rust
-        uses: hecrj/setup-rust-action@v1
-        with:
-          rust-version: stable
+        uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
       - name: Install Tarpaulin
         run: cargo install cargo-tarpaulin --version 0.18.0-alpha3
