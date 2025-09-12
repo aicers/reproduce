@@ -92,7 +92,16 @@ fn giganto_dce_rpc() {
 
 #[test]
 fn giganto_ftp() {
-    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	0.000000000	anonymous	ftp@example.com	EPSV	229	Entering Extended Passive Mode  (|||31746|)	true	192.168.4.76	196.216.2.24	31746	ftp://192.168.0.7/pub/stats/afrinic/delegated-afrinic-extended-latest.md5	74	226";
+    let data = r"1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	1614130373.991064000	1614130373.991064000	anonymous	ftp@example.com	(EPSV,229,Entering Extended Passive Mode,true,192.168.4.76,196.216.2.24,31746,ftp://192.168.0.7/pub/stats/afrinic/delegated-afrinic-extended-latest.md5,74,226)";
+
+    let rec = stringrecord(data);
+
+    assert!(Ftp::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_ftp_reply_230() {
+    let data = r"1614130373.991064000	localhost	192.168.0.111	21	192.168.0.7	49670	6	1614130373.991064000	1614130373.991064000	csanders	echo	(USER,230,User logged in, proceed,false,192.168.0.111,192.168.0.7,20,ftp://192.168.0.7/,0,1614130373991064000)";
 
     let rec = stringrecord(data);
 

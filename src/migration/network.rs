@@ -2,8 +2,8 @@ use std::net::IpAddr;
 
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp, Smb, Smtp,
-    Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Rdp,
+    Smb, Smtp, Ssh, Tls,
 };
 
 use super::{
@@ -1248,67 +1248,87 @@ impl TryFromGigantoRecord for Ftp {
         } else {
             return Err(anyhow!("missing password"));
         };
-        let command = if let Some(command) = rec.get(11) {
-            command.to_string()
-        } else {
-            return Err(anyhow!("missing command"));
-        };
-        let reply_code = if let Some(reply_code) = rec.get(12) {
-            reply_code.to_string()
-        } else {
-            return Err(anyhow!("missing reply_code"));
-        };
-        let reply_msg = if let Some(reply_msg) = rec.get(13) {
-            reply_msg.to_string()
-        } else {
-            return Err(anyhow!("missing reply_msg"));
-        };
-        let data_passive = if let Some(data_passive) = rec.get(14) {
-            if data_passive.eq("true") {
-                true
-            } else if data_passive.eq("false") {
-                false
+
+        let commands = if let Some(commands_str) = rec.get(11) {
+            let tuple_parts: Vec<&str> = if commands_str.contains("),(") {
+                commands_str.split("),(").collect()
             } else {
-                return Err(anyhow!("invalid data_passive"));
-            }
+                vec![commands_str]
+            };
+            tuple_parts
+                .into_iter()
+                .map(|tuple_str| -> Result<FtpCommand> {
+                    let tuple_content = tuple_str.trim_start_matches('(').trim_end_matches(')');
+
+                    // Split first 2 fields (command, reply_code) from the front
+                    let front_parts: Vec<&str> = tuple_content.splitn(3, ',').collect();
+                    let command = (*front_parts
+                        .first()
+                        .ok_or_else(|| anyhow!("missing command"))?)
+                    .to_string();
+                    let reply_code = (*front_parts
+                        .get(1)
+                        .ok_or_else(|| anyhow!("missing reply code"))?)
+                    .to_string();
+                    let rest = front_parts
+                        .get(2)
+                        .ok_or_else(|| anyhow!("missing remaining fields"))?;
+
+                    // Split last 7 fields from the back, leaving reply_msg in the middle
+                    let back_parts: Vec<&str> = rest.rsplitn(8, ',').collect();
+
+                    let reply_msg = (*back_parts
+                        .get(7)
+                        .ok_or_else(|| anyhow!("missing reply message"))?)
+                    .to_string();
+                    let data_passive = back_parts
+                        .get(6)
+                        .ok_or_else(|| anyhow!("missing data passive"))?
+                        .parse::<bool>()
+                        .context("invalid data passive")?;
+                    let data_orig_addr = back_parts
+                        .get(5)
+                        .ok_or_else(|| anyhow!("missing data source address"))?
+                        .parse::<IpAddr>()
+                        .context("invalid data source address")?;
+                    let data_resp_addr = back_parts
+                        .get(4)
+                        .ok_or_else(|| anyhow!("missing data response address"))?
+                        .parse::<IpAddr>()
+                        .context("invalid data response address")?;
+                    let data_resp_port = back_parts
+                        .get(3)
+                        .ok_or_else(|| anyhow!("missing data response port"))?
+                        .parse::<u16>()
+                        .context("invalid data response port")?;
+                    let file =
+                        (*back_parts.get(2).ok_or_else(|| anyhow!("missing file"))?).to_string();
+                    let file_size = back_parts
+                        .get(1)
+                        .ok_or_else(|| anyhow!("missing file size"))?
+                        .parse::<u64>()
+                        .context("invalid file size")?;
+                    let file_id = (*back_parts
+                        .first()
+                        .ok_or_else(|| anyhow!("missing file ID"))?)
+                    .to_string();
+
+                    Ok(FtpCommand {
+                        command,
+                        reply_code,
+                        reply_msg,
+                        data_passive,
+                        data_orig_addr,
+                        data_resp_addr,
+                        data_resp_port,
+                        file,
+                        file_size,
+                        file_id,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
         } else {
-            return Err(anyhow!("missing data_passive"));
-        };
-        let data_orig_addr = if let Some(data_orig_addr) = rec.get(15) {
-            data_orig_addr
-                .parse::<IpAddr>()
-                .context("invalid data source address")?
-        } else {
-            return Err(anyhow!("missing data source address"));
-        };
-        let data_resp_addr = if let Some(data_resp_addr) = rec.get(16) {
-            data_resp_addr
-                .parse::<IpAddr>()
-                .context("invalid data destination address")?
-        } else {
-            return Err(anyhow!("missing data destination address"));
-        };
-        let data_resp_port = if let Some(data_resp_port) = rec.get(17) {
-            data_resp_port
-                .parse::<u16>()
-                .context("invalid data destination port")?
-        } else {
-            return Err(anyhow!("missing data destination port"));
-        };
-        let file = if let Some(file) = rec.get(18) {
-            file.to_string()
-        } else {
-            return Err(anyhow!("missing file"));
-        };
-        let file_size = if let Some(file_size) = rec.get(19) {
-            file_size.parse::<u64>().context("invalid file_size")?
-        } else {
-            return Err(anyhow!("missing file_size"));
-        };
-        let file_id = if let Some(file_id) = rec.get(20) {
-            file_id.to_string()
-        } else {
-            return Err(anyhow!("missing file_id"));
+            return Err(anyhow!("missing commands"));
         };
 
         Ok((
@@ -1322,16 +1342,7 @@ impl TryFromGigantoRecord for Ftp {
                 end_time,
                 user,
                 password,
-                command,
-                reply_code,
-                reply_msg,
-                data_passive,
-                data_orig_addr,
-                data_resp_addr,
-                data_resp_port,
-                file,
-                file_size,
-                file_id,
+                commands,
             },
             time,
         ))
