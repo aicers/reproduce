@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
+    Conn, DceRpc, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
 };
 use num_traits::ToPrimitive;
 
@@ -1081,6 +1081,20 @@ impl TryFromZeekRecord for Ftp {
         } else {
             return Err(anyhow!("missing data destination port"));
         };
+
+        let ftp_command = FtpCommand {
+            command,
+            reply_code,
+            reply_msg,
+            data_passive,
+            data_orig_addr,
+            data_resp_addr,
+            data_resp_port,
+            file: String::new(),
+            file_size: 0,
+            file_id: String::new(),
+        };
+
         Ok((
             Self {
                 orig_addr,
@@ -1092,16 +1106,7 @@ impl TryFromZeekRecord for Ftp {
                 end_time: i64::MAX,
                 user,
                 password,
-                command,
-                reply_code,
-                reply_msg,
-                data_passive,
-                data_orig_addr,
-                data_resp_addr,
-                data_resp_port,
-                file: String::new(),
-                file_size: 0,
-                file_id: String::new(),
+                commands: vec![ftp_command],
             },
             time,
         ))

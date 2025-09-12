@@ -8,6 +8,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Updated FTP event structure to support multiple commands per session instead
+  of single commands. The FTP struct now uses `Vec<FtpCommand>` to store all
+  commands and responses within a single FTP session, enabling comprehensive
+  session analysis and better alignment with actual FTP protocol behavior.
+- Modified FTP import functionality to parse tuple-formatted commands in
+  Giganto export files, supporting the new multi-command structure.
+- Updated Zeek FTP log processing to maintain backward compatibility while
+  adapting single commands to the new vector-based structure.
 - Renamed `last_time` field to `end_time` in raw event structures to improve
   clarity and consistency with the corresponding `start_time` field.
 - Renamed `duration` field to `end_time` in connection (`Conn`) raw event

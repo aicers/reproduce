@@ -13,7 +13,7 @@ chrono = "0.4"
 config = { version = "0.15", features = ["toml"], default-features = false }
 csv = "1"
 ctrlc = { version = "3", features = ["termination"] }
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "3e4939c" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "f52f942" }
 num-traits = "0.2"
 num_enum = "0.7"
 pcap = "2"
