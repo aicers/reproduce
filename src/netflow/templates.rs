@@ -9,6 +9,7 @@ use super::{
     fields::{FieldTypes, OptionsScopeFieldTypes},
     packet::Netflow9Header,
 };
+use crate::bincode_utils::{decode_legacy, encode_legacy};
 
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,7 +123,7 @@ impl TemplatesBox {
     /// Return error if it failed deserialize the content of file
     pub(crate) fn from_path(path: &str) -> Result<Self> {
         let bytes = std::fs::read(path)?;
-        bincode::deserialize(&bytes).context("fail to read templates")
+        decode_legacy(&bytes).context("fail to read templates")
     }
 
     /// # Errors
@@ -131,7 +132,7 @@ impl TemplatesBox {
     /// Return error if it failed to serialize the template
     pub(crate) fn save(&self, path: &str) -> Result<()> {
         let mut file = std::fs::File::create(path)?;
-        let buf = bincode::serialize(self)?;
+        let buf = encode_legacy(self)?;
         file.write_all(&buf).context("fail to write templates")
     }
 }
