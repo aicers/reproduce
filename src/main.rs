@@ -1,3 +1,4 @@
+mod bincode_utils;
 mod config;
 mod controller;
 mod migration;

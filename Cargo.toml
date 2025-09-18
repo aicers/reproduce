@@ -6,14 +6,14 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-bincode = "1"
+bincode = { version = "2", features = ["serde"] }
 byteorder = "1"
 bytesize = "2"
 chrono = "0.4"
 config = { version = "0.15", features = ["toml"], default-features = false }
 csv = "1"
 ctrlc = { version = "3", features = ["termination"] }
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "a6ad837" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "47815ca" }
 num-traits = "0.2"
 num_enum = "0.7"
 pcap = "2"
