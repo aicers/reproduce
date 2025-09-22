@@ -22,7 +22,7 @@ fn parse_vforce_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
         &format!("{} {datetime} +0900", now.year()),
         "%Y %b %d %H:%M:%S %z",
     )
-    .map_err(|e| anyhow!("{:?}", e))
+    .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Vforce {

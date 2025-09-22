@@ -18,7 +18,7 @@ fn get_aiwaf_regex() -> &'static Regex {
 
 fn parse_aiwaf_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y-%m-%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{:?}", e))
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Aiwaf {

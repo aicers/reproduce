@@ -20,7 +20,7 @@ fn get_sniper_regex() -> &'static Regex {
 
 fn parse_sniper_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y/%m/%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{:?}", e))
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for SniperIps {

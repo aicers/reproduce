@@ -17,7 +17,7 @@ fn get_srx_regex() -> &'static Regex {
 }
 
 fn parse_srx_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%Y-%m-%dT%H:%M:%S%.f%z").map_err(|e| anyhow!("{:?}", e))
+    DateTime::parse_from_str(datetime, "%Y-%m-%dT%H:%M:%S%.f%z").map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Srx {

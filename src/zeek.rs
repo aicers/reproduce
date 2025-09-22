@@ -27,7 +27,7 @@ pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
         };
         Ok(time)
     } else {
-        Err(anyhow!("invalid timestamp: {}", timestamp))
+        Err(anyhow!("invalid timestamp: {timestamp}"))
     }
 }
 
