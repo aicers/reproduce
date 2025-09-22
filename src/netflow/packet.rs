@@ -294,7 +294,7 @@ impl PktBuf {
                     source_id,
                 }))
             }
-            _ => bail!("unimplemented netflow version {}", version),
+            _ => bail!("unimplemented netflow version {version}"),
         }
     }
 
@@ -641,6 +641,6 @@ impl PktBuf {
     fn parse_flag(&mut self) -> Result<u8> {
         self.data
             .read_u8()
-            .map_err(|e| anyhow!("fail to parse flag. {}", e))
+            .map_err(|e| anyhow!("fail to parse flag. {e}"))
     }
 }

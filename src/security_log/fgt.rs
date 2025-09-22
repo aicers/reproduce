@@ -18,7 +18,7 @@ fn get_fgt_regex() -> &'static Regex {
 
 fn parse_fgt_timestamp(date: &str, time: &str, tz: &str) -> Result<DateTime<FixedOffset>> {
     DateTime::parse_from_str(&format!("{date} {time} {tz}"), "%Y-%m-%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{:?}", e))
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Fgt {

@@ -79,7 +79,7 @@ impl Producer {
         let endpoint = match init_giganto(&config.cert, &config.key, &config.ca_certs) {
             Ok(ret) => ret,
             Err(e) => {
-                bail!("failed to create Giganto producer: {:?}", e);
+                bail!("failed to create Giganto producer: {e:?}");
             }
         };
         loop {
@@ -1640,9 +1640,9 @@ impl Giganto {
         let mut handle = pcap::Capture::from_file(filename)?;
         if handle.get_datalink() != pcap::Linktype::ETHERNET {
             bail!(
-                "Error: unknown datalink {:?} in {:?}",
+                "Error: unknown datalink {:?} in {}",
                 handle.get_datalink().get_name(),
-                filename
+                filename.display()
             );
         }
 
@@ -1853,7 +1853,7 @@ impl Giganto {
         report: &mut Report,
         running: Arc<AtomicBool>,
     ) -> Result<u64> {
-        let log_file = open_log(file_name).map_err(|e| anyhow!("failed to open: {}", e))?;
+        let log_file = open_log(file_name).map_err(|e| anyhow!("failed to open: {e}"))?;
         let mut lines = BinaryLines::new(BufReader::new(log_file)).skip(usize::try_from(skip)?);
         let mut giganto_msg: Vec<u8> = Vec::new();
         let mut conv_cnt = 0;
@@ -2011,11 +2011,7 @@ impl Giganto {
 
 fn init_giganto(cert: &str, key: &str, ca_certs: &[String]) -> Result<Endpoint> {
     let Ok((cert_pem, key_pem)) = fs::read(cert).and_then(|x| Ok((x, fs::read(key)?))) else {
-        bail!(
-            "failed to read (cert, key) file. cert_path:{}, key_path:{}",
-            cert,
-            key
-        );
+        bail!("failed to read (cert, key) file. cert_path:{cert}, key_path:{key}");
     };
 
     let pv_key = if Path::new(key).extension().is_some_and(|x| x == "der") {
@@ -2072,7 +2068,7 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
                 warn!("Finished early");
                 break;
             }
-            Err(e) => bail!("receive ACK err: {}", e),
+            Err(e) => bail!("receive ACK err: {e}"),
         }
     }
     Ok(())

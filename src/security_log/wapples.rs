@@ -17,7 +17,7 @@ fn get_wapples_regex() -> &'static Regex {
 }
 
 fn parse_wapples_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S %z").map_err(|e| anyhow!("{:?}", e))
+    DateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S %z").map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Wapples {

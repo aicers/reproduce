@@ -17,7 +17,7 @@ fn get_nginx_regex() -> &'static Regex {
 }
 
 fn parse_nginx_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z").map_err(|e| anyhow!("{:?}", e))
+    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z").map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Nginx {

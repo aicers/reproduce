@@ -15,7 +15,7 @@ fn get_log_regex() -> &'static Regex {
 }
 
 fn parse_oplog_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
-    DateTime::from_str(datetime).map_err(|e| anyhow!("{:?}", e))
+    DateTime::from_str(datetime).map_err(|e| anyhow!("{e:?}"))
 }
 
 fn parse_log_level(level: &str) -> Result<OpLogLevel> {

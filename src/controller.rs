@@ -203,7 +203,7 @@ impl Controller {
         if let Err(ctrlc::Error::System(e)) =
             ctrlc::set_handler(move || r.store(false, Ordering::SeqCst))
         {
-            return Err(anyhow!("failed to set signal handler: {}", e));
+            return Err(anyhow!("failed to set signal handler: {e}"));
         }
 
         let mut report = Report::new(self.config.clone());
@@ -245,7 +245,7 @@ impl Controller {
                         .expect("agent.log")
                         .0;
                     if !AGENTS_LIST.contains(&agent) {
-                        bail!("invalid agent name `{}.log`", agent);
+                        bail!("invalid agent name `{agent}.log`");
                     }
                     let oplog = File::open(filename)?;
                     let rdr = BufReader::new(oplog);
