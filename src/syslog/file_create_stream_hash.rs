@@ -3,6 +3,7 @@ use giganto_client::ingest::sysmon::FileCreateStreamHash;
 use serde::Serialize;
 
 use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
+use crate::zeek::parse_zeek_timestamp;
 
 impl TryFromSysmonRecord for FileCreateStreamHash {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
@@ -45,9 +46,7 @@ impl TryFromSysmonRecord for FileCreateStreamHash {
             return Err(anyhow!("missing target_filename"));
         };
         let creation_utc_time = if let Some(creation_utc_time) = rec.get(8) {
-            parse_sysmon_time(creation_utc_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_zeek_timestamp(creation_utc_time)?
         } else {
             return Err(anyhow!("missing creation_utc_time"));
         };
