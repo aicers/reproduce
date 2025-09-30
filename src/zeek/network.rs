@@ -59,17 +59,16 @@ impl TryFromZeekRecord for Conn {
         } else {
             return Err(anyhow!("missing service"));
         };
-        let end_time = if let Some(duration) = rec.get(8) {
+        let duration = if let Some(duration) = rec.get(8) {
             if duration.eq("-") {
                 0
             } else {
-                time + ((duration.parse::<f64>().context("invalid duration")? * 1_000_000_000.0)
-                    .round())
-                .to_i64()
-                .expect("valid")
+                ((duration.parse::<f64>().context("invalid duration")? * 1_000_000_000.0).round())
+                    .to_i64()
+                    .expect("valid")
             }
         } else {
-            return Err(anyhow!("missing end_time"));
+            return Err(anyhow!("missing duration"));
         };
         let orig_bytes = if let Some(orig_bytes) = rec.get(9) {
             if orig_bytes.eq("-") {
@@ -117,6 +116,9 @@ impl TryFromZeekRecord for Conn {
             return Err(anyhow!("missing destination packets"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::from_timestamp_nanos(time + duration);
+
         Ok((
             Self {
                 orig_addr,
@@ -125,8 +127,9 @@ impl TryFromZeekRecord for Conn {
                 resp_port,
                 proto,
                 conn_state,
-                start_time: time,
+                start_time,
                 end_time,
+                duration,
                 service,
                 orig_bytes,
                 resp_bytes,
@@ -312,6 +315,9 @@ impl TryFromZeekRecord for Dns {
             return Err(anyhow!("missing ttl"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::from_timestamp_nanos(time + rtt);
+
         Ok((
             Self {
                 orig_addr,
@@ -319,8 +325,9 @@ impl TryFromZeekRecord for Dns {
                 resp_addr,
                 resp_port,
                 proto,
-                start_time: time,
-                end_time: time + rtt,
+                start_time,
+                end_time,
+                duration: rtt,
                 query,
                 answer,
                 trans_id,
@@ -333,6 +340,10 @@ impl TryFromZeekRecord for Dns {
                 rd_flag,
                 ra_flag,
                 ttl,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -490,6 +501,9 @@ impl TryFromZeekRecord for Http {
         let mut mime_types = orig_mime_types;
         mime_types.extend(resp_mime_types);
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -497,8 +511,9 @@ impl TryFromZeekRecord for Http {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 method,
                 host,
                 uri,
@@ -519,6 +534,10 @@ impl TryFromZeekRecord for Http {
                 mime_types,
                 body: Vec::new(),
                 state: String::new(),
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -562,6 +581,9 @@ impl TryFromZeekRecord for Kerberos {
             return Err(anyhow!("missing destination port"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -569,8 +591,9 @@ impl TryFromZeekRecord for Kerberos {
                 resp_addr,
                 resp_port,
                 proto: PROTO_UDP,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 client_time: 0,
                 server_time: 0,
                 error_code: 0,
@@ -580,6 +603,10 @@ impl TryFromZeekRecord for Kerberos {
                 realm: String::new(),
                 sname_type: 0,
                 service_name: Vec::new(),
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -642,6 +669,9 @@ impl TryFromZeekRecord for Ntlm {
             return Err(anyhow!("missing success"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -649,13 +679,18 @@ impl TryFromZeekRecord for Ntlm {
                 resp_addr,
                 resp_port,
                 proto: 0,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 protocol: String::new(),
                 username,
                 hostname,
                 domainname,
                 success,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -703,6 +738,9 @@ impl TryFromZeekRecord for Rdp {
             return Err(anyhow!("missing cookie"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -710,9 +748,14 @@ impl TryFromZeekRecord for Rdp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 cookie,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -785,6 +828,9 @@ impl TryFromZeekRecord for Smtp {
             return Err(anyhow!("missing agent"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -792,8 +838,9 @@ impl TryFromZeekRecord for Smtp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 mailfrom,
                 date,
                 from,
@@ -801,6 +848,10 @@ impl TryFromZeekRecord for Smtp {
                 subject,
                 agent,
                 state: String::new(),
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -879,6 +930,9 @@ impl TryFromZeekRecord for Ssh {
             return Err(anyhow!("missing host_key_alg"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -886,8 +940,9 @@ impl TryFromZeekRecord for Ssh {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 client,
                 server,
                 cipher_alg,
@@ -901,6 +956,10 @@ impl TryFromZeekRecord for Ssh {
                 hassh_server: String::new(),
                 client_shka: String::new(),
                 server_shka: String::new(),
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -969,6 +1028,9 @@ impl TryFromZeekRecord for DceRpc {
             return Err(anyhow!("missing operation"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -976,12 +1038,17 @@ impl TryFromZeekRecord for DceRpc {
                 resp_addr,
                 resp_port,
                 proto: 0,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: rtt,
                 rtt,
                 named_pipe,
                 endpoint,
                 operation,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -1095,6 +1162,9 @@ impl TryFromZeekRecord for Ftp {
             file_id: String::new(),
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -1102,11 +1172,16 @@ impl TryFromZeekRecord for Ftp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 user,
                 password,
                 commands: vec![ftp_command],
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -1218,6 +1293,9 @@ impl TryFromZeekRecord for Ldap {
             return Err(anyhow!("missing argument"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -1225,8 +1303,9 @@ impl TryFromZeekRecord for Ldap {
                 resp_addr,
                 resp_port,
                 proto,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 message_id,
                 version,
                 opcode,
@@ -1234,6 +1313,10 @@ impl TryFromZeekRecord for Ldap {
                 diagnostic_message,
                 object,
                 argument,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
@@ -1295,6 +1378,9 @@ impl TryFromZeekRecord for Tls {
             return Err(anyhow!("missing last_alert"));
         };
 
+        let start_time = chrono::DateTime::from_timestamp_nanos(time);
+        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+
         Ok((
             Self {
                 orig_addr,
@@ -1302,8 +1388,9 @@ impl TryFromZeekRecord for Tls {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
-                end_time: i64::MAX,
+                start_time,
+                end_time,
+                duration: 0,
                 server_name,
                 alpn_protocol: String::new(),
                 ja3: String::new(),
@@ -1325,6 +1412,10 @@ impl TryFromZeekRecord for Tls {
                 issuer_org_unit_name: String::new(),
                 issuer_common_name: String::new(),
                 last_alert,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_l2_bytes: 0,
+                resp_l2_bytes: 0,
             },
             time,
         ))
