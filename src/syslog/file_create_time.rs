@@ -3,7 +3,6 @@ use giganto_client::ingest::sysmon::FileCreationTimeChanged;
 use serde::Serialize;
 
 use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
-use crate::zeek::parse_zeek_timestamp;
 
 impl TryFromSysmonRecord for FileCreationTimeChanged {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
@@ -46,12 +45,12 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
             return Err(anyhow!("missing target_filename"));
         };
         let creation_utc_time = if let Some(creation_utc_time) = rec.get(8) {
-            parse_zeek_timestamp(creation_utc_time)?
+            parse_sysmon_time(creation_utc_time)?
         } else {
             return Err(anyhow!("missing creation_utc_time"));
         };
         let previous_creation_utc_time = if let Some(previous_creation_utc_time) = rec.get(9) {
-            parse_zeek_timestamp(previous_creation_utc_time)?
+            parse_sysmon_time(previous_creation_utc_time)?
         } else {
             return Err(anyhow!("missing previous_creation_utc_time"));
         };
