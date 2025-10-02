@@ -12,6 +12,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Added session information fields (`orig_pkts`, `resp_pkts`, `orig_l2_bytes`,
+  `resp_l2_bytes`, and `duration`) to all raw network event structures for
+  machine learning purposes. These fields enable comprehensive session tracking
+  and analysis in Semi-supervised and Unsupervised learning engines.
+- Unified time field types across all raw events to use `DateTime<Utc>` for
+  `start_time` and `end_time` fields, ensuring consistent temporal data
+  representation.
 - Updated FTP event structure to support multiple commands per session instead
   of single commands. The FTP struct now uses `Vec<FtpCommand>` to store all
   commands and responses within a single FTP session, enabling comprehensive
