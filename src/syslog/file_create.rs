@@ -3,7 +3,6 @@ use giganto_client::ingest::sysmon::FileCreate;
 use serde::Serialize;
 
 use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
-use crate::zeek::parse_zeek_timestamp;
 
 impl TryFromSysmonRecord for FileCreate {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
@@ -49,7 +48,7 @@ impl TryFromSysmonRecord for FileCreate {
             if creation_utc_time.eq("-") {
                 chrono::DateTime::<chrono::Utc>::MIN_UTC
             } else {
-                parse_zeek_timestamp(creation_utc_time)?
+                parse_sysmon_time(creation_utc_time)?
             }
         } else {
             return Err(anyhow!("missing creation_utc_time"));
