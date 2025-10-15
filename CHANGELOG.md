@@ -9,6 +9,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - Support `RADIUS`, `malformed_dns` protocol for sending giganto logs.
+- Extended Sysmon event processing to support data-store export file format
+  in addition to Elasticsearch export format. The implementation now
+  automatically detects the file format based on field structure and parses
+  Unix timestamps with nanoseconds (e.g., `1691477476.074000000`) from
+  data-store exports, while maintaining compatibility with existing
+  Elasticsearch export files that use `YYYY-MM-DD HH:MM:SS.ms` format.
 
 ### Changed
 

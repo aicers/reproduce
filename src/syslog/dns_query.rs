@@ -2,21 +2,25 @@ use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::DnsEvent;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
+use super::{
+    EventToCsv, TryFromSysmonRecord, is_datastore_format, parse_datastore_time, parse_sysmon_time,
+};
 
 impl TryFromSysmonRecord for DnsEvent {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
-        let agent_name = if let Some(agent_name) = rec.get(0) {
-            agent_name.to_string()
-        } else {
-            return Err(anyhow!("missing agent_name"));
-        };
-        let agent_id = if let Some(agent_id) = rec.get(1) {
-            agent_id.to_string()
-        } else {
-            return Err(anyhow!("missing agent_id"));
-        };
-        let time = if let Some(utc_time) = rec.get(3) {
+        let is_datastore = is_datastore_format(rec);
+        let field_offset = if is_datastore { 2 } else { 0 };
+
+        let time = if is_datastore {
+            if let Some(timestamp) = rec.get(0) {
+                parse_datastore_time(timestamp)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
+                    + serial
+            } else {
+                return Err(anyhow!("missing timestamp"));
+            }
+        } else if let Some(utc_time) = rec.get(3) {
             parse_sysmon_time(utc_time)?
                 .timestamp_nanos_opt()
                 .context("to_timestamp_nanos")?
@@ -24,22 +28,33 @@ impl TryFromSysmonRecord for DnsEvent {
         } else {
             return Err(anyhow!("missing time"));
         };
-        let process_guid = if let Some(process_guid) = rec.get(4) {
+
+        let agent_name = if let Some(agent_name) = rec.get(field_offset) {
+            agent_name.to_string()
+        } else {
+            return Err(anyhow!("missing agent_name"));
+        };
+        let agent_id = if let Some(agent_id) = rec.get(field_offset + 1) {
+            agent_id.to_string()
+        } else {
+            return Err(anyhow!("missing agent_id"));
+        };
+        let process_guid = if let Some(process_guid) = rec.get(field_offset + 2) {
             process_guid.to_string()
         } else {
             return Err(anyhow!("missing process_guid"));
         };
-        let process_id = if let Some(process_id) = rec.get(5) {
+        let process_id = if let Some(process_id) = rec.get(field_offset + 3) {
             process_id.parse::<u32>().context("invalid process_id")?
         } else {
             return Err(anyhow!("missing process_id"));
         };
-        let query_name = if let Some(query_name) = rec.get(6) {
+        let query_name = if let Some(query_name) = rec.get(field_offset + 4) {
             query_name.to_string()
         } else {
             return Err(anyhow!("missing query_name"));
         };
-        let query_status = if let Some(query_status) = rec.get(7) {
+        let query_status = if let Some(query_status) = rec.get(field_offset + 5) {
             if query_status.eq("-") {
                 0
             } else {
@@ -50,7 +65,7 @@ impl TryFromSysmonRecord for DnsEvent {
         } else {
             return Err(anyhow!("missing query_status"));
         };
-        let query_results = if let Some(query_results) = rec.get(8) {
+        let query_results = if let Some(query_results) = rec.get(field_offset + 6) {
             query_results
                 .split(';')
                 .map(std::string::ToString::to_string)
@@ -58,12 +73,12 @@ impl TryFromSysmonRecord for DnsEvent {
         } else {
             return Err(anyhow!("missing query_results"));
         };
-        let image = if let Some(image) = rec.get(9) {
+        let image = if let Some(image) = rec.get(field_offset + 7) {
             image.to_string()
         } else {
             return Err(anyhow!("missing image"));
         };
-        let user = if let Some(user) = rec.get(10) {
+        let user = if let Some(user) = rec.get(field_offset + 8) {
             user.to_string()
         } else {
             return Err(anyhow!("missing user"));

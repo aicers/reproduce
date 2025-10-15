@@ -2,47 +2,126 @@ use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::ProcessTerminated;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
+use super::{
+    EventToCsv, TryFromSysmonRecord, is_datastore_format, parse_datastore_time, parse_sysmon_time,
+};
 
 impl TryFromSysmonRecord for ProcessTerminated {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
-        let agent_name = if let Some(agent_name) = rec.get(0) {
-            agent_name.to_string()
+        let is_datastore = is_datastore_format(rec);
+
+        let (agent_name, agent_id, time, process_guid, process_id, image, user) = if is_datastore {
+            // Data-store format: timestamp, "sensor", agent_name, agent_id, process_guid, process_id, image, user
+            let time = if let Some(timestamp) = rec.get(0) {
+                parse_datastore_time(timestamp)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
+                    + serial
+            } else {
+                return Err(anyhow!("missing timestamp"));
+            };
+
+            let agent_name = if let Some(agent_name) = rec.get(2) {
+                agent_name.to_string()
+            } else {
+                return Err(anyhow!("missing agent_name"));
+            };
+
+            let agent_id = if let Some(agent_id) = rec.get(3) {
+                agent_id.to_string()
+            } else {
+                return Err(anyhow!("missing agent_id"));
+            };
+
+            let process_guid = if let Some(process_guid) = rec.get(4) {
+                process_guid.to_string()
+            } else {
+                return Err(anyhow!("missing process_guid"));
+            };
+
+            let process_id = if let Some(process_id) = rec.get(5) {
+                process_id.parse::<u32>().context("invalid process_id")?
+            } else {
+                return Err(anyhow!("missing process_id"));
+            };
+
+            let image = if let Some(image) = rec.get(6) {
+                image.to_string()
+            } else {
+                return Err(anyhow!("missing image"));
+            };
+
+            let user = if let Some(user) = rec.get(7) {
+                user.to_string()
+            } else {
+                return Err(anyhow!("missing user"));
+            };
+
+            (
+                agent_name,
+                agent_id,
+                time,
+                process_guid,
+                process_id,
+                image,
+                user,
+            )
         } else {
-            return Err(anyhow!("missing agent_name"));
-        };
-        let agent_id = if let Some(agent_id) = rec.get(1) {
-            agent_id.to_string()
-        } else {
-            return Err(anyhow!("missing agent_id"));
-        };
-        let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
-                + serial
-        } else {
-            return Err(anyhow!("missing time"));
-        };
-        let process_guid = if let Some(process_guid) = rec.get(4) {
-            process_guid.to_string()
-        } else {
-            return Err(anyhow!("missing process_guid"));
-        };
-        let process_id = if let Some(process_id) = rec.get(5) {
-            process_id.parse::<u32>().context("invalid process_id")?
-        } else {
-            return Err(anyhow!("missing process_id"));
-        };
-        let image = if let Some(image) = rec.get(6) {
-            image.to_string()
-        } else {
-            return Err(anyhow!("missing image"));
-        };
-        let user = if let Some(user) = rec.get(7) {
-            user.to_string()
-        } else {
-            return Err(anyhow!("missing user"));
+            // Elasticsearch format: agent_name, agent_id, event_action, utc_time, process_guid, process_id, image, user
+            let agent_name = if let Some(agent_name) = rec.get(0) {
+                agent_name.to_string()
+            } else {
+                return Err(anyhow!("missing agent_name"));
+            };
+
+            let agent_id = if let Some(agent_id) = rec.get(1) {
+                agent_id.to_string()
+            } else {
+                return Err(anyhow!("missing agent_id"));
+            };
+
+            let time = if let Some(utc_time) = rec.get(3) {
+                parse_sysmon_time(utc_time)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
+                    + serial
+            } else {
+                return Err(anyhow!("missing time"));
+            };
+
+            let process_guid = if let Some(process_guid) = rec.get(4) {
+                process_guid.to_string()
+            } else {
+                return Err(anyhow!("missing process_guid"));
+            };
+
+            let process_id = if let Some(process_id) = rec.get(5) {
+                process_id.parse::<u32>().context("invalid process_id")?
+            } else {
+                return Err(anyhow!("missing process_id"));
+            };
+
+            let image = if let Some(image) = rec.get(6) {
+                image.to_string()
+            } else {
+                return Err(anyhow!("missing image"));
+            };
+
+            let user = if let Some(user) = rec.get(7) {
+                user.to_string()
+            } else {
+                return Err(anyhow!("missing user"));
+            };
+
+            (
+                agent_name,
+                agent_id,
+                time,
+                process_guid,
+                process_id,
+                image,
+                user,
+            )
         };
 
         Ok((

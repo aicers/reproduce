@@ -2,22 +2,29 @@ use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::ProcessCreate;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
+use super::{
+    EventToCsv, TryFromSysmonRecord, is_datastore_format, parse_datastore_time, parse_sysmon_time,
+};
 
 impl TryFromSysmonRecord for ProcessCreate {
     #[allow(clippy::too_many_lines)]
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
-        let agent_name = if let Some(agent_name) = rec.get(0) {
-            agent_name.to_string()
-        } else {
-            return Err(anyhow!("missing agent_name"));
-        };
-        let agent_id = if let Some(agent_id) = rec.get(1) {
-            agent_id.to_string()
-        } else {
-            return Err(anyhow!("missing agent_id"));
-        };
-        let time = if let Some(utc_time) = rec.get(3) {
+        let is_datastore = is_datastore_format(rec);
+
+        // Field offset: for data-store format, fields start at index 2 (after timestamp and "sensor")
+        // For elasticsearch format, fields start at index 0
+        let field_offset = if is_datastore { 2 } else { 0 };
+
+        let time = if is_datastore {
+            if let Some(timestamp) = rec.get(0) {
+                parse_datastore_time(timestamp)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
+                    + serial
+            } else {
+                return Err(anyhow!("missing timestamp"));
+            }
+        } else if let Some(utc_time) = rec.get(3) {
             parse_sysmon_time(utc_time)?
                 .timestamp_nanos_opt()
                 .context("to_timestamp_nanos")?
@@ -25,67 +32,81 @@ impl TryFromSysmonRecord for ProcessCreate {
         } else {
             return Err(anyhow!("missing time"));
         };
-        let process_guid = if let Some(process_guid) = rec.get(4) {
+
+        let agent_name = if let Some(agent_name) = rec.get(field_offset) {
+            agent_name.to_string()
+        } else {
+            return Err(anyhow!("missing agent_name"));
+        };
+        let agent_id = if let Some(agent_id) = rec.get(field_offset + 1) {
+            agent_id.to_string()
+        } else {
+            return Err(anyhow!("missing agent_id"));
+        };
+        // For elasticsearch: fields start at index 4 (after agent_name, agent_id, event_action, utc_time)
+        // For datastore: fields start at index 2 (after timestamp, "sensor") + 2 (agent_name, agent_id) = 4
+        // So the data fields start at the same index (4) for both formats!
+        let process_guid = if let Some(process_guid) = rec.get(field_offset + 2) {
             process_guid.to_string()
         } else {
             return Err(anyhow!("missing process_guid"));
         };
-        let process_id = if let Some(process_id) = rec.get(5) {
+        let process_id = if let Some(process_id) = rec.get(field_offset + 3) {
             process_id.parse::<u32>().context("invalid process_id")?
         } else {
             return Err(anyhow!("missing process_id"));
         };
-        let image = if let Some(image) = rec.get(6) {
+        let image = if let Some(image) = rec.get(field_offset + 4) {
             image.to_string()
         } else {
             return Err(anyhow!("missing image"));
         };
-        let file_version = if let Some(file_version) = rec.get(7) {
+        let file_version = if let Some(file_version) = rec.get(field_offset + 5) {
             file_version.to_string()
         } else {
             return Err(anyhow!("missing file_version"));
         };
-        let description = if let Some(description) = rec.get(8) {
+        let description = if let Some(description) = rec.get(field_offset + 6) {
             description.to_string()
         } else {
             return Err(anyhow!("missing description"));
         };
-        let product = if let Some(product) = rec.get(9) {
+        let product = if let Some(product) = rec.get(field_offset + 7) {
             product.to_string()
         } else {
             return Err(anyhow!("missing product"));
         };
-        let company = if let Some(company) = rec.get(10) {
+        let company = if let Some(company) = rec.get(field_offset + 8) {
             company.to_string()
         } else {
             return Err(anyhow!("missing company"));
         };
-        let original_file_name = if let Some(original_file_name) = rec.get(11) {
+        let original_file_name = if let Some(original_file_name) = rec.get(field_offset + 9) {
             original_file_name.to_string()
         } else {
             return Err(anyhow!("missing original_file_name"));
         };
-        let command_line = if let Some(command_line) = rec.get(12) {
+        let command_line = if let Some(command_line) = rec.get(field_offset + 10) {
             command_line.to_string()
         } else {
             return Err(anyhow!("missing command_line"));
         };
-        let current_directory = if let Some(current_directory) = rec.get(13) {
+        let current_directory = if let Some(current_directory) = rec.get(field_offset + 11) {
             current_directory.to_string()
         } else {
             return Err(anyhow!("missing current_directory"));
         };
-        let user = if let Some(user) = rec.get(14) {
+        let user = if let Some(user) = rec.get(field_offset + 12) {
             user.to_string()
         } else {
             return Err(anyhow!("missing user"));
         };
-        let logon_guid = if let Some(logon_guid) = rec.get(15) {
+        let logon_guid = if let Some(logon_guid) = rec.get(field_offset + 13) {
             logon_guid.to_string()
         } else {
             return Err(anyhow!("missing logon_guid"));
         };
-        let logon_id = if let Some(logon_id) = rec.get(16) {
+        let logon_id = if let Some(logon_id) = rec.get(field_offset + 14) {
             if logon_id.eq("-") {
                 0
             } else {
@@ -94,7 +115,7 @@ impl TryFromSysmonRecord for ProcessCreate {
         } else {
             return Err(anyhow!("missing logon_id"));
         };
-        let terminal_session_id = if let Some(terminal_session_id) = rec.get(17) {
+        let terminal_session_id = if let Some(terminal_session_id) = rec.get(field_offset + 15) {
             if terminal_session_id.eq("-") {
                 0
             } else {
@@ -105,12 +126,12 @@ impl TryFromSysmonRecord for ProcessCreate {
         } else {
             return Err(anyhow!("missing terminal_session_id"));
         };
-        let integrity_level = if let Some(integrity_level) = rec.get(18) {
+        let integrity_level = if let Some(integrity_level) = rec.get(field_offset + 16) {
             integrity_level.to_string()
         } else {
             return Err(anyhow!("missing integrity_level"));
         };
-        let hashes = if let Some(hashes) = rec.get(19) {
+        let hashes = if let Some(hashes) = rec.get(field_offset + 17) {
             hashes
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -118,12 +139,12 @@ impl TryFromSysmonRecord for ProcessCreate {
         } else {
             return Err(anyhow!("missing hashes"));
         };
-        let parent_process_guid = if let Some(parent_process_guid) = rec.get(20) {
+        let parent_process_guid = if let Some(parent_process_guid) = rec.get(field_offset + 18) {
             parent_process_guid.to_string()
         } else {
             return Err(anyhow!("missing parent_process_guid"));
         };
-        let parent_process_id = if let Some(parent_process_id) = rec.get(21) {
+        let parent_process_id = if let Some(parent_process_id) = rec.get(field_offset + 19) {
             if parent_process_id.eq("-") {
                 0
             } else {
@@ -134,17 +155,17 @@ impl TryFromSysmonRecord for ProcessCreate {
         } else {
             return Err(anyhow!("missing parent_process_id"));
         };
-        let parent_image = if let Some(parent_image) = rec.get(22) {
+        let parent_image = if let Some(parent_image) = rec.get(field_offset + 20) {
             parent_image.to_string()
         } else {
             return Err(anyhow!("missing parent_image"));
         };
-        let parent_command_line = if let Some(parent_command_line) = rec.get(23) {
+        let parent_command_line = if let Some(parent_command_line) = rec.get(field_offset + 21) {
             parent_command_line.to_string()
         } else {
             return Err(anyhow!("missing parent_command_line"));
         };
-        let parent_user = if let Some(parent_user) = rec.get(24) {
+        let parent_user = if let Some(parent_user) = rec.get(field_offset + 22) {
             parent_user.to_string()
         } else {
             return Err(anyhow!("missing parent_user"));
