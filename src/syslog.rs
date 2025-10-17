@@ -241,6 +241,39 @@ pub(crate) fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
     }
 }
 
+/// Parse Unix timestamp with nanoseconds (e.g., "1691477476.074000000")
+/// from data-store export files
+pub(crate) fn parse_datastore_time(time: &str) -> Result<DateTime<Utc>> {
+    let parts: Vec<&str> = time.split('.').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!("invalid datastore timestamp format: {time}"));
+    }
+
+    let seconds = parts[0]
+        .parse::<i64>()
+        .map_err(|e| anyhow!("invalid seconds in timestamp: {e}"))?;
+    let nanos = parts[1]
+        .parse::<u32>()
+        .map_err(|e| anyhow!("invalid nanoseconds in timestamp: {e}"))?;
+
+    DateTime::from_timestamp(seconds, nanos).ok_or_else(|| anyhow!("invalid timestamp: {time}"))
+}
+
+/// Detect if a CSV record is from data-store export or elasticsearch export
+/// Data-store format: `unix_timestamp` at position 0
+/// Elasticsearch format: `agent_name` at position 0
+pub(crate) fn is_datastore_format(rec: &StringRecord) -> bool {
+    if let Some(first_field) = rec.get(0) {
+        // Try to parse as Unix timestamp (contains dot and digits)
+        first_field.contains('.')
+            && first_field
+                .split('.')
+                .all(|part| part.parse::<u64>().is_ok())
+    } else {
+        false
+    }
+}
+
 pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
