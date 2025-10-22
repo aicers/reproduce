@@ -1,8 +1,9 @@
-use std::{str::FromStr, sync::OnceLock};
+use std::convert::TryInto;
+use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{OpLog, OpLogLevel};
+use jiff::Timestamp;
 use regex::Regex;
 
 fn get_log_regex() -> &'static Regex {
@@ -14,8 +15,8 @@ fn get_log_regex() -> &'static Regex {
     })
 }
 
-fn parse_oplog_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
-    DateTime::from_str(datetime).map_err(|e| anyhow!("{e:?}"))
+fn parse_oplog_timestamp(datetime: &str) -> Result<Timestamp> {
+    datetime.parse::<Timestamp>().map_err(|e| anyhow!("{e:?}"))
 }
 
 fn parse_log_level(level: &str) -> Result<OpLogLevel> {
@@ -41,8 +42,9 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
         None => bail!("invalid datetime"),
     };
     let timestamp = parse_oplog_timestamp(datetime)?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")?;
+        .as_nanosecond()
+        .try_into()
+        .context("timestamp out of range")?;
 
     let log = match caps.name("contents") {
         Some(l) => l.as_str(),
@@ -62,7 +64,8 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+
+    use jiff::civil::date;
 
     use super::{log_regex, OpLogLevel};
 
@@ -86,10 +89,15 @@ mod tests {
         assert!(log_regex(no_contents, "agent").is_err());
         assert_eq!(
             dt,
-            Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap()
+            i64::try_from(
+                date(2023, 1, 2)
+                    .at(7, 36, 17, 0)
+                    .in_tz("UTC")
+                    .unwrap()
+                    .timestamp()
+                    .as_nanosecond()
+            )
+            .unwrap()
         );
         assert_eq!(res_info.agent_name, "agent".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));

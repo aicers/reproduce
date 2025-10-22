@@ -19,10 +19,10 @@ use std::{
     path::Path,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
-use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
+use jiff::{fmt::strtime, tz::TimeZone, Timestamp};
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
@@ -47,8 +47,8 @@ use crate::config::ElasticSearch;
 
 #[allow(clippy::unused_async)]
 pub(crate) async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {
-    let now = Utc::now();
-    let exec_time = format!("{}", now.format("%F %T"));
+    let now = Timestamp::now();
+    let exec_time = now.strftime("%F %T").to_string();
 
     let size = elasticsearch.size;
     let event_codes = elasticsearch
@@ -233,12 +233,14 @@ fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) ->
     Ok(())
 }
 
-pub(crate) fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
-    if let Ok(ndt) = NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S%.f") {
-        Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
-    } else {
-        Err(anyhow!("invalid time: {time}"))
-    }
+pub(crate) fn parse_sysmon_time(time: &str) -> Result<Timestamp> {
+    let tm = strtime::parse("%Y-%m-%d %H:%M:%S%.f", time)
+        .map_err(|e| anyhow!("invalid time: {time} ({e})"))?;
+
+    let dt = tm.to_datetime().context("missing Y-M-D/H:M:S parts")?;
+    TimeZone::UTC
+        .to_timestamp(dt)
+        .context("failed to convert civil datetime to UTC timestamp")
 }
 
 pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {

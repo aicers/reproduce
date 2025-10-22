@@ -15,9 +15,26 @@ use crate::syslog::open_sysmon_csv_file;
 use crate::zeek::open_raw_event_log_file;
 use crate::{Config, InputType, Producer, Report};
 
-const GIGANTO_ZEEK_KINDS: [&str; 18] = [
-    "conn", "http", "rdp", "smtp", "dns", "ntlm", "kerberos", "ssh", "dce_rpc", "ftp", "mqtt",
-    "ldap", "tls", "smb", "nfs", "bootp", "dhcp", "radius",
+const GIGANTO_ZEEK_KINDS: [&str; 19] = [
+    "conn",
+    "http",
+    "rdp",
+    "smtp",
+    "dns",
+    "ntlm",
+    "kerberos",
+    "ssh",
+    "dce_rpc",
+    "ftp",
+    "mqtt",
+    "ldap",
+    "tls",
+    "smb",
+    "nfs",
+    "bootp",
+    "dhcp",
+    "radius",
+    "malformed_dns",
 ];
 const AGENTS_LIST: [&str; 7] = [
     "manager",

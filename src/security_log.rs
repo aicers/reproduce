@@ -14,10 +14,12 @@ mod ubuntu;
 mod vforce;
 mod wapples;
 
+use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 const PROTO_TCP: u8 = 0x06;
@@ -97,6 +99,12 @@ fn proto_to_u8(proto: &str) -> u8 {
         "ICMP" | "icmp" => PROTO_ICMP,
         _ => 0,
     }
+}
+
+pub(super) fn timestamp_to_i64(ts: Timestamp) -> Result<i64> {
+    ts.as_nanosecond()
+        .try_into()
+        .map_err(|_| anyhow!("timestamp out of range"))
 }
 
 #[cfg(test)]

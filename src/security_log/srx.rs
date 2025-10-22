@@ -1,11 +1,14 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, FixedOffset};
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
-use super::{proto_to_u8, ParseSecurityLog, SecurityLogInfo, Srx, DEFAULT_IPADDR, DEFAULT_PORT};
+use super::{
+    proto_to_u8, timestamp_to_i64, ParseSecurityLog, SecurityLogInfo, Srx, DEFAULT_IPADDR,
+    DEFAULT_PORT,
+};
 
 fn get_srx_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,8 +19,8 @@ fn get_srx_regex() -> &'static Regex {
     })
 }
 
-fn parse_srx_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%Y-%m-%dT%H:%M:%S%.f%z").map_err(|e| anyhow!("{e:?}"))
+fn parse_srx_timestamp(datetime: &str) -> Result<Timestamp> {
+    Timestamp::strptime("%Y-%m-%dT%H:%M:%S%.f%:z", datetime).map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Srx {
@@ -58,8 +61,7 @@ impl ParseSecurityLog for Srx {
             None => "TCP",
         };
 
-        let timestamp = parse_srx_timestamp(datetime)?
-            .timestamp_nanos_opt()
+        let timestamp = timestamp_to_i64(parse_srx_timestamp(datetime)?)
             .context("to_timestamp_nanos")?
             + serial;
 

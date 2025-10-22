@@ -5,26 +5,28 @@ mod tests;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
 use csv::StringRecord;
+use jiff::Timestamp;
 
 pub(crate) trait TryFromGigantoRecord: Sized {
     fn try_from_giganto_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
-fn parse_giganto_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
-    if let Some(i) = timestamp.find('.') {
-        let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
-        let micros = timestamp[i + 1..]
-            .parse::<u32>()
-            .context("invalid timestamp")?;
-        let Some(time) = DateTime::from_timestamp(secs, micros) else {
-            return Err(anyhow!("failed to create DateTime<Utc> from timestamp"));
-        };
-        Ok(time)
-    } else {
-        Err(anyhow!("invalid timestamp: {timestamp}"))
-    }
+fn parse_giganto_timestamp(timestamp: &str) -> Result<Timestamp> {
+    let Some((sec_str, nano_str)) = timestamp.split_once('.') else {
+        return Err(anyhow!("invalid timestamp: {timestamp}"));
+    };
+
+    let secs = sec_str
+        .parse::<i64>()
+        .context("invalid timestamp (seconds)")?;
+    let nanos = nano_str
+        .parse::<i32>()
+        .context("invalid timestamp (nanoseconds)")?;
+    let ts = Timestamp::new(secs, nanos)
+        .context("failed to create Timestamp from (seconds, nanoseconds)")?;
+
+    Ok(ts)
 }
 
 fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::Err> {
