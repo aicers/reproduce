@@ -16,14 +16,15 @@ impl TryFromSysmonRecord for FileDelete {
         } else {
             return Err(anyhow!("missing agent_id"));
         };
-        let time = if let Some(utc_time) = rec.get(3) {
+        let time: i64 = if let Some(utc_time) = rec.get(3) {
             parse_sysmon_time(utc_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
-                + serial
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing time"));
         };
+        let time = time + serial;
         let process_guid = if let Some(process_guid) = rec.get(4) {
             process_guid.to_string()
         } else {

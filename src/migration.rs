@@ -5,22 +5,24 @@ mod tests;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
 use csv::StringRecord;
+use jiff::Timestamp;
 
 pub(crate) trait TryFromGigantoRecord: Sized {
     fn try_from_giganto_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
-fn parse_giganto_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
+fn parse_giganto_timestamp(timestamp: &str) -> Result<Timestamp> {
     if let Some(i) = timestamp.find('.') {
         let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
         let micros = timestamp[i + 1..]
-            .parse::<u32>()
+            .parse::<i64>()
             .context("invalid timestamp")?;
-        let Some(time) = DateTime::from_timestamp(secs, micros) else {
-            return Err(anyhow!("failed to create DateTime<Utc> from timestamp"));
-        };
+        let nanos = micros * 1000;
+        let time = Timestamp::from_second(secs)
+            .map_err(|e| anyhow!("failed to create Timestamp from timestamp: {e}"))?
+            .checked_add(jiff::Span::new().nanoseconds(nanos))
+            .map_err(|e| anyhow!("failed to add nanoseconds to timestamp: {e}"))?;
         Ok(time)
     } else {
         Err(anyhow!("invalid timestamp: {timestamp}"))
