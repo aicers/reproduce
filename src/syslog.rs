@@ -21,8 +21,9 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
+use jiff::Timestamp;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
@@ -233,9 +234,15 @@ fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) ->
     Ok(())
 }
 
-pub(crate) fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_sysmon_time(time: &str) -> Result<Timestamp> {
     if let Ok(ndt) = NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S%.f") {
-        Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+        let secs = ndt.and_utc().timestamp();
+        let nanos = ndt.and_utc().timestamp_subsec_nanos();
+        let ts = Timestamp::from_second(secs)
+            .map_err(|e| anyhow!("failed to create Timestamp: {e}"))?
+            .checked_add(jiff::Span::new().nanoseconds(i64::from(nanos)))
+            .map_err(|e| anyhow!("failed to add nanoseconds: {e}"))?;
+        Ok(ts)
     } else {
         Err(anyhow!("invalid time: {time}"))
     }

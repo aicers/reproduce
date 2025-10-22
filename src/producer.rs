@@ -23,8 +23,8 @@ use giganto_client::{
         log::Log,
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
-            Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+            Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         receive_ack_timestamp, send_record_header,
         sysmon::{
@@ -35,6 +35,7 @@ use giganto_client::{
     },
     RawEventKind,
 };
+use jiff::Timestamp;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
@@ -606,6 +607,20 @@ impl Producer {
                     bail!("radius zeek log is not supported");
                 }
             }
+            "malformed_dns" => {
+                self.giganto
+                    .send_zeek::<MalformedDns>(
+                        iter,
+                        RawEventKind::MalformedDns,
+                        skip,
+                        count_sent,
+                        file_polling_mode,
+                        dir_polling_mode,
+                        running,
+                        report,
+                    )
+                    .await
+            }
             _ => bail!("unknown zeek/migration kind"),
         }
     }
@@ -1166,8 +1181,8 @@ impl Giganto {
                         let current_timestamp = if let Some(timestamp) = record.get(0) {
                             match crate::zeek::parse_zeek_timestamp(timestamp) {
                                 Ok(datetime) => {
-                                    if let Some(timestamp) = datetime.timestamp_nanos_opt() {
-                                        timestamp
+                                    if let Ok(ts) = datetime.as_nanosecond().try_into() {
+                                        ts
                                     } else {
                                         failed_cnt += 1;
                                         error!("timestamp conversion failed #{}", next_pos.line());
@@ -1504,8 +1519,8 @@ impl Giganto {
                         let current_timestamp = if let Some(utc_time) = record.get(3) {
                             match crate::syslog::parse_sysmon_time(utc_time) {
                                 Ok(datetime) => {
-                                    if let Some(timestamp) = datetime.timestamp_nanos_opt() {
-                                        timestamp
+                                    if let Ok(ts) = datetime.as_nanosecond().try_into() {
+                                        ts
                                     } else {
                                         failed_cnt += 1;
                                         error!(
@@ -1907,9 +1922,14 @@ impl Giganto {
             self.init_msg = false;
         }
 
-        let timestamp = Utc::now()
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?;
+        let now = Utc::now();
+        let timestamp: i64 = Timestamp::from_second(now.timestamp())
+            .map_err(|e| anyhow!("failed to create Timestamp: {e}"))?
+            .checked_add(jiff::Span::new().nanoseconds(i64::from(now.timestamp_subsec_nanos())))
+            .map_err(|e| anyhow!("failed to add nanoseconds: {e}"))?
+            .as_nanosecond()
+            .try_into()
+            .context("timestamp out of range")?;
         let record_data = encode_legacy(&send_log)?;
         let buf = vec![(timestamp, record_data)];
 
@@ -2241,7 +2261,10 @@ mod tests {
         assert!(result.is_ok());
 
         let datetime = result.unwrap();
-        assert_eq!(datetime.timestamp(), 1_562_093_121);
-        assert_eq!(datetime.timestamp_subsec_micros(), 655_728);
+        assert_eq!(datetime.as_second(), 1_562_093_121);
+        assert_eq!(
+            u32::try_from(datetime.subsec_nanosecond() / 1000).unwrap(),
+            655_728
+        );
     }
 }
