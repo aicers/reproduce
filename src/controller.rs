@@ -288,7 +288,7 @@ impl Controller {
                             count_sent,
                             file.polling_mode,
                             dir_polling_mode,
-                            kind,
+                            file.export_from_giganto,
                             running,
                             &mut report,
                         )
