@@ -70,9 +70,7 @@ impl ParseSecurityLog for Fgt {
             None => PROTO_TCP,
         };
 
-        let timestamp = timestamp_to_i64(parse_fgt_timestamp(date, time, tz)?)
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_fgt_timestamp(date, time, tz).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {

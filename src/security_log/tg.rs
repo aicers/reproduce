@@ -62,8 +62,7 @@ impl ParseSecurityLog for Tg {
             None => PROTO_TCP,
         };
 
-        let timestamp =
-            timestamp_to_i64(parse_tg_timestamp(datetime)?).context("to_timestamp_nanos")? + serial;
+        let timestamp = parse_tg_timestamp(datetime).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {

@@ -8,9 +8,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Support for `malformed_dns` event type for importing malformed DNS events
-  from Zeek logs.
-- Support RADIUS protocol for sending giganto logs.
+- Support `RADIUS`, `malformed_dns` protocol for sending giganto logs.
 
 ### Changed
 

@@ -40,9 +40,7 @@ impl ParseSecurityLog for Nginx {
             None => DEFAULT_IPADDR,
         };
 
-        let timestamp = timestamp_to_i64(parse_nginx_timestamp(datetime)?)
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_nginx_timestamp(datetime).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {

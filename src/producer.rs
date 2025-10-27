@@ -58,7 +58,7 @@ use crate::{
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const REQUIRED_GIGANTO_VERSION: &str = "0.26.0-alpha.4";
+const REQUIRED_GIGANTO_VERSION: &str = "0.26.0-alpha.7";
 const INTERVAL: u64 = 5;
 const BATCH_SIZE: usize = 100;
 
@@ -607,18 +607,22 @@ impl Producer {
                 }
             }
             "malformed_dns" => {
-                self.giganto
-                    .send_zeek::<MalformedDns>(
-                        iter,
-                        RawEventKind::MalformedDns,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<MalformedDns>(
+                            iter,
+                            RawEventKind::MalformedDns,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    bail!("malformed_dns zeek log is not supported");
+                }
             }
             _ => bail!("unknown zeek/migration kind"),
         }

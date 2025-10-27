@@ -64,9 +64,7 @@ impl ParseSecurityLog for Axgate {
             None => PROTO_TCP,
         };
 
-        let timestamp = timestamp_to_i64(parse_axgate_timestamp(datetime)?)
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_axgate_timestamp(datetime).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {
