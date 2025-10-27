@@ -1,8 +1,15 @@
 use csv::ReaderBuilder;
 use csv::StringRecord;
-use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
-    Radius, Rdp, Smb, Smtp, Ssh, Tls,
+use giganto_client::ingest::{
+    network::{
+        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+        Radius, Rdp, Smb, Smtp, Ssh, Tls,
+    },
+    sysmon::{
+        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+    },
 };
 
 use super::TryFromGigantoRecord;
@@ -194,4 +201,102 @@ fn stringrecord(data: &str) -> StringRecord {
         .from_reader(data.as_bytes());
 
     rdr.into_records().next().unwrap().unwrap()
+}
+
+#[test]
+fn sysmon_process_create_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{11111111-2222-3333-4444-555555555555}	1234	C:\\Windows\\System32\\cmd.exe	10.0.0.1	Test description	Test product	Test company	cmd.exe	\"C:\\Windows\\System32\\cmd.exe\" /c dir	C:\\Windows\\System32\\	DOMAIN\\User	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	1001	2	High	SHA256=ABCDEF,MD5=123456	{99999999-8888-7777-6666-555555555555}	4321	C:\\Windows\\explorer.exe	explorer.exe /something	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(ProcessCreate::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_file_create_time_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{11111111-2222-3333-4444-555555555555}	1234	C:\\Windows\\System32\\cmd.exe	C:\\Temp\\file.txt	1691452700.000000000	1691452600.000000000	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(FileCreationTimeChanged::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_network_connect_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User	TCP	true	false	192.168.0.10	desktop	51515	-	false	10.0.0.1	server	443	https";
+    let rec = stringrecord(data);
+    assert!(NetworkConnection::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_process_terminate_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(ProcessTerminated::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_file_create_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\created.txt	1691452700.000000000	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(FileCreate::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_file_create_stream_hash_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\created.txt	1691452700.000000000	SHA256=ABCDEF,MD5=123456	contents	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(FileCreateStreamHash::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_dns_query_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	example.com	0	1.1.1.1;8.8.8.8	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(DnsEvent::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_file_delete_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	DOMAIN\\User	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\deleted.txt	SHA256=ABCDEF,MD5=123456	true	false";
+    let rec = stringrecord(data);
+    assert!(FileDelete::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_process_tamper_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	OpenProcess	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(ProcessTampering::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_image_load_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	C:\\Windows\\System32\\kernel32.dll	10.0.0.0	Test description	Test product	Test company	kernel32.dll	SHA256=ABCDEF,MD5=123456	true	Microsoft	Valid	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(ImageLoaded::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_registry_value_set_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	RenameValue	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\reg.exe	HKLM\\Software\\Test	DWORD (0x1)	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(RegistryValueSet::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_registry_key_rename_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	RenameValue	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\reg.exe	HKLM\\Software\\Test	HKLM\\Software\\TestNew	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(RegistryKeyValueRename::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_pipe_event_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	CreatePipe	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	\\\\.\\pipe\\testpipe	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User";
+    let rec = stringrecord(data);
+    assert!(PipeEvent::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_file_delete_detected_sample() {
+    let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	DOMAIN\\User	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\deleted.txt	SHA256=ABCDEF,MD5=123456	false";
+    let rec = stringrecord(data);
+    assert!(FileDeleteDetected::try_from_giganto_record(&rec).is_ok());
 }

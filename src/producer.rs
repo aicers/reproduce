@@ -1,5 +1,6 @@
 #![allow(clippy::struct_field_names, clippy::too_many_arguments)]
 use std::{
+    any::type_name,
     env,
     fmt::Debug,
     fs::{self, File},
@@ -57,7 +58,7 @@ use crate::{
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const REQUIRED_GIGANTO_VERSION: &str = "0.26.0";
+const REQUIRED_GIGANTO_VERSION: &str = "0.26.1";
 const INTERVAL: u64 = 5;
 const BATCH_SIZE: usize = 100;
 
@@ -666,206 +667,419 @@ impl Producer {
         count_sent: u64,
         file_polling_mode: bool,
         dir_polling_mode: bool,
-        kind: &str,
+        migration: Option<bool>,
         running: Arc<AtomicBool>,
         report: &mut Report,
     ) -> Result<u64> {
-        match kind {
+        let Some(migration) = migration else {
+            bail!("export_from_giganto parameter is required");
+        };
+        match self.giganto.giganto_info.kind.as_str() {
             "process_create" => {
-                self.giganto
-                    .send_sysmon::<ProcessCreate>(
-                        iter,
-                        RawEventKind::ProcessCreate,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<ProcessCreate>(
+                            iter,
+                            RawEventKind::ProcessCreate,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<ProcessCreate>(
+                            iter,
+                            RawEventKind::ProcessCreate,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "file_create_time" => {
-                self.giganto
-                    .send_sysmon::<FileCreationTimeChanged>(
-                        iter,
-                        RawEventKind::FileCreateTime,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<FileCreationTimeChanged>(
+                            iter,
+                            RawEventKind::FileCreateTime,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<FileCreationTimeChanged>(
+                            iter,
+                            RawEventKind::FileCreateTime,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "network_connect" => {
-                self.giganto
-                    .send_sysmon::<NetworkConnection>(
-                        iter,
-                        RawEventKind::NetworkConnect,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<NetworkConnection>(
+                            iter,
+                            RawEventKind::NetworkConnect,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<NetworkConnection>(
+                            iter,
+                            RawEventKind::NetworkConnect,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "process_terminate" => {
-                self.giganto
-                    .send_sysmon::<ProcessTerminated>(
-                        iter,
-                        RawEventKind::ProcessTerminate,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<ProcessTerminated>(
+                            iter,
+                            RawEventKind::ProcessTerminate,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<ProcessTerminated>(
+                            iter,
+                            RawEventKind::ProcessTerminate,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "image_load" => {
-                self.giganto
-                    .send_sysmon::<ImageLoaded>(
-                        iter,
-                        RawEventKind::ImageLoad,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<ImageLoaded>(
+                            iter,
+                            RawEventKind::ImageLoad,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<ImageLoaded>(
+                            iter,
+                            RawEventKind::ImageLoad,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "file_create" => {
-                self.giganto
-                    .send_sysmon::<FileCreate>(
-                        iter,
-                        RawEventKind::FileCreate,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<FileCreate>(
+                            iter,
+                            RawEventKind::FileCreate,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<FileCreate>(
+                            iter,
+                            RawEventKind::FileCreate,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "registry_value_set" => {
-                self.giganto
-                    .send_sysmon::<RegistryValueSet>(
-                        iter,
-                        RawEventKind::RegistryValueSet,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<RegistryValueSet>(
+                            iter,
+                            RawEventKind::RegistryValueSet,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<RegistryValueSet>(
+                            iter,
+                            RawEventKind::RegistryValueSet,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "registry_key_rename" => {
-                self.giganto
-                    .send_sysmon::<RegistryKeyValueRename>(
-                        iter,
-                        RawEventKind::RegistryKeyRename,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<RegistryKeyValueRename>(
+                            iter,
+                            RawEventKind::RegistryKeyRename,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<RegistryKeyValueRename>(
+                            iter,
+                            RawEventKind::RegistryKeyRename,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "file_create_stream_hash" => {
-                self.giganto
-                    .send_sysmon::<FileCreateStreamHash>(
-                        iter,
-                        RawEventKind::FileCreateStreamHash,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<FileCreateStreamHash>(
+                            iter,
+                            RawEventKind::FileCreateStreamHash,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<FileCreateStreamHash>(
+                            iter,
+                            RawEventKind::FileCreateStreamHash,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "pipe_event" => {
-                self.giganto
-                    .send_sysmon::<PipeEvent>(
-                        iter,
-                        RawEventKind::PipeEvent,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<PipeEvent>(
+                            iter,
+                            RawEventKind::PipeEvent,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<PipeEvent>(
+                            iter,
+                            RawEventKind::PipeEvent,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "dns_query" => {
-                self.giganto
-                    .send_sysmon::<DnsEvent>(
-                        iter,
-                        RawEventKind::DnsQuery,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<DnsEvent>(
+                            iter,
+                            RawEventKind::DnsQuery,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<DnsEvent>(
+                            iter,
+                            RawEventKind::DnsQuery,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "file_delete" => {
-                self.giganto
-                    .send_sysmon::<FileDelete>(
-                        iter,
-                        RawEventKind::FileDelete,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<FileDelete>(
+                            iter,
+                            RawEventKind::FileDelete,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<FileDelete>(
+                            iter,
+                            RawEventKind::FileDelete,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "process_tamper" => {
-                self.giganto
-                    .send_sysmon::<ProcessTampering>(
-                        iter,
-                        RawEventKind::ProcessTamper,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<ProcessTampering>(
+                            iter,
+                            RawEventKind::ProcessTamper,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<ProcessTampering>(
+                            iter,
+                            RawEventKind::ProcessTamper,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             "file_delete_detected" => {
-                self.giganto
-                    .send_sysmon::<FileDeleteDetected>(
-                        iter,
-                        RawEventKind::FileDeleteDetected,
-                        skip,
-                        count_sent,
-                        file_polling_mode,
-                        dir_polling_mode,
-                        running,
-                        report,
-                    )
-                    .await
+                if migration {
+                    self.giganto
+                        .migration::<FileDeleteDetected>(
+                            iter,
+                            RawEventKind::FileDeleteDetected,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                } else {
+                    self.giganto
+                        .send_sysmon::<FileDeleteDetected>(
+                            iter,
+                            RawEventKind::FileDeleteDetected,
+                            skip,
+                            count_sent,
+                            file_polling_mode,
+                            dir_polling_mode,
+                            running,
+                            report,
+                        )
+                        .await
+                }
             }
             _ => bail!("unknown sysmon kind"),
         }
@@ -1308,7 +1522,10 @@ impl Giganto {
     where
         T: Serialize + TryFromGigantoRecord + Unpin + Debug,
     {
-        info!("Migration");
+        let type_name = type_name::<T>();
+        let short_type_name = type_name.rsplit("::").next().unwrap_or(type_name);
+        info!("Migration {}", short_type_name);
+
         let mut success_cnt = 0u64;
         let mut failed_cnt = 0u64;
         let mut pos = Position::new();

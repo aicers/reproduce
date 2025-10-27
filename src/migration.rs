@@ -1,4 +1,5 @@
 mod network;
+mod sysmon;
 #[cfg(test)]
 mod tests;
 
