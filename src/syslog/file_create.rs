@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::FileCreate;
 use serde::Serialize;
 
-use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
+use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
 
 impl TryFromSysmonRecord for FileCreate {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {

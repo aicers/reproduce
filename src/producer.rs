@@ -7,18 +7,19 @@ use std::{
     net::SocketAddr,
     path::Path,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
 use giganto_client::{
+    RawEventKind,
     connection::client_handshake,
-    frame::{send_raw, RecvError, SendError},
+    frame::{RecvError, SendError, send_raw},
     ingest::{
         log::Log,
         netflow::{Netflow5, Netflow9},
@@ -33,7 +34,6 @@ use giganto_client::{
             ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
         },
     },
-    RawEventKind,
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -42,6 +42,7 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::{
+    Config, Report,
     bincode_utils::encode_legacy,
     migration::TryFromGigantoRecord,
     netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
@@ -52,7 +53,6 @@ use crate::{
     },
     syslog::TryFromSysmonRecord,
     zeek::TryFromZeekRecord,
-    Config, Report,
 };
 
 const CHANNEL_CLOSE_COUNT: u8 = 150;
@@ -1735,12 +1735,11 @@ impl Giganto {
             Statistics: {:?}",
             stats
         );
-        if !templates.is_empty() {
-            if let Ok(tmpl_path) = tmpl_path.as_ref() {
-                if let Err(e) = templates.save(tmpl_path) {
-                    error!("{}. {}", e, tmpl_path);
-                }
-            }
+        if !templates.is_empty()
+            && let Ok(tmpl_path) = tmpl_path.as_ref()
+            && let Err(e) = templates.save(tmpl_path)
+        {
+            error!("{}. {}", e, tmpl_path);
         }
 
         if let Err(e) = report.end() {
@@ -2145,7 +2144,9 @@ mod tests {
     use super::*;
 
     fn create_zeek_record(timestamp: &str, uid: &str) -> StringRecord {
-        let data = format!("{timestamp}\t{uid}\t192.168.1.77\t57655\t209.197.168.151\t1024\ttcp\tirc-dcc-data\t2.256935\t124\t42208\tSF\t-\t-\t0\tShAdDaFf\t28\t1592\t43\t44452\t-");
+        let data = format!(
+            "{timestamp}\t{uid}\t192.168.1.77\t57655\t209.197.168.151\t1024\ttcp\tirc-dcc-data\t2.256935\t124\t42208\tSF\t-\t-\t0\tShAdDaFf\t28\t1592\t43\t44452\t-"
+        );
         ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)

@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::ProcessCreate;
 use serde::Serialize;
 
-use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
+use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
 
 impl TryFromSysmonRecord for ProcessCreate {
     #[allow(clippy::too_many_lines)]

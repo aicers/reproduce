@@ -1,12 +1,12 @@
 use std::net::IpAddr;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::network::{
     Conn, DceRpc, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
 };
 use num_traits::ToPrimitive;
 
-use super::{parse_zeek_timestamp, TryFromZeekRecord, PROTO_ICMP, PROTO_TCP, PROTO_UDP};
+use super::{PROTO_ICMP, PROTO_TCP, PROTO_UDP, TryFromZeekRecord, parse_zeek_timestamp};
 
 impl TryFromZeekRecord for Conn {
     #[allow(clippy::too_many_lines)]

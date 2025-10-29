@@ -41,16 +41,16 @@ impl std::fmt::Display for Template {
         }
 
         if self.options_template {
-            if self.scope_field_count > 0 {
-                if let Some(fields) = self.fields.get(..self.scope_field_count) {
-                    writeln!(f, "Scope fields:")?;
-                    for (k, v) in fields {
-                        writeln!(
-                            f,
-                            " ({:?}({k}), {v})",
-                            OptionsScopeFieldTypes::from_primitive(*k)
-                        )?;
-                    }
+            if self.scope_field_count > 0
+                && let Some(fields) = self.fields.get(..self.scope_field_count)
+            {
+                writeln!(f, "Scope fields:")?;
+                for (k, v) in fields {
+                    writeln!(
+                        f,
+                        " ({:?}({k}), {v})",
+                        OptionsScopeFieldTypes::from_primitive(*k)
+                    )?;
                 }
             }
             if let Some(fields) = self.fields.get(self.scope_field_count..) {

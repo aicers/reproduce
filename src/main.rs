@@ -25,7 +25,7 @@ use report::Report;
 use tokio::task;
 use tracing::{error, info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 const USAGE: &str = "\
 USAGE:
