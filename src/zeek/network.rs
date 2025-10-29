@@ -2,8 +2,7 @@ use std::net::IpAddr;
 
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::network::{
-    Conn, DceRpc, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Ntlm, Rdp, Smtp, Ssh,
-    Tls,
+    Conn, DceRpc, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
 };
 use num_traits::ToPrimitive;
 
@@ -1445,99 +1444,6 @@ impl TryFromZeekRecord for Tls {
                 resp_pkts: 0,
                 orig_l2_bytes: 0,
                 resp_l2_bytes: 0,
-            },
-            time,
-        ))
-    }
-}
-
-impl TryFromZeekRecord for MalformedDns {
-    #[allow(clippy::similar_names, clippy::too_many_lines)]
-    fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp(timestamp)?
-                .as_nanosecond()
-                .try_into()
-                .context("timestamp out of range")?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
-        let orig_addr = if let Some(orig_addr) = rec.get(2) {
-            orig_addr
-                .parse::<IpAddr>()
-                .context("invalid source address")?
-        } else {
-            return Err(anyhow!("missing source address"));
-        };
-        let orig_port = if let Some(orig_port) = rec.get(3) {
-            orig_port.parse::<u16>().context("invalid source port")?
-        } else {
-            return Err(anyhow!("missing source port"));
-        };
-        let resp_addr = if let Some(resp_addr) = rec.get(4) {
-            resp_addr
-                .parse::<IpAddr>()
-                .context("invalid destination address")?
-        } else {
-            return Err(anyhow!("missing destination address"));
-        };
-        let resp_port = if let Some(resp_port) = rec.get(5) {
-            resp_port
-                .parse::<u16>()
-                .context("invalid destination port")?
-        } else {
-            return Err(anyhow!("missing destination port"));
-        };
-        let proto = if let Some(proto) = rec.get(6) {
-            match proto {
-                "tcp" => PROTO_TCP,
-                "udp" => PROTO_UDP,
-                "icmp" => PROTO_ICMP,
-                _ => 0,
-            }
-        } else {
-            return Err(anyhow!("missing protocol"));
-        };
-        let trans_id = if let Some(trans_id) = rec.get(7) {
-            if trans_id.eq("-") {
-                0
-            } else {
-                trans_id.parse::<u16>().context("invalid trans_id")?
-            }
-        } else {
-            return Err(anyhow!("missing trans_id"));
-        };
-
-        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
-            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
-        let end_time = jiff::Timestamp::MAX;
-
-        Ok((
-            Self {
-                orig_addr,
-                orig_port,
-                resp_addr,
-                resp_port,
-                proto,
-                start_time,
-                end_time,
-                duration: 0,
-                orig_pkts: 0,
-                resp_pkts: 0,
-                orig_l2_bytes: 0,
-                resp_l2_bytes: 0,
-                trans_id,
-                flags: 0,
-                question_count: 0,
-                answer_count: 0,
-                authority_count: 0,
-                additional_count: 0,
-                query_count: 0,
-                resp_count: 0,
-                query_bytes: 0,
-                resp_bytes: 0,
-                query_body: Vec::new(),
-                resp_body: Vec::new(),
             },
             time,
         ))
