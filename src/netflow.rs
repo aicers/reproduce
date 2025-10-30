@@ -36,7 +36,7 @@ impl ParseNetflowDatasets for Netflow5 {
             bail!("invalid netflow v5 header");
         };
         let mut events = vec![];
-        if let Ok(values) = input.parse_netflow_v5_datasets(header) {
+        match input.parse_netflow_v5_datasets(header) { Ok(values) => {
             for v5 in values {
                 events.push((
                     DateTime::from_timestamp(i64::from(header.unix_secs), *nanos)
@@ -46,10 +46,10 @@ impl ParseNetflowDatasets for Netflow5 {
                 *nanos += 1;
             }
             stats.add(ProcessStats::Events, usize::from(header.count));
-        } else {
+        } _ => {
             stats.add(ProcessStats::InvalidNetflowPackets, 1);
             bail!("invalid netflow v5 pcap");
-        }
+        }}
         Ok(events)
     }
 }
