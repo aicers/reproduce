@@ -1898,7 +1898,7 @@ impl Giganto {
 
     async fn send(&mut self, msg: &[u8]) -> Result<()> {
         let send_log: Log = Log {
-            kind: self.giganto_info.kind.to_string(),
+            kind: self.giganto_info.kind.clone(),
             log: msg.to_vec(),
         };
 
