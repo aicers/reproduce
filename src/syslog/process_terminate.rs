@@ -2,48 +2,66 @@ use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::sysmon::ProcessTerminated;
 use serde::Serialize;
 
-use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
+use super::{
+    is_datastore_format, parse_datastore_time, parse_sysmon_time, EventToCsv, TryFromSysmonRecord,
+};
+
+fn parse_fields(
+    rec: &csv::StringRecord,
+    offset: usize,
+) -> Result<(String, String, String, u32, String, String)> {
+    let process_guid = rec
+        .get(offset)
+        .ok_or_else(|| anyhow!("missing process_guid"))?
+        .to_string();
+    let process_id = rec
+        .get(offset + 1)
+        .ok_or_else(|| anyhow!("missing process_id"))?
+        .parse::<u32>()
+        .context("invalid process_id")?;
+    let image = rec
+        .get(offset + 2)
+        .ok_or_else(|| anyhow!("missing image"))?
+        .to_string();
+    let user = rec
+        .get(offset + 3)
+        .ok_or_else(|| anyhow!("missing user"))?
+        .to_string();
+    let agent_name = rec
+        .get(offset - 2)
+        .ok_or_else(|| anyhow!("missing agent_name"))?
+        .to_string();
+    let agent_id = rec
+        .get(offset - 1)
+        .ok_or_else(|| anyhow!("missing agent_id"))?
+        .to_string();
+
+    Ok((agent_name, agent_id, process_guid, process_id, image, user))
+}
 
 impl TryFromSysmonRecord for ProcessTerminated {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
-        let agent_name = if let Some(agent_name) = rec.get(0) {
-            agent_name.to_string()
-        } else {
-            return Err(anyhow!("missing agent_name"));
-        };
-        let agent_id = if let Some(agent_id) = rec.get(1) {
-            agent_id.to_string()
-        } else {
-            return Err(anyhow!("missing agent_id"));
-        };
-        let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?
+        let is_datastore = is_datastore_format(rec);
+
+        let time = if is_datastore {
+            let timestamp = rec.get(0).ok_or_else(|| anyhow!("missing timestamp"))?;
+            parse_datastore_time(timestamp)?
                 .timestamp_nanos_opt()
                 .context("to_timestamp_nanos")?
                 + serial
         } else {
-            return Err(anyhow!("missing time"));
+            let utc_time = rec.get(3).ok_or_else(|| anyhow!("missing time"))?;
+            parse_sysmon_time(utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+                + serial
         };
-        let process_guid = if let Some(process_guid) = rec.get(4) {
-            process_guid.to_string()
-        } else {
-            return Err(anyhow!("missing process_guid"));
-        };
-        let process_id = if let Some(process_id) = rec.get(5) {
-            process_id.parse::<u32>().context("invalid process_id")?
-        } else {
-            return Err(anyhow!("missing process_id"));
-        };
-        let image = if let Some(image) = rec.get(6) {
-            image.to_string()
-        } else {
-            return Err(anyhow!("missing image"));
-        };
-        let user = if let Some(user) = rec.get(7) {
-            user.to_string()
-        } else {
-            return Err(anyhow!("missing user"));
-        };
+
+        // Data-store format: timestamp(0), "sensor"(1), agent_name(2), agent_id(3), process_guid(4), process_id(5), image(6), user(7)
+        // Elasticsearch format: agent_name(0), agent_id(1), event_action(2), utc_time(3), process_guid(4), process_id(5), image(6), user(7)
+        let field_offset = if is_datastore { 6 } else { 4 };
+        let (agent_name, agent_id, process_guid, process_id, image, user) =
+            parse_fields(rec, field_offset)?;
 
         Ok((
             Self {
