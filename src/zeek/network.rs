@@ -11,10 +11,11 @@ use super::{parse_zeek_timestamp, TryFromZeekRecord, PROTO_ICMP, PROTO_TCP, PROT
 impl TryFromZeekRecord for Conn {
     #[allow(clippy::too_many_lines)]
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -116,8 +117,10 @@ impl TryFromZeekRecord for Conn {
             return Err(anyhow!("missing destination packets"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::from_timestamp_nanos(time + duration);
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::from_nanosecond(i128::from(time) + i128::from(duration))
+            .map_err(|e| anyhow!("failed to create end_time Timestamp: {e}"))?;
 
         Ok((
             Self {
@@ -152,8 +155,9 @@ impl TryFromZeekRecord for Dns {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -215,13 +219,14 @@ impl TryFromZeekRecord for Dns {
         } else {
             return Err(anyhow!("missing trans_id"));
         };
-        let rtt = if let Some(rtt) = rec.get(8) {
+        let rtt: i64 = if let Some(rtt) = rec.get(8) {
             if rtt.eq("-") {
                 0
             } else {
                 parse_zeek_timestamp(rtt)?
-                    .timestamp_nanos_opt()
-                    .context("to_timestamp_nanos")?
+                    .as_nanosecond()
+                    .try_into()
+                    .context("timestamp out of range")?
             }
         } else {
             return Err(anyhow!("missing rtt"));
@@ -315,8 +320,10 @@ impl TryFromZeekRecord for Dns {
             return Err(anyhow!("missing ttl"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::from_timestamp_nanos(time + rtt);
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::from_nanosecond(i128::from(time) + i128::from(rtt))
+            .map_err(|e| anyhow!("failed to create end_time Timestamp: {e}"))?;
 
         Ok((
             Self {
@@ -355,8 +362,9 @@ impl TryFromZeekRecord for Http {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -501,8 +509,9 @@ impl TryFromZeekRecord for Http {
         let mut mime_types = orig_mime_types;
         mime_types.extend(resp_mime_types);
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -549,8 +558,9 @@ impl TryFromZeekRecord for Kerberos {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -581,8 +591,9 @@ impl TryFromZeekRecord for Kerberos {
             return Err(anyhow!("missing destination port"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -617,8 +628,9 @@ impl TryFromZeekRecord for Ntlm {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -669,8 +681,9 @@ impl TryFromZeekRecord for Ntlm {
             return Err(anyhow!("missing success"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -701,8 +714,9 @@ impl TryFromZeekRecord for Rdp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -738,8 +752,9 @@ impl TryFromZeekRecord for Rdp {
             return Err(anyhow!("missing cookie"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -766,8 +781,9 @@ impl TryFromZeekRecord for Smtp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -828,8 +844,9 @@ impl TryFromZeekRecord for Smtp {
             return Err(anyhow!("missing agent"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -863,8 +880,9 @@ impl TryFromZeekRecord for Ssh {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -930,8 +948,9 @@ impl TryFromZeekRecord for Ssh {
             return Err(anyhow!("missing host_key_alg"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -970,8 +989,9 @@ impl TryFromZeekRecord for DceRpc {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1001,13 +1021,14 @@ impl TryFromZeekRecord for DceRpc {
         } else {
             return Err(anyhow!("missing destination port"));
         };
-        let rtt = if let Some(rtt) = rec.get(6) {
+        let rtt: i64 = if let Some(rtt) = rec.get(6) {
             if rtt.eq("-") {
                 0
             } else {
                 parse_zeek_timestamp(rtt)?
-                    .timestamp_nanos_opt()
-                    .context("to_timestamp_nanos")?
+                    .as_nanosecond()
+                    .try_into()
+                    .context("timestamp out of range")?
             }
         } else {
             return Err(anyhow!("missing rtt"));
@@ -1028,8 +1049,9 @@ impl TryFromZeekRecord for DceRpc {
             return Err(anyhow!("missing operation"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -1060,8 +1082,9 @@ impl TryFromZeekRecord for Ftp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1162,8 +1185,9 @@ impl TryFromZeekRecord for Ftp {
             file_id: String::new(),
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -1193,8 +1217,9 @@ impl TryFromZeekRecord for Ldap {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1293,8 +1318,9 @@ impl TryFromZeekRecord for Ldap {
             return Err(anyhow!("missing argument"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {
@@ -1327,8 +1353,9 @@ impl TryFromZeekRecord for Tls {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time = if let Some(timestamp) = rec.get(0) {
             parse_zeek_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1378,8 +1405,9 @@ impl TryFromZeekRecord for Tls {
             return Err(anyhow!("missing last_alert"));
         };
 
-        let start_time = chrono::DateTime::from_timestamp_nanos(time);
-        let end_time = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        let start_time = jiff::Timestamp::from_nanosecond(i128::from(time))
+            .map_err(|e| anyhow!("failed to create start_time Timestamp: {e}"))?;
+        let end_time = jiff::Timestamp::MAX;
 
         Ok((
             Self {

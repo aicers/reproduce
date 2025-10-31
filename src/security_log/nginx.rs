@@ -1,11 +1,11 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, FixedOffset};
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
-use super::{Nginx, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR};
+use super::{timestamp_to_i64, Nginx, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR};
 
 fn get_nginx_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,8 +16,8 @@ fn get_nginx_regex() -> &'static Regex {
     })
 }
 
-fn parse_nginx_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z").map_err(|e| anyhow!("{e:?}"))
+fn parse_nginx_timestamp(datetime: &str) -> Result<Timestamp> {
+    Timestamp::strptime("%d/%b/%Y:%T %z", datetime).map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Nginx {
@@ -40,10 +40,7 @@ impl ParseSecurityLog for Nginx {
             None => DEFAULT_IPADDR,
         };
 
-        let timestamp = parse_nginx_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_nginx_timestamp(datetime).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {

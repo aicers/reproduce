@@ -1,11 +1,14 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Datelike, FixedOffset, Utc};
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
-use super::{ParseSecurityLog, SecurityLogInfo, Vforce, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP};
+use super::{
+    timestamp_to_i64, ParseSecurityLog, SecurityLogInfo, Vforce, DEFAULT_IPADDR, DEFAULT_PORT,
+    PROTO_TCP,
+};
 
 fn get_vforce_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,11 +19,15 @@ fn get_vforce_regex() -> &'static Regex {
     })
 }
 
-fn parse_vforce_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    let now = Utc::now();
-    DateTime::parse_from_str(
-        &format!("{} {datetime} +0900", now.year()),
+fn parse_vforce_timestamp(datetime: &str) -> Result<Timestamp> {
+    let current_year = Timestamp::now()
+        .strftime("%Y")
+        .to_string()
+        .parse::<i32>()
+        .map_err(|e| anyhow!("failed to parse current year: {e}"))?;
+    Timestamp::strptime(
         "%Y %b %d %H:%M:%S %z",
+        format!("{current_year} {datetime} +0900"),
     )
     .map_err(|e| anyhow!("{e:?}"))
 }
@@ -65,10 +72,7 @@ impl ParseSecurityLog for Vforce {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_vforce_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_vforce_timestamp(datetime).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {

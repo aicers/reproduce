@@ -1,9 +1,11 @@
+use std::convert::TryFrom;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use bytesize::ByteSize;
-use chrono::{DateTime, Duration, Utc};
+use jiff::Timestamp;
 
 use crate::controller::input_type;
 use crate::{Config, InputType};
@@ -17,8 +19,8 @@ pub(crate) struct Report {
     skip_bytes: usize,
     skip_cnt: usize,
     process_cnt: usize,
-    time_start: DateTime<Utc>,
-    time_now: DateTime<Utc>,
+    time_start: Timestamp,
+    time_now: Timestamp,
     time_diff: Duration,
 }
 
@@ -34,9 +36,9 @@ impl Report {
             skip_bytes: 0,
             skip_cnt: 0,
             process_cnt: 0,
-            time_start: Utc::now(),
-            time_now: Utc::now(),
-            time_diff: Duration::zero(),
+            time_start: Timestamp::now(),
+            time_now: Timestamp::now(),
+            time_diff: Duration::ZERO,
         }
     }
 
@@ -45,7 +47,7 @@ impl Report {
             return;
         }
 
-        self.time_start = Utc::now();
+        self.time_start = Timestamp::now();
     }
 
     pub(crate) fn process(&mut self, bytes: usize) {
@@ -94,8 +96,18 @@ impl Report {
             .create(true)
             .open(report_path)?;
 
-        self.time_now = Utc::now();
-        self.time_diff = self.time_now - self.time_start;
+        self.time_now = Timestamp::now();
+        let elapsed_ns = self
+            .time_now
+            .as_nanosecond()
+            .saturating_sub(self.time_start.as_nanosecond());
+        self.time_diff = if elapsed_ns <= 0 {
+            Duration::ZERO
+        } else if let Ok(ns) = u64::try_from(elapsed_ns) {
+            Duration::from_nanos(ns)
+        } else {
+            Duration::MAX
+        };
 
         #[allow(clippy::cast_precision_loss)] // approximation is ok
         if self.process_cnt > 0 {
@@ -150,11 +162,13 @@ impl Report {
             ByteSize(self.skip_cnt as u64),
             width = ARRANGE_VAR,
         ))?;
+
+        let elapsed_secs = self.time_diff.as_secs_f64();
         #[allow(clippy::cast_precision_loss)] // approximation is okay
         report_file.write_fmt(format_args!(
             "{:width$}{:.2} sec\n",
             "Elapsed Time:",
-            self.time_diff.num_milliseconds() as f64 / 1_000.,
+            elapsed_secs,
             width = ARRANGE_VAR,
         ))?;
         #[allow(clippy::cast_possible_truncation)] // rounded number
@@ -163,10 +177,11 @@ impl Report {
         report_file.write_fmt(format_args!(
             "{:width$}{}/s\n",
             "Performance:",
-            ByteSize(
-                (processed_bytes as f64 / (self.time_diff.num_milliseconds() as f64 / 1_000.))
-                    .round() as u64
-            ),
+            ByteSize(if self.time_diff.is_zero() {
+                0
+            } else {
+                (processed_bytes as f64 / elapsed_secs).round() as u64
+            }),
             width = ARRANGE_VAR,
         ))?;
         Ok(())

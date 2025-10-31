@@ -2,21 +2,108 @@ use std::net::IpAddr;
 
 use anyhow::{anyhow, Context, Result};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
-    Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+    Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 use super::{
     parse_comma_separated, parse_giganto_timestamp, parse_post_body, TryFromGigantoRecord,
 };
 
+fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
+    let trimmed = field.trim();
+    if trimmed.is_empty() || trimmed == "-" || trimmed == "[]" {
+        return Ok(Vec::new());
+    }
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return Err(anyhow!("invalid hex body: {field}"));
+    }
+    let inner = &trimmed[1..trimmed.len() - 1];
+    if inner.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if !inner.bytes().any(|b| b == b'[') {
+        return inner
+            .split(',')
+            .filter_map(|tok| {
+                let tok = tok.trim();
+                if tok.is_empty() {
+                    return None;
+                }
+                Some(
+                    u8::from_str_radix(tok, 16)
+                        .with_context(|| format!("invalid hex byte `{tok}` in `{field}`")),
+                )
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|bytes| vec![bytes]);
+    }
+
+    let mut groups = Vec::new();
+    let mut depth = 0_usize;
+    let mut buffer = String::new();
+
+    for ch in inner.chars() {
+        match ch {
+            '[' => {
+                if depth > 0 {
+                    buffer.push(ch);
+                }
+                depth += 1;
+            }
+            ']' => {
+                if depth == 0 {
+                    return Err(anyhow!("invalid hex body: {field}"));
+                }
+                depth -= 1;
+                if depth == 0 {
+                    let mut bytes = Vec::new();
+                    for token in buffer.split(',') {
+                        let tok = token.trim();
+                        if tok.is_empty() {
+                            continue;
+                        }
+                        let value = u8::from_str_radix(tok, 16)
+                            .with_context(|| format!("invalid hex byte `{tok}` in `{field}`"))?;
+                        bytes.push(value);
+                    }
+                    groups.push(bytes);
+                    buffer.clear();
+                } else {
+                    buffer.push(ch);
+                }
+            }
+            ',' => {
+                if depth > 0 {
+                    buffer.push(ch);
+                }
+            }
+            _ => {
+                if depth > 0 {
+                    buffer.push(ch);
+                } else if !ch.is_whitespace() {
+                    return Err(anyhow!("invalid hex body: {field}"));
+                }
+            }
+        }
+    }
+
+    if depth != 0 {
+        return Err(anyhow!("invalid hex body: {field}"));
+    }
+
+    Ok(groups)
+}
+
 impl TryFromGigantoRecord for Conn {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -146,10 +233,11 @@ impl TryFromGigantoRecord for Dns {
         clippy::too_many_lines
     )]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -351,13 +439,162 @@ impl TryFromGigantoRecord for Dns {
     }
 }
 
+impl TryFromGigantoRecord for MalformedDns {
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = rec
+            .get(2)
+            .context("missing source address")?
+            .parse::<IpAddr>()
+            .context("invalid source address")?;
+        let orig_port = rec
+            .get(3)
+            .context("missing source port")?
+            .parse::<u16>()
+            .context("invalid source port")?;
+        let resp_addr = rec
+            .get(4)
+            .context("missing destination address")?
+            .parse::<IpAddr>()
+            .context("invalid destination address")?;
+        let resp_port = rec
+            .get(5)
+            .context("missing destination port")?
+            .parse::<u16>()
+            .context("invalid destination port")?;
+        let proto = rec
+            .get(6)
+            .context("missing protocol")?
+            .parse::<u8>()
+            .context("invalid proto")?;
+        let start_time = parse_giganto_timestamp(rec.get(7).context("missing start_time")?)?;
+        let end_time = parse_giganto_timestamp(rec.get(8).context("missing end_time")?)?;
+        let duration = rec
+            .get(9)
+            .context("missing duration")?
+            .parse::<i64>()
+            .context("invalid duration")?;
+        let orig_pkts = rec
+            .get(10)
+            .context("missing source packets")?
+            .parse::<u64>()
+            .context("invalid source packets")?;
+        let resp_pkts = rec
+            .get(11)
+            .context("missing destination packets")?
+            .parse::<u64>()
+            .context("invalid destination packets")?;
+        let orig_l2_bytes = rec
+            .get(12)
+            .context("missing source l2 bytes")?
+            .parse::<u64>()
+            .context("invalid source l2 bytes")?;
+        let resp_l2_bytes = rec
+            .get(13)
+            .context("missing destination l2 bytes")?
+            .parse::<u64>()
+            .context("invalid destination l2 bytes")?;
+        let trans_id = rec
+            .get(14)
+            .context("missing trans_id")?
+            .parse::<u16>()
+            .context("invalid trans_id")?;
+        let flags = rec
+            .get(15)
+            .context("missing flags")?
+            .parse::<u16>()
+            .context("invalid flags")?;
+        let question_count = rec
+            .get(16)
+            .context("missing question_count")?
+            .parse::<u16>()
+            .context("invalid question_count")?;
+        let answer_count = rec
+            .get(17)
+            .context("missing answer_count")?
+            .parse::<u16>()
+            .context("invalid answer_count")?;
+        let authority_count = rec
+            .get(18)
+            .context("missing authority_count")?
+            .parse::<u16>()
+            .context("invalid authority_count")?;
+        let additional_count = rec
+            .get(19)
+            .context("missing additional_count")?
+            .parse::<u16>()
+            .context("invalid additional_count")?;
+        let query_count = rec
+            .get(20)
+            .context("missing query_count")?
+            .parse::<u32>()
+            .context("invalid query_count")?;
+        let resp_count = rec
+            .get(21)
+            .context("missing resp_count")?
+            .parse::<u32>()
+            .context("invalid resp_count")?;
+        let query_bytes = rec
+            .get(22)
+            .context("missing query_bytes")?
+            .parse::<u64>()
+            .context("invalid query_bytes")?;
+        let resp_bytes = rec
+            .get(23)
+            .context("missing resp_bytes")?
+            .parse::<u64>()
+            .context("invalid resp_bytes")?;
+        let query_body = parse_hex_body(rec.get(24).context("missing query_body")?)?;
+        let resp_body = parse_hex_body(rec.get(25).context("missing resp_body")?)?;
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                start_time,
+                end_time,
+                duration,
+                orig_pkts,
+                resp_pkts,
+                orig_l2_bytes,
+                resp_l2_bytes,
+                trans_id,
+                flags,
+                question_count,
+                answer_count,
+                authority_count,
+                additional_count,
+                query_count,
+                resp_count,
+                query_bytes,
+                resp_bytes,
+                query_body,
+                resp_body,
+            },
+            time,
+        ))
+    }
+}
+
 impl TryFromGigantoRecord for Http {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -583,10 +820,11 @@ impl TryFromGigantoRecord for Http {
 impl TryFromGigantoRecord for Rdp {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -693,10 +931,11 @@ impl TryFromGigantoRecord for Rdp {
 #[allow(clippy::too_many_lines)]
 impl TryFromGigantoRecord for Smtp {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -838,10 +1077,11 @@ impl TryFromGigantoRecord for Smtp {
 impl TryFromGigantoRecord for Ntlm {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -971,10 +1211,11 @@ impl TryFromGigantoRecord for Ntlm {
 #[allow(clippy::too_many_lines, clippy::similar_names)]
 impl TryFromGigantoRecord for Kerberos {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1050,17 +1291,19 @@ impl TryFromGigantoRecord for Kerberos {
         } else {
             return Err(anyhow!("missing destination l2 bytes"));
         };
-        let client_time = if let Some(client_time) = rec.get(14) {
+        let client_time: i64 = if let Some(client_time) = rec.get(14) {
             parse_giganto_timestamp(client_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing client_time"));
         };
-        let server_time = if let Some(server_time) = rec.get(15) {
+        let server_time: i64 = if let Some(server_time) = rec.get(15) {
             parse_giganto_timestamp(server_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing server_time"));
         };
@@ -1138,10 +1381,11 @@ impl TryFromGigantoRecord for Kerberos {
 #[allow(clippy::too_many_lines)]
 impl TryFromGigantoRecord for Ssh {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1319,10 +1563,11 @@ impl TryFromGigantoRecord for Ssh {
 impl TryFromGigantoRecord for DceRpc {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1446,10 +1691,11 @@ impl TryFromGigantoRecord for DceRpc {
 #[allow(clippy::too_many_lines)]
 impl TryFromGigantoRecord for Ftp {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1644,10 +1890,11 @@ impl TryFromGigantoRecord for Ftp {
 #[allow(clippy::too_many_lines)]
 impl TryFromGigantoRecord for Mqtt {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1785,10 +2032,11 @@ impl TryFromGigantoRecord for Mqtt {
 #[allow(clippy::too_many_lines)]
 impl TryFromGigantoRecord for Ldap {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -1945,10 +2193,11 @@ impl TryFromGigantoRecord for Ldap {
 #[allow(clippy::too_many_lines)]
 impl TryFromGigantoRecord for Tls {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -2176,10 +2425,11 @@ impl TryFromGigantoRecord for Tls {
 #[allow(clippy::too_many_lines)]
 impl TryFromGigantoRecord for Smb {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -2346,10 +2596,11 @@ impl TryFromGigantoRecord for Smb {
 impl TryFromGigantoRecord for Nfs {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -2467,10 +2718,11 @@ impl TryFromGigantoRecord for Nfs {
 impl TryFromGigantoRecord for Bootp {
     #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -2635,10 +2887,11 @@ impl TryFromGigantoRecord for Bootp {
 impl TryFromGigantoRecord for Dhcp {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };
@@ -2921,10 +3174,11 @@ fn parse_qtype(qtype: &str) -> u16 {
 impl TryFromGigantoRecord for Radius {
     #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp(timestamp)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+                .as_nanosecond()
+                .try_into()
+                .context("timestamp out of range")?
         } else {
             return Err(anyhow!("missing timestamp"));
         };

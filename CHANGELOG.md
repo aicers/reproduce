@@ -8,7 +8,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Support RADIUS protocol for sending giganto logs.
+- Support `RADIUS` protocol for sending giganto logs.
 
 ### Changed
 
@@ -40,6 +40,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `orig_mime_types` and `resp_mime_types` into unified `mime_types` field,
   merged `orig_filenames` and `resp_filenames` into unified `filenames` field,
   and renamed `post_body` field to `body`.
+- Updated `giganto-client` dependency to version 0.24.0, which migrates from
+  `chrono::DateTime<Utc>` to `jiff::Timestamp` for improved timestamp handling.
 - Bump bincode crate to 2.0 and modified the related code.
 
 ### Fixed

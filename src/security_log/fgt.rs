@@ -1,11 +1,14 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, FixedOffset};
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
-use super::{Fgt, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP};
+use super::{
+    timestamp_to_i64, Fgt, ParseSecurityLog, SecurityLogInfo, DEFAULT_IPADDR, DEFAULT_PORT,
+    PROTO_TCP,
+};
 
 fn get_fgt_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,8 +19,8 @@ fn get_fgt_regex() -> &'static Regex {
     })
 }
 
-fn parse_fgt_timestamp(date: &str, time: &str, tz: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(&format!("{date} {time} {tz}"), "%Y-%m-%d %H:%M:%S %z")
+fn parse_fgt_timestamp(date: &str, time: &str, tz: &str) -> Result<Timestamp> {
+    Timestamp::strptime("%Y-%m-%d %H:%M:%S %z", format!("{date} {time} {tz}"))
         .map_err(|e| anyhow!("{e:?}"))
 }
 
@@ -67,10 +70,7 @@ impl ParseSecurityLog for Fgt {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_fgt_timestamp(date, time, tz)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_fgt_timestamp(date, time, tz).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {

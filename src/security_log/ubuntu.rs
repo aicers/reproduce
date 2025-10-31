@@ -1,11 +1,11 @@
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Datelike, FixedOffset, Utc};
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
-use super::{ParseSecurityLog, SecurityLogInfo, Ubuntu};
+use super::{timestamp_to_i64, ParseSecurityLog, SecurityLogInfo, Ubuntu};
 
 fn get_ubuntu_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -14,11 +14,15 @@ fn get_ubuntu_regex() -> &'static Regex {
         .get_or_init(|| Regex::new(r"(?<datetime>\w{3} \d{1,2} \d{2}:\d{2}:\d{2})").expect("regex"))
 }
 
-fn parse_ubuntu_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    let now = Utc::now();
-    DateTime::parse_from_str(
-        &format!("{} {datetime} +0900", now.year()),
+fn parse_ubuntu_timestamp(datetime: &str) -> Result<Timestamp> {
+    let current_year = Timestamp::now()
+        .strftime("%Y")
+        .to_string()
+        .parse::<i32>()
+        .map_err(|e| anyhow!("failed to parse current year: {e}"))?;
+    Timestamp::strptime(
         "%Y %b %d %H:%M:%S %z",
+        format!("{current_year} {datetime} +0900"),
     )
     .map_err(|e| anyhow!("{e:?}"))
 }
@@ -38,10 +42,7 @@ impl ParseSecurityLog for Ubuntu {
             None => bail!("invalid datetime"),
         };
 
-        let timestamp = parse_ubuntu_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_ubuntu_timestamp(datetime).and_then(timestamp_to_i64)? + serial;
 
         Ok((
             SecuLog {
