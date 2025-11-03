@@ -2,12 +2,12 @@ use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
@@ -313,14 +313,15 @@ impl Controller {
             }
         };
 
-        if let Some(ref offset_suffix) = file.last_transfer_line_suffix {
-            if let Err(e) = write_offset(
+        if let Some(ref offset_suffix) = file.last_transfer_line_suffix
+            && let Err(e) = write_offset(
                 &(self.config.input.clone() + "_" + offset_suffix),
                 last_line,
-            ) {
-                warn!("Cannot write to offset file: {e}");
-            }
+            )
+        {
+            warn!("Cannot write to offset file: {e}");
         }
+
         Ok(())
     }
 }
@@ -364,13 +365,13 @@ fn files_in_dir(path: &str, prefix: Option<&str>, skip: &[PathBuf]) -> Vec<PathB
                 if !entry.file_type().is_file() {
                     return None;
                 }
-                if let Some(prefix) = prefix {
-                    if let Some(name) = entry.path().file_name() {
-                        if !name.to_string_lossy().starts_with(prefix) {
-                            return None;
-                        }
-                    }
+                if let Some(prefix) = prefix
+                    && let Some(name) = entry.path().file_name()
+                    && !name.to_string_lossy().starts_with(prefix)
+                {
+                    return None;
                 }
+
                 let entry = entry.into_path();
                 if skip.contains(&entry) {
                     None
@@ -400,11 +401,11 @@ pub(crate) fn input_type(input: &str) -> InputType {
 fn read_offset(filename: &str) -> usize {
     if let Ok(mut f) = File::open(filename) {
         let mut content = String::new();
-        if f.read_to_string(&mut content).is_ok() {
-            if let Ok(offset) = content.parse() {
-                info!("Found offset file, skipping {offset} entries");
-                return offset;
-            }
+        if f.read_to_string(&mut content).is_ok()
+            && let Ok(offset) = content.parse()
+        {
+            info!("Found offset file, skipping {offset} entries");
+            return offset;
         }
     }
     0

@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use byteorder::{BigEndian, ReadBytesExt};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use num_enum::FromPrimitive;
@@ -11,9 +11,9 @@ use pcap::Packet;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    fields::{DataTypes, FieldTypes, OptionsScopeFieldTypes, FORWARDING_STATUS, TCP_FLAGS},
-    templates::Template,
     ProcessStats,
+    fields::{DataTypes, FORWARDING_STATUS, FieldTypes, OptionsScopeFieldTypes, TCP_FLAGS},
+    templates::Template,
 };
 
 // TODO: other ports can be used
@@ -166,11 +166,7 @@ impl PktBuf {
 
     fn remained(&self) -> Option<u64> {
         let remained = self.len - self.data.position();
-        if remained > 0 {
-            Some(remained)
-        } else {
-            None
-        }
+        if remained > 0 { Some(remained) } else { None }
     }
 
     fn parse_ethernet(&mut self) -> Result<u16> {
@@ -478,25 +474,26 @@ impl PktBuf {
             let mut resp_addr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
             let mut proto = 0;
             if template.options_template {
-                if template.scope_field_count > 0 {
-                    if let Some(fields) = template.fields.get(..template.scope_field_count) {
-                        for (k, len) in fields {
-                            let ft = OptionsScopeFieldTypes::from_primitive(*k);
-                            let value = self
-                                .parse_data(&DataTypes::Ascii, *len)
-                                .unwrap_or("-".to_string());
-                            flow.push(format!("{ft:?}:{value}"));
-                        }
+                if template.scope_field_count > 0
+                    && let Some(fields) = template.fields.get(..template.scope_field_count)
+                {
+                    for (k, len) in fields {
+                        let ft = OptionsScopeFieldTypes::from_primitive(*k);
+                        let value = self
+                            .parse_data(&DataTypes::Ascii, *len)
+                            .unwrap_or("-".to_string());
+                        flow.push(format!("{ft:?}:{value}"));
                     }
                 }
-                if usize::from(template.field_count) > template.scope_field_count {
-                    if let Some(fields) = template.fields.get(template.scope_field_count..) {
-                        for (k, len) in fields {
-                            let ft = FieldTypes::from_primitive(*k);
-                            let kind = ft.get_types();
-                            let value = self.parse_data(&kind, *len).unwrap_or("-".to_string());
-                            flow.push(format!("{ft:?}:{value}"));
-                        }
+
+                if usize::from(template.field_count) > template.scope_field_count
+                    && let Some(fields) = template.fields.get(template.scope_field_count..)
+                {
+                    for (k, len) in fields {
+                        let ft = FieldTypes::from_primitive(*k);
+                        let kind = ft.get_types();
+                        let value = self.parse_data(&kind, *len).unwrap_or("-".to_string());
+                        flow.push(format!("{ft:?}:{value}"));
                     }
                 }
             } else {
