@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{OpLog, OpLogLevel};
 use regex::Regex;
@@ -64,7 +64,7 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::{log_regex, OpLogLevel};
+    use super::{OpLogLevel, log_regex};
 
     #[test]
     fn parse_oplog() {

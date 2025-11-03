@@ -1,10 +1,10 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::NetworkConnection;
 use serde::Serialize;
 
-use super::{parse_sysmon_time, EventToCsv, TryFromSysmonRecord};
+use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
 
 impl TryFromSysmonRecord for NetworkConnection {
     #[allow(clippy::too_many_lines)]

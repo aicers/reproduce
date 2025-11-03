@@ -87,7 +87,7 @@ pub(crate) struct Nginx;
 
 pub(crate) trait ParseSecurityLog {
     fn parse_security_log(line: &str, serial: i64, info: SecurityLogInfo)
-        -> Result<(SecuLog, i64)>; // agent: &str
+    -> Result<(SecuLog, i64)>; // agent: &str
 }
 
 fn proto_to_u8(proto: &str) -> u8 {
@@ -105,13 +105,13 @@ mod tests {
         Aiwaf, Axgate, Fgt, Mf2, ParseSecurityLog, SecurityLogInfo, ShadowWall, SniperIps,
         SonicWall, Srx, Tg, Vforce, Wapples,
     };
-    use crate::security_log::{Nginx, Ubuntu, PROTO_TCP};
+    use crate::security_log::{Nginx, PROTO_TCP, Ubuntu};
 
     #[test]
     fn parse_wapples() {
         let logs = [
             "<182>Jan 9 09:26:09 penta wplogd: WAPPLES INTRUSION WAPPLES DETECTION TIME : 2020-01-09 09:26:09 +0900 WAPPLES RULE NAME : Extension Filtering WAPPLES (client 119.75.88.90 WAPPLES) -> (server 210.99.177.16:1443)",
-            "<182>Nov 2 18:27:04 penta wplogd: [WAPPLES] INTRUSION [WAPPLES] DETECTION TIME : 2020-11-02 18:27:04 +0900 [WAPPLES] RULE NAME : Extension Filtering [WAPPLES] (client 211.245.254.29 [WAPPLES]) -> (server 10.10.111.132:443)"
+            "<182>Nov 2 18:27:04 penta wplogd: [WAPPLES] INTRUSION [WAPPLES] DETECTION TIME : 2020-11-02 18:27:04 +0900 [WAPPLES] RULE NAME : Extension Filtering [WAPPLES] (client 211.245.254.29 [WAPPLES]) -> (server 10.10.111.132:443)",
         ];
 
         let info = SecurityLogInfo {

@@ -19,17 +19,17 @@ use std::{
     path::Path,
 };
 
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
+use anyhow::{Result, anyhow};
+use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{error, info};
 
 use self::{

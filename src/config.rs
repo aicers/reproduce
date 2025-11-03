@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use serde::{de::Error, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error};
 
 const DEFAULT_REPORT_MODE: bool = false;
 const DEFAULT_POLLING_MODE: bool = false;

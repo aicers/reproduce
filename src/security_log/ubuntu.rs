@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Datelike, FixedOffset, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;

@@ -1,5 +1,5 @@
 // Utility functions to help with bincode v1 to v2 migration
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Serialize data using bincode v2 with legacy configuration
 pub fn encode_legacy<T: Serialize>(data: &T) -> Result<Vec<u8>, bincode::error::EncodeError> {

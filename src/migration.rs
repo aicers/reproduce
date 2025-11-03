@@ -4,7 +4,7 @@ mod tests;
 
 use std::str::FromStr;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use csv::StringRecord;
 
