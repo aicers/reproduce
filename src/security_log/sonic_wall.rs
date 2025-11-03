@@ -1,12 +1,12 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, FixedOffset};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
 use super::{
-    proto_to_u8, ParseSecurityLog, SecurityLogInfo, SonicWall, DEFAULT_IPADDR, DEFAULT_PORT,
+    DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, SonicWall, proto_to_u8,
 };
 
 fn get_sonic_regex() -> &'static Regex {

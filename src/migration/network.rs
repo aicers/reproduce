@@ -1,13 +1,13 @@
 use std::net::IpAddr;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
     Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 use super::{
-    parse_comma_separated, parse_giganto_timestamp, parse_post_body, TryFromGigantoRecord,
+    TryFromGigantoRecord, parse_comma_separated, parse_giganto_timestamp, parse_post_body,
 };
 
 impl TryFromGigantoRecord for Conn {

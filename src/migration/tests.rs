@@ -9,8 +9,7 @@ use super::TryFromGigantoRecord;
 
 #[test]
 fn giganto_conn() {
-    let data =
-        "1669735962.571151000	localhost	fe80::2267:7cff:fef0:cb09	133	ff02::2	134	1	sf	0.000000000	0.000000000	0	-	0	0	1	0	21515	27889";
+    let data = "1669735962.571151000	localhost	fe80::2267:7cff:fef0:cb09	133	ff02::2	134	1	sf	0.000000000	0.000000000	0	-	0	0	1	0	21515	27889";
 
     let rec = stringrecord(data);
 
@@ -28,8 +27,7 @@ fn giganto_http() {
 
 #[test]
 fn giganto_rdp() {
-    let data =
-        "1669775611.098308000	localhost	112.160.137.136	61572	103.153.182.151	3389	0	0.000000000	0.000000000	0	1	0	21515	27889	hello";
+    let data = "1669775611.098308000	localhost	112.160.137.136	61572	103.153.182.151	3389	0	0.000000000	0.000000000	0	1	0	21515	27889	hello";
 
     let rec = stringrecord(data);
 
@@ -146,8 +144,7 @@ fn giganto_smb() {
 
 #[test]
 fn giganto_nfs() {
-    let data =
-        "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0.000000000	0	1	0	21515	27889	-	-";
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0.000000000	0	1	0	21515	27889	-	-";
 
     let rec = stringrecord(data);
 

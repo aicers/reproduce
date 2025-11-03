@@ -1,11 +1,11 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
 use super::{
-    ParseSecurityLog, SecurityLogInfo, ShadowWall, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP,
+    DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, ShadowWall,
 };
 
 fn get_shadow_regex() -> &'static Regex {

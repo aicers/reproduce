@@ -1,11 +1,11 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Datelike, FixedOffset, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
-use super::{ParseSecurityLog, SecurityLogInfo, Vforce, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP};
+use super::{DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Vforce};
 
 fn get_vforce_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
