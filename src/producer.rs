@@ -1406,14 +1406,14 @@ impl Giganto {
                 if cnt <= skip {
                     continue;
                 }
-                let (oplog_data, timestamp) = match operation_log::log_regex(&line, agent)
-                { Ok(r) => {
+                let (oplog_data, timestamp) = if let Ok(r) = operation_log::log_regex(&line, agent)
+                {
                     success_cnt += 1;
                     r
-                } _ => {
+                } else {
                     failed_cnt += 1;
                     continue;
-                }};
+                };
 
                 if self.init_msg {
                     send_record_header(&mut self.giganto_sender, RawEventKind::OpLog).await?;
@@ -1782,17 +1782,17 @@ impl Giganto {
                 if cnt <= skip {
                     continue;
                 }
-                let (seculog_data, timestamp) = match T::parse_security_log(
+                let (seculog_data, timestamp) = if let Ok(r) = T::parse_security_log(
                     &line,
                     time_serial,
                     SecurityLogInfo::new(&self.giganto_info.kind),
-                ) { Ok(r) => {
+                ) {
                     success_cnt += 1;
                     r
-                } _ => {
+                } else {
                     failed_cnt += 1;
                     continue;
-                }};
+                };
 
                 if self.init_msg {
                     send_record_header(&mut self.giganto_sender, RawEventKind::SecuLog).await?;
