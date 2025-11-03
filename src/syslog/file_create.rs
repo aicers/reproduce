@@ -46,9 +46,11 @@ impl TryFromSysmonRecord for FileCreate {
         };
         let creation_utc_time = if let Some(creation_utc_time) = rec.get(8) {
             if creation_utc_time.eq("-") {
-                chrono::DateTime::<chrono::Utc>::MIN_UTC
+                0
             } else {
                 parse_sysmon_time(creation_utc_time)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
             }
         } else {
             return Err(anyhow!("missing creation_utc_time"));
