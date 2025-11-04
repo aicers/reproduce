@@ -6,14 +6,14 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-bincode = { version = "2", features = ["serde"] }
+bincode = "1"
 byteorder = "1"
 bytesize = "2"
 chrono = "0.4"
 config = { version = "0.15", features = ["toml"], default-features = false }
 csv = "1"
 ctrlc = { version = "3", features = ["termination"] }
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "d6edbd2" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "a6ad837" }
 num-traits = "0.2"
 num_enum = "0.7"
 pcap = "2"
@@ -22,8 +22,8 @@ rayon = "1"
 regex = "1"
 reqwest = { version = "0.12", features = ["json"] }
 rustls = { version = "0.23", default-features = false, features = [
-    "ring",
-    "std",
+  "ring",
+  "std",
 ] }
 rustls-pemfile = "2.0"
 serde = { version = "1", features = ["derive"] }

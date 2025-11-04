@@ -40,7 +40,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `orig_mime_types` and `resp_mime_types` into unified `mime_types` field,
   merged `orig_filenames` and `resp_filenames` into unified `filenames` field,
   and renamed `post_body` field to `body`.
-- Bump bincode crate to 2.0 and modified the related code.
 
 ### Fixed
 
