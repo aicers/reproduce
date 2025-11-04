@@ -43,7 +43,6 @@ use tracing::{error, info, warn};
 
 use crate::{
     Config, Report,
-    bincode_utils::encode_legacy,
     migration::TryFromGigantoRecord,
     netflow::{NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox},
     operation_log,
@@ -1228,7 +1227,7 @@ impl Giganto {
                                     self.init_msg = false;
                                 }
 
-                                let record_data = encode_legacy(&event)?;
+                                let record_data = bincode::serialize(&event)?;
                                 report.process(record.as_slice().len());
 
                                 buf.push((timestamp, record_data));
@@ -1333,7 +1332,7 @@ impl Giganto {
                                     self.init_msg = false;
                                 }
 
-                                let record_data = encode_legacy(&event)?;
+                                let record_data = bincode::serialize(&event)?;
                                 report.process(record.as_slice().len());
 
                                 buf.push((timestamp, record_data));
@@ -1438,7 +1437,7 @@ impl Giganto {
                     self.init_msg = false;
                 }
 
-                let record_data = encode_legacy(&oplog_data)?;
+                let record_data = bincode::serialize(&oplog_data)?;
                 report.process(line.len());
 
                 buf.push((timestamp, record_data));
@@ -1567,7 +1566,7 @@ impl Giganto {
                                     self.init_msg = false;
                                 }
 
-                                let record_data = encode_legacy(&event)?;
+                                let record_data = bincode::serialize(&event)?;
                                 report.process(record.as_slice().len());
 
                                 buf.push((timestamp, record_data));
@@ -1712,7 +1711,7 @@ impl Giganto {
                 self.init_msg = false;
             }
             for (timestamp, event) in events {
-                let record_data = encode_legacy(&event)?;
+                let record_data = bincode::serialize(&event)?;
                 report.process(pkt.len());
 
                 buf.push((timestamp, record_data));
@@ -1816,7 +1815,7 @@ impl Giganto {
                     self.init_msg = false;
                 }
 
-                let record_data = encode_legacy(&seculog_data)?;
+                let record_data = bincode::serialize(&seculog_data)?;
                 report.process(line.len());
 
                 buf.push((timestamp, record_data));
@@ -1927,7 +1926,7 @@ impl Giganto {
         let timestamp = Utc::now()
             .timestamp_nanos_opt()
             .context("to_timestamp_nanos")?;
-        let record_data = encode_legacy(&send_log)?;
+        let record_data = bincode::serialize(&send_log)?;
         let buf = vec![(timestamp, record_data)];
 
         match self.send_event_in_batch(&buf).await {
@@ -1943,12 +1942,12 @@ impl Giganto {
     }
 
     async fn send_event_in_batch(&mut self, events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
-        let buf = encode_legacy(&events)?;
+        let buf = bincode::serialize(&events)?;
         send_raw(&mut self.giganto_sender, &buf).await
     }
 
     async fn send_finish(&mut self) -> Result<()> {
-        let record_data = encode_legacy(CHANNEL_CLOSE_MESSAGE)?;
+        let record_data = bincode::serialize(CHANNEL_CLOSE_MESSAGE)?;
         let buf = vec![(CHANNEL_CLOSE_TIMESTAMP, record_data)];
         match self.send_event_in_batch(&buf).await {
             Err(SendError::WriteError(_)) => {
