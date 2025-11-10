@@ -1,8 +1,8 @@
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb,
-    Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+    Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 use super::TryFromGigantoRecord;
@@ -50,6 +50,15 @@ fn giganto_dns() {
     let rec = stringrecord(data);
 
     assert!(Dns::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_malformed_dns() {
+    let data = "1761194588.611804000	localhost	127.0.0.1	46378	31.3.245.133	80	17	1761194588.611826000	1761194589.611826000	1	1	2	100	200	1	42	1	1	0	0	1	1	16	32	[[65, 78, 61, 6d, 70, 6c, 65, 2e, 63, 6f, 6d]]	[[c0, c]]";
+
+    let rec = stringrecord(data);
+
+    assert!(MalformedDns::try_from_giganto_record(&rec).is_ok());
 }
 
 #[test]
