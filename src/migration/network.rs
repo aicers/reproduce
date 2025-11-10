@@ -2,8 +2,8 @@ use std::net::IpAddr;
 
 use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Mqtt, Nfs, Ntlm, Radius,
-    Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+    Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 use super::{
@@ -345,6 +345,153 @@ impl TryFromGigantoRecord for Dns {
                 resp_pkts,
                 orig_l2_bytes,
                 resp_l2_bytes,
+            },
+            time,
+        ))
+    }
+}
+
+impl TryFromGigantoRecord for MalformedDns {
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp(timestamp)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
+        } else {
+            return Err(anyhow!("missing timestamp"));
+        };
+        let orig_addr = rec
+            .get(2)
+            .context("missing source address")?
+            .parse::<IpAddr>()
+            .context("invalid source address")?;
+        let orig_port = rec
+            .get(3)
+            .context("missing source port")?
+            .parse::<u16>()
+            .context("invalid source port")?;
+        let resp_addr = rec
+            .get(4)
+            .context("missing destination address")?
+            .parse::<IpAddr>()
+            .context("invalid destination address")?;
+        let resp_port = rec
+            .get(5)
+            .context("missing destination port")?
+            .parse::<u16>()
+            .context("invalid destination port")?;
+        let proto = rec
+            .get(6)
+            .context("missing protocol")?
+            .parse::<u8>()
+            .context("invalid proto")?;
+        let start_time = parse_giganto_timestamp(rec.get(7).context("missing start_time")?)?;
+        let end_time = parse_giganto_timestamp(rec.get(8).context("missing end_time")?)?;
+        let duration = rec
+            .get(9)
+            .context("missing duration")?
+            .parse::<i64>()
+            .context("invalid duration")?;
+        let orig_pkts = rec
+            .get(10)
+            .context("missing source packets")?
+            .parse::<u64>()
+            .context("invalid source packets")?;
+        let resp_pkts = rec
+            .get(11)
+            .context("missing destination packets")?
+            .parse::<u64>()
+            .context("invalid destination packets")?;
+        let orig_l2_bytes = rec
+            .get(12)
+            .context("missing source l2 bytes")?
+            .parse::<u64>()
+            .context("invalid source l2 bytes")?;
+        let resp_l2_bytes = rec
+            .get(13)
+            .context("missing destination l2 bytes")?
+            .parse::<u64>()
+            .context("invalid destination l2 bytes")?;
+        let trans_id = rec
+            .get(14)
+            .context("missing trans_id")?
+            .parse::<u16>()
+            .context("invalid trans_id")?;
+        let flags = rec
+            .get(15)
+            .context("missing flags")?
+            .parse::<u16>()
+            .context("invalid flags")?;
+        let question_count = rec
+            .get(16)
+            .context("missing question_count")?
+            .parse::<u16>()
+            .context("invalid question_count")?;
+        let answer_count = rec
+            .get(17)
+            .context("missing answer_count")?
+            .parse::<u16>()
+            .context("invalid answer_count")?;
+        let authority_count = rec
+            .get(18)
+            .context("missing authority_count")?
+            .parse::<u16>()
+            .context("invalid authority_count")?;
+        let additional_count = rec
+            .get(19)
+            .context("missing additional_count")?
+            .parse::<u16>()
+            .context("invalid additional_count")?;
+        let query_count = rec
+            .get(20)
+            .context("missing query_count")?
+            .parse::<u32>()
+            .context("invalid query_count")?;
+        let resp_count = rec
+            .get(21)
+            .context("missing resp_count")?
+            .parse::<u32>()
+            .context("invalid resp_count")?;
+        let query_bytes = rec
+            .get(22)
+            .context("missing query_bytes")?
+            .parse::<u64>()
+            .context("invalid query_bytes")?;
+        let resp_bytes = rec
+            .get(23)
+            .context("missing resp_bytes")?
+            .parse::<u64>()
+            .context("invalid resp_bytes")?;
+        let query_body = parse_hex_body(rec.get(24).context("missing query_body")?)?;
+        let resp_body = parse_hex_body(rec.get(25).context("missing resp_body")?)?;
+
+        Ok((
+            Self {
+                orig_addr,
+                orig_port,
+                resp_addr,
+                resp_port,
+                proto,
+                start_time,
+                end_time,
+                duration,
+                orig_pkts,
+                resp_pkts,
+                orig_l2_bytes,
+                resp_l2_bytes,
+                trans_id,
+                flags,
+                question_count,
+                answer_count,
+                authority_count,
+                additional_count,
+                query_count,
+                resp_count,
+                query_bytes,
+                resp_bytes,
+                query_body,
+                resp_body,
             },
             time,
         ))
@@ -3089,5 +3236,85 @@ impl TryFromGigantoRecord for Radius {
             },
             time,
         ))
+    }
+}
+
+fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
+    let trimmed = field.trim();
+    if trimmed.is_empty() || trimmed == "[]" {
+        return Ok(vec![Vec::new()]);
+    }
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return Err(anyhow!("invalid hex body: {field}"));
+    }
+
+    let inner = &trimmed[1..trimmed.len() - 1];
+    let normalized: String = inner.chars().filter(|c| !c.is_whitespace()).collect();
+    if normalized.is_empty() {
+        return Ok(vec![Vec::new()]);
+    }
+    if !normalized.starts_with('[') || !normalized.ends_with(']') {
+        return Err(anyhow!("invalid hex body: {field}"));
+    }
+
+    let content = &normalized[1..normalized.len() - 1];
+    let mut groups = Vec::new();
+    for group in content.split("],[") {
+        if group.is_empty() {
+            groups.push(Vec::new());
+            continue;
+        }
+
+        let mut bytes = Vec::new();
+        for token in group.split(',') {
+            if token.is_empty() {
+                return Err(anyhow!("invalid hex body: {field}"));
+            }
+            let value = u8::from_str_radix(token, 16)
+                .with_context(|| format!("invalid hex byte `{token}` in `{field}`"))?;
+            bytes.push(value);
+        }
+        groups.push(bytes);
+    }
+
+    Ok(groups)
+}
+
+#[cfg(test)]
+mod parse_hex_body_tests {
+    use super::parse_hex_body;
+
+    #[test]
+    fn empty_inputs() {
+        let expected: Vec<Vec<u8>> = vec![vec![]];
+        assert_eq!(parse_hex_body("[[]]").unwrap(), expected);
+        assert_eq!(parse_hex_body("[]").unwrap(), expected);
+        assert_eq!(parse_hex_body("[ ]").unwrap(), expected);
+        assert_eq!(parse_hex_body("").unwrap(), expected);
+    }
+
+    #[test]
+    fn parses_single_group() {
+        let parsed = parse_hex_body("[[65, 78, 61]]").unwrap();
+        assert_eq!(parsed, vec![vec![0x65, 0x78, 0x61]]);
+    }
+
+    #[test]
+    fn parses_multiple_groups() {
+        let parsed = parse_hex_body("[[65,78],[6d,70]]").unwrap();
+        assert_eq!(parsed, vec![vec![0x65, 0x78], vec![0x6d, 0x70]]);
+
+        let parsed = parse_hex_body("[[0a],[],[3d]]").unwrap();
+        assert_eq!(parsed, vec![vec![0x0a], vec![], vec![0x3d]]);
+    }
+
+    #[test]
+    fn rejects_inputs() {
+        assert!(parse_hex_body("[65,78]").is_err());
+        assert!(parse_hex_body("[[65,78]").is_err());
+        assert!(parse_hex_body("[[zz]]").is_err());
+        assert!(parse_hex_body(" - ").is_err());
+        assert!(parse_hex_body("invalid").is_err());
+        assert!(parse_hex_body("[[0a,,3d]]").is_err());
     }
 }

@@ -182,26 +182,27 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Network Events
 
-| Category | Kind     |
-| -------- | -------- |
-| Protocol | conn     |
-|          | http     |
-|          | rdp      |
-|          | smtp     |
-|          | dns      |
-|          | ntlm     |
-|          | kerberos |
-|          | ssh      |
-|          | dce_rpc  |
-|          | ftp      |
-|          | mqtt     |
-|          | ldap     |
-|          | tls      |
-|          | smb      |
-|          | nfs      |
-|          | bootp    |
-|          | dhcp     |
-|          | radius   |
+| Category | Kind          |
+| -------- | ------------- |
+| Protocol | conn          |
+|          | http          |
+|          | rdp           |
+|          | smtp          |
+|          | dns           |
+|          | ntlm          |
+|          | kerberos      |
+|          | ssh           |
+|          | dce_rpc       |
+|          | ftp           |
+|          | mqtt          |
+|          | ldap          |
+|          | tls           |
+|          | smb           |
+|          | nfs           |
+|          | bootp         |
+|          | dhcp          |
+|          | radius        |
+|          | malformed_dns |
 
 ### Sysmon Events
 
