@@ -2,22 +2,26 @@ use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::ImageLoaded;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
+use super::{
+    EventToCsv, TryFromSysmonRecord, is_datastore_format, parse_datastore_time, parse_sysmon_time,
+};
 
 impl TryFromSysmonRecord for ImageLoaded {
     #[allow(clippy::too_many_lines)]
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
-        let agent_name = if let Some(agent_name) = rec.get(0) {
-            agent_name.to_string()
-        } else {
-            return Err(anyhow!("missing agent_name"));
-        };
-        let agent_id = if let Some(agent_id) = rec.get(1) {
-            agent_id.to_string()
-        } else {
-            return Err(anyhow!("missing agent_id"));
-        };
-        let time = if let Some(utc_time) = rec.get(3) {
+        let is_datastore = is_datastore_format(rec);
+        let field_offset = if is_datastore { 2 } else { 0 };
+
+        let time = if is_datastore {
+            if let Some(timestamp) = rec.get(0) {
+                parse_datastore_time(timestamp)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
+                    + serial
+            } else {
+                return Err(anyhow!("missing timestamp"));
+            }
+        } else if let Some(utc_time) = rec.get(3) {
             parse_sysmon_time(utc_time)?
                 .timestamp_nanos_opt()
                 .context("to_timestamp_nanos")?
@@ -25,52 +29,63 @@ impl TryFromSysmonRecord for ImageLoaded {
         } else {
             return Err(anyhow!("missing time"));
         };
-        let process_guid = if let Some(process_guid) = rec.get(4) {
+
+        let agent_name = if let Some(agent_name) = rec.get(field_offset) {
+            agent_name.to_string()
+        } else {
+            return Err(anyhow!("missing agent_name"));
+        };
+        let agent_id = if let Some(agent_id) = rec.get(field_offset + 1) {
+            agent_id.to_string()
+        } else {
+            return Err(anyhow!("missing agent_id"));
+        };
+        let process_guid = if let Some(process_guid) = rec.get(field_offset + 2) {
             process_guid.to_string()
         } else {
             return Err(anyhow!("missing process_guid"));
         };
-        let process_id = if let Some(process_id) = rec.get(5) {
+        let process_id = if let Some(process_id) = rec.get(field_offset + 3) {
             process_id.parse::<u32>().context("invalid process_id")?
         } else {
             return Err(anyhow!("missing process_id"));
         };
-        let image = if let Some(image) = rec.get(6) {
+        let image = if let Some(image) = rec.get(field_offset + 4) {
             image.to_string()
         } else {
             return Err(anyhow!("missing image"));
         };
-        let image_loaded = if let Some(image_loaded) = rec.get(7) {
+        let image_loaded = if let Some(image_loaded) = rec.get(field_offset + 5) {
             image_loaded.to_string()
         } else {
             return Err(anyhow!("missing image_loaded"));
         };
-        let file_version = if let Some(file_version) = rec.get(8) {
+        let file_version = if let Some(file_version) = rec.get(field_offset + 6) {
             file_version.to_string()
         } else {
             return Err(anyhow!("missing file_version"));
         };
-        let description = if let Some(description) = rec.get(9) {
+        let description = if let Some(description) = rec.get(field_offset + 7) {
             description.to_string()
         } else {
             return Err(anyhow!("missing description"));
         };
-        let product = if let Some(product) = rec.get(10) {
+        let product = if let Some(product) = rec.get(field_offset + 8) {
             product.to_string()
         } else {
             return Err(anyhow!("missing product"));
         };
-        let company = if let Some(company) = rec.get(11) {
+        let company = if let Some(company) = rec.get(field_offset + 9) {
             company.to_string()
         } else {
             return Err(anyhow!("missing company"));
         };
-        let original_file_name = if let Some(original_file_name) = rec.get(12) {
+        let original_file_name = if let Some(original_file_name) = rec.get(field_offset + 10) {
             original_file_name.to_string()
         } else {
             return Err(anyhow!("missing original_file_name"));
         };
-        let hashes = if let Some(hashes) = rec.get(13) {
+        let hashes = if let Some(hashes) = rec.get(field_offset + 11) {
             hashes
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -78,7 +93,7 @@ impl TryFromSysmonRecord for ImageLoaded {
         } else {
             return Err(anyhow!("missing hashes"));
         };
-        let signed = if let Some(signed) = rec.get(14) {
+        let signed = if let Some(signed) = rec.get(field_offset + 12) {
             if signed.eq("true") {
                 true
             } else if signed.eq("false") || signed.eq("-") {
@@ -89,17 +104,17 @@ impl TryFromSysmonRecord for ImageLoaded {
         } else {
             return Err(anyhow!("missing destination_is_ipv6"));
         };
-        let signature = if let Some(signature) = rec.get(15) {
+        let signature = if let Some(signature) = rec.get(field_offset + 13) {
             signature.to_string()
         } else {
             return Err(anyhow!("missing signature"));
         };
-        let signature_status = if let Some(signature_status) = rec.get(16) {
+        let signature_status = if let Some(signature_status) = rec.get(field_offset + 14) {
             signature_status.to_string()
         } else {
             return Err(anyhow!("missing signature_status"));
         };
-        let user = if let Some(user) = rec.get(17) {
+        let user = if let Some(user) = rec.get(field_offset + 15) {
             user.to_string()
         } else {
             return Err(anyhow!("missing user"));
