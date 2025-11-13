@@ -1,4 +1,6 @@
 mod bincode_utils;
+#[cfg(test)]
+mod chrono_regression_tests;
 mod config;
 mod controller;
 mod migration;
