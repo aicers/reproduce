@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::FileCreate;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
+use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time, parse_sysmon_timestamp_ns};
 
 impl TryFromSysmonRecord for FileCreate {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
@@ -17,10 +17,7 @@ impl TryFromSysmonRecord for FileCreate {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_time(utc_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
-                + serial
+            parse_sysmon_timestamp_ns(utc_time)? + serial
         } else {
             return Err(anyhow!("missing time"));
         };
@@ -144,5 +141,18 @@ impl EventToCsv for ElasticFileCreate {
         }
 
         entries
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn check_min_utc() {
+        let min_utc = chrono::DateTime::<chrono::Utc>::MIN_UTC;
+        assert_eq!(
+            min_utc.format("%Y-%m-%d %H:%M:%S %Z").to_string(),
+            "-262143-01-01 00:00:00 UTC"
+        );
     }
 }

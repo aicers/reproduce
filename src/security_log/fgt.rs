@@ -1,11 +1,14 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, DEFAULT_PORT, Fgt, PROTO_TCP, ParseSecurityLog, SecurityLogInfo};
+use super::{
+    DEFAULT_IPADDR, DEFAULT_PORT, Fgt, PROTO_TCP, ParseSecurityLog, SecurityLogInfo,
+    datetime_to_nanos,
+};
 
 fn get_fgt_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,8 +19,9 @@ fn get_fgt_regex() -> &'static Regex {
     })
 }
 
-fn parse_fgt_timestamp(date: &str, time: &str, tz: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_fgt_timestamp(date: &str, time: &str, tz: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_str(&format!("{date} {time} {tz}"), "%Y-%m-%d %H:%M:%S %z")
+        .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| anyhow!("{e:?}"))
 }
 
@@ -67,10 +71,7 @@ impl ParseSecurityLog for Fgt {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_fgt_timestamp(date, time, tz)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = datetime_to_nanos(parse_fgt_timestamp(date, time, tz)?)? + serial;
 
         Ok((
             SecuLog {
@@ -86,5 +87,27 @@ impl ParseSecurityLog for Fgt {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use super::parse_fgt_timestamp;
+
+    #[test]
+    fn fgt_timestamp_uses_supplied_timezone() {
+        let ts = parse_fgt_timestamp("2020-01-02", "03:04:05", "+0900").unwrap();
+        let expected =
+            DateTime::parse_from_str("2020-01-02 03:04:05 +0900", "%Y-%m-%d %H:%M:%S %z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc);
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn fgt_timestamp_rejects_invalid_combo() {
+        assert!(parse_fgt_timestamp("2020-01-02", "99:00:00", "+0900").is_err());
     }
 }

@@ -1,12 +1,13 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
 use super::{
-    DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, SniperIps, proto_to_u8,
+    DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, SniperIps, datetime_to_nanos,
+    proto_to_u8,
 };
 
 fn get_sniper_regex() -> &'static Regex {
@@ -18,8 +19,9 @@ fn get_sniper_regex() -> &'static Regex {
     })
 }
 
-fn parse_sniper_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_sniper_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y/%m/%d %H:%M:%S %z")
+        .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| anyhow!("{e:?}"))
 }
 
@@ -63,10 +65,7 @@ impl ParseSecurityLog for SniperIps {
             None => "TCP",
         };
 
-        let timestamp = parse_sniper_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = datetime_to_nanos(parse_sniper_timestamp(datetime)?)? + serial;
 
         Ok((
             SecuLog {
@@ -82,5 +81,27 @@ impl ParseSecurityLog for SniperIps {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use super::parse_sniper_timestamp;
+
+    #[test]
+    fn sniper_timestamp_applies_kst_offset() {
+        let ts = parse_sniper_timestamp("2020/07/13 09:45:54").unwrap();
+        let expected =
+            DateTime::parse_from_str("2020/07/13 09:45:54 +0900", "%Y/%m/%d %H:%M:%S %z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc);
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn sniper_timestamp_rejects_invalid_input() {
+        assert!(parse_sniper_timestamp("2020/99/99 25:61:61").is_err());
     }
 }

@@ -19,7 +19,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
@@ -241,6 +241,11 @@ pub(crate) fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
     }
 }
 
+pub(crate) fn parse_sysmon_timestamp_ns(time: &str) -> Result<i64> {
+    parse_sysmon_time(time)?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
+}
 pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
@@ -255,4 +260,42 @@ pub(crate) trait TryFromSysmonRecord: Sized {
 
 trait EventToCsv: Sized {
     fn parse(data: &Value) -> Vec<Self>;
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, NaiveDateTime, Utc};
+
+    use super::{parse_sysmon_time, parse_sysmon_timestamp_ns};
+
+    #[test]
+    fn parse_sysmon_time_parses_millisecond_precision() {
+        let ts = parse_sysmon_time("2023-08-08 07:51:14.875").unwrap();
+        let expected =
+            NaiveDateTime::parse_from_str("2023-08-08 07:51:14.875", "%Y-%m-%d %H:%M:%S%.f")
+                .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+                .expect("valid timestamp");
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn parse_sysmon_time_parses_fractional_seconds() {
+        let ts = parse_sysmon_time("2023-01-02 03:04:05.123456789").unwrap();
+        let expected =
+            NaiveDateTime::parse_from_str("2023-01-02 03:04:05.123456789", "%Y-%m-%d %H:%M:%S%.f")
+                .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+                .expect("valid timestamp");
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn parse_sysmon_timestamp_ns_returns_nanoseconds() {
+        let ns = parse_sysmon_timestamp_ns("2023-08-08 07:51:14.875").unwrap();
+        assert_eq!(ns, 1_691_481_074_875_000_000);
+    }
+
+    #[test]
+    fn parse_sysmon_timestamp_ns_rejects_invalid_input() {
+        assert!(parse_sysmon_timestamp_ns("invalid").is_err());
+    }
 }

@@ -1,11 +1,11 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, Nginx, ParseSecurityLog, SecurityLogInfo};
+use super::{DEFAULT_IPADDR, Nginx, ParseSecurityLog, SecurityLogInfo, datetime_to_nanos};
 
 fn get_nginx_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,8 +16,10 @@ fn get_nginx_regex() -> &'static Regex {
     })
 }
 
-fn parse_nginx_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z").map_err(|e| anyhow!("{e:?}"))
+fn parse_nginx_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z")
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Nginx {
@@ -40,10 +42,7 @@ impl ParseSecurityLog for Nginx {
             None => DEFAULT_IPADDR,
         };
 
-        let timestamp = parse_nginx_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = datetime_to_nanos(parse_nginx_timestamp(datetime)?)? + serial;
 
         Ok((
             SecuLog {
@@ -59,5 +58,26 @@ impl ParseSecurityLog for Nginx {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use super::parse_nginx_timestamp;
+
+    #[test]
+    fn nginx_timestamp_parses_with_offset() {
+        let ts = parse_nginx_timestamp("09/Jan/2020:09:26:09 +0900").unwrap();
+        let expected = DateTime::parse_from_str("09/Jan/2020:09:26:09 +0900", "%d/%b/%Y:%T %z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn nginx_timestamp_rejects_invalid_input() {
+        assert!(parse_nginx_timestamp("13/NotAMonth/2020:09:26:09 +0900").is_err());
     }
 }

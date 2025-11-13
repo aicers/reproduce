@@ -31,6 +31,12 @@ pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
     }
 }
 
+pub(crate) fn parse_zeek_timestamp_ns(timestamp: &str) -> Result<i64> {
+    parse_zeek_timestamp(timestamp)?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
+}
+
 pub(crate) fn open_raw_event_log_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))

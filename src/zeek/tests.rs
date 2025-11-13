@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
@@ -18,13 +19,39 @@ fn zeek_conn() {
 }
 
 #[test]
+fn zeek_conn_timestamps() {
+    let data = "1669773412.689790	ClEkJM2Vm5giqnMf4h	192.168.1.77	57655	209.197.168.151	1024	tcp	irc-dcc-data	2.256935	124	42208	SF	-	-	0	ShAdDaFf	28	1592	43	44452	-";
+    let rec = stringrecord(data);
+
+    let (conn, ts) = Conn::try_from_zeek_record(&rec).unwrap();
+    assert_eq!(ts, 1_669_773_412_689_790_000);
+    let expected_start = Utc
+        .timestamp_opt(1_669_773_412, 689_790_000)
+        .single()
+        .expect("valid start timestamp");
+    let expected_end = Utc
+        .timestamp_opt(1_669_773_414, 946_725_000)
+        .single()
+        .expect("valid end timestamp");
+    assert_eq!(conn.start_time, expected_start);
+    assert_eq!(conn.end_time, expected_end);
+}
+
+#[test]
 fn zeek_http() {
     // ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	trans_depth	method	host	uri	referer	version	user_agent	origin	request_body_len	response_body_len	status_code	status_msg	info_code	info_msg	tags	username	password	proxied	orig_fuids	orig_filenames	orig_mime_types	resp_fuids	resp_filenames	resp_mime_types
     let data = "1669773412.689790	CHhAvVGS1DHFjwGM9	127.0.0.1	42960	127.0.0.1	80	1	GET	-	/zeek.html	-	-	-	-	0	0	-	-	-	-	(empty)	-	-	-	-	-	-	-	-	-";
 
     let rec = stringrecord(data);
 
-    assert!(Http::try_from_zeek_record(&rec).is_ok());
+    let (http, ts) = Http::try_from_zeek_record(&rec).unwrap();
+    assert_eq!(ts, 1_669_773_412_689_790_000);
+    let expected_start = Utc
+        .timestamp_opt(1_669_773_412, 689_790_000)
+        .single()
+        .expect("valid start timestamp");
+    assert_eq!(http.start_time, expected_start);
+    assert_eq!(http.end_time, max_datetime());
 }
 
 #[test]
@@ -134,4 +161,36 @@ fn stringrecord(data: &str) -> StringRecord {
         .from_reader(data.as_bytes());
 
     rdr.into_records().next().unwrap().unwrap()
+}
+
+fn max_datetime() -> DateTime<Utc> {
+    DateTime::<Utc>::from_naive_utc_and_offset(NaiveDateTime::MAX, Utc)
+}
+
+#[test]
+fn parse_zeek_timestamp_handles_microseconds() {
+    use crate::zeek::parse_zeek_timestamp;
+
+    let ts = parse_zeek_timestamp("1700000000.123456").unwrap();
+    let expected = Utc
+        .timestamp_opt(1_700_000_000, 123_456_000)
+        .single()
+        .expect("valid timestamp");
+    assert_eq!(ts, expected);
+}
+
+#[test]
+fn parse_zeek_timestamp_ns_returns_nanoseconds() {
+    use crate::zeek::parse_zeek_timestamp_ns;
+
+    let ns = parse_zeek_timestamp_ns("1700000000.765432").unwrap();
+    assert_eq!(ns, 1_700_000_000_765_432_000);
+}
+
+#[test]
+fn parse_zeek_timestamp_rejects_invalid_precision() {
+    use crate::zeek::parse_zeek_timestamp;
+
+    assert!(parse_zeek_timestamp("1700000000.1234567").is_err());
+    assert!(parse_zeek_timestamp("1700000000").is_err());
 }

@@ -1,11 +1,14 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Tg};
+use super::{
+    DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Tg,
+    datetime_to_nanos,
+};
 
 fn get_tg_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,8 +19,9 @@ fn get_tg_regex() -> &'static Regex {
     })
 }
 
-fn parse_tg_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_tg_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y%m%d`%H:%M:%S %z")
+        .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| anyhow!("{e:?}"))
 }
 
@@ -59,10 +63,7 @@ impl ParseSecurityLog for Tg {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_tg_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = datetime_to_nanos(parse_tg_timestamp(datetime)?)? + serial;
 
         Ok((
             SecuLog {
@@ -78,5 +79,26 @@ impl ParseSecurityLog for Tg {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use super::parse_tg_timestamp;
+
+    #[test]
+    fn tg_timestamp_applies_kst_offset() {
+        let ts = parse_tg_timestamp("20200713`09:20:08").unwrap();
+        let expected = DateTime::parse_from_str("20200713`09:20:08 +0900", "%Y%m%d`%H:%M:%S %z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn tg_timestamp_rejects_invalid_input() {
+        assert!(parse_tg_timestamp("20200713`99:99:99").is_err());
     }
 }

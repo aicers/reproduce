@@ -1,11 +1,14 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, DEFAULT_PORT, Mf2, ParseSecurityLog, SecurityLogInfo, proto_to_u8};
+use super::{
+    DEFAULT_IPADDR, DEFAULT_PORT, Mf2, ParseSecurityLog, SecurityLogInfo, datetime_to_nanos,
+    proto_to_u8,
+};
 
 fn get_mf2_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,8 +19,9 @@ fn get_mf2_regex() -> &'static Regex {
     })
 }
 
-fn parse_mf2_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_mf2_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y-%m-%d %H:%M:%S %z")
+        .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| anyhow!("{e:?}"))
 }
 
@@ -59,10 +63,7 @@ impl ParseSecurityLog for Mf2 {
             None => "TCP",
         };
 
-        let timestamp = parse_mf2_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = datetime_to_nanos(parse_mf2_timestamp(datetime)?)? + serial;
 
         Ok((
             SecuLog {
@@ -78,5 +79,27 @@ impl ParseSecurityLog for Mf2 {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use super::parse_mf2_timestamp;
+
+    #[test]
+    fn mf2_timestamp_applies_kst_offset() {
+        let ts = parse_mf2_timestamp("2020-07-13 09:33:23").unwrap();
+        let expected =
+            DateTime::parse_from_str("2020-07-13 09:33:23 +0900", "%Y-%m-%d %H:%M:%S %z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc);
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn mf2_timestamp_rejects_invalid_input() {
+        assert!(parse_mf2_timestamp("2020-99-99 25:61:61").is_err());
     }
 }

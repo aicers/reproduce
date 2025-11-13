@@ -27,6 +27,12 @@ fn parse_giganto_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
     }
 }
 
+fn parse_giganto_timestamp_ns(timestamp: &str) -> Result<i64> {
+    parse_giganto_timestamp(timestamp)?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
+}
+
 fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::Err> {
     let mut v = Vec::new();
     if s != "-" {

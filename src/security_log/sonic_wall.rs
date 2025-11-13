@@ -1,12 +1,13 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
 use super::{
-    DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, SonicWall, proto_to_u8,
+    DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, SonicWall, datetime_to_nanos,
+    proto_to_u8,
 };
 
 fn get_sonic_regex() -> &'static Regex {
@@ -18,8 +19,9 @@ fn get_sonic_regex() -> &'static Regex {
     })
 }
 
-fn parse_sonic_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_sonic_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y-%m-%d %H:%M:%S %z")
+        .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| anyhow!("{e:?}"))
 }
 
@@ -63,10 +65,7 @@ impl ParseSecurityLog for SonicWall {
             None => "TCP",
         };
 
-        let timestamp = parse_sonic_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = datetime_to_nanos(parse_sonic_timestamp(datetime)?)? + serial;
 
         Ok((
             SecuLog {
@@ -82,5 +81,27 @@ impl ParseSecurityLog for SonicWall {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use super::parse_sonic_timestamp;
+
+    #[test]
+    fn sonic_timestamp_applies_kst_offset() {
+        let ts = parse_sonic_timestamp("2020-01-02 03:04:05").unwrap();
+        let expected =
+            DateTime::parse_from_str("2020-01-02 03:04:05 +0900", "%Y-%m-%d %H:%M:%S %z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc);
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn sonic_timestamp_rejects_invalid_input() {
+        assert!(parse_sonic_timestamp("2020-13-01 00:00:00").is_err());
     }
 }

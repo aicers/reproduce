@@ -1,11 +1,13 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, TimeZone, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
 use super::{
     DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, ShadowWall,
+    datetime_to_nanos,
 };
 
 fn get_shadow_regex() -> &'static Regex {
@@ -15,6 +17,16 @@ fn get_shadow_regex() -> &'static Regex {
         Regex::new(r"(?<timestamp>\d{10}).*?(?<proto>\d+)\t(?<srcIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\t(?<srcPort>\d+)\t(?<dstIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\t(?<dstPort>\d+)")
             .expect("regex")
     })
+}
+
+fn parse_shadow_wall_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
+    let secs = timestamp
+        .parse::<i64>()
+        .context("invalid timestamp (seconds)")?;
+
+    Utc.timestamp_opt(secs, 0)
+        .single()
+        .ok_or_else(|| anyhow!("failed to create timestamp from seconds"))
 }
 
 impl ParseSecurityLog for ShadowWall {
@@ -57,10 +69,7 @@ impl ParseSecurityLog for ShadowWall {
             None => PROTO_TCP,
         };
 
-        let timestamp = format!("{timestamp}000000000")
-            .parse::<i64>()
-            .unwrap_or_default()
-            + serial;
+        let timestamp = datetime_to_nanos(parse_shadow_wall_timestamp(timestamp)?)? + serial;
 
         Ok((
             SecuLog {
@@ -76,5 +85,27 @@ impl ParseSecurityLog for ShadowWall {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::*;
+
+    #[test]
+    fn parse_shadow_timestamp_returns_timestamp() {
+        let ts = parse_shadow_wall_timestamp("1700000000").unwrap();
+        let expected = Utc
+            .timestamp_opt(1_700_000_000, 0)
+            .single()
+            .expect("valid timestamp");
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn parse_shadow_timestamp_rejects_invalid_number() {
+        assert!(parse_shadow_wall_timestamp("notdigits").is_err());
     }
 }

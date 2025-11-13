@@ -1,11 +1,14 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Datelike, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Vforce};
+use super::{
+    DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Vforce,
+    datetime_to_nanos,
+};
 
 fn get_vforce_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -16,13 +19,22 @@ fn get_vforce_regex() -> &'static Regex {
     })
 }
 
-fn parse_vforce_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    let now = Utc::now();
-    DateTime::parse_from_str(
-        &format!("{} {datetime} +0900", now.year()),
-        "%Y %b %d %H:%M:%S %z",
-    )
-    .map_err(|e| anyhow!("{e:?}"))
+fn parse_vforce_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
+    parse_vforce_timestamp_with_year(datetime, current_year()?)
+}
+
+fn current_year() -> Result<i32> {
+    Utc::now()
+        .format("%Y")
+        .to_string()
+        .parse::<i32>()
+        .map_err(|e| anyhow!("failed to parse current year: {e}"))
+}
+
+fn parse_vforce_timestamp_with_year(datetime: &str, year: i32) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_str(&format!("{year} {datetime} +0900"), "%Y %b %d %H:%M:%S %z")
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Vforce {
@@ -65,10 +77,7 @@ impl ParseSecurityLog for Vforce {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_vforce_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = datetime_to_nanos(parse_vforce_timestamp(datetime)?)? + serial;
 
         Ok((
             SecuLog {
@@ -84,5 +93,30 @@ impl ParseSecurityLog for Vforce {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use super::parse_vforce_timestamp_with_year;
+
+    #[test]
+    fn vforce_timestamp_uses_current_year() {
+        let year = 2024;
+        let ts = parse_vforce_timestamp_with_year("Jan 02 03:04:05", year).unwrap();
+        let expected = DateTime::parse_from_str(
+            &format!("{year} Jan 02 03:04:05 +0900"),
+            "%Y %b %d %H:%M:%S %z",
+        )
+        .expect("valid timestamp")
+        .with_timezone(&Utc);
+        assert_eq!(ts, expected);
+    }
+
+    #[test]
+    fn vforce_timestamp_rejects_invalid_input() {
+        assert!(parse_vforce_timestamp_with_year("bad", 2024).is_err());
     }
 }

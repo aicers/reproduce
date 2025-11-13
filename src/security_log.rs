@@ -16,7 +16,8 @@ mod wapples;
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::SecuLog;
 use serde::{Deserialize, Serialize};
 
@@ -99,6 +100,10 @@ fn proto_to_u8(proto: &str) -> u8 {
     }
 }
 
+pub(super) fn datetime_to_nanos(datetime: DateTime<Utc>) -> Result<i64> {
+    datetime.timestamp_nanos_opt().context("to_timestamp_nanos")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -126,6 +131,25 @@ mod tests {
             assert_eq!(seculog.proto, Some(PROTO_TCP));
             assert_eq!(seculog.contents, log);
         }
+    }
+
+    #[test]
+    fn datetime_to_nanos_returns_nanoseconds() {
+        use chrono::{TimeZone, Utc};
+
+        let ts = Utc
+            .timestamp_opt(1, 500_000_000)
+            .single()
+            .expect("valid timestamp");
+        assert_eq!(super::datetime_to_nanos(ts).unwrap(), 1_500_000_000);
+    }
+
+    #[test]
+    fn datetime_to_nanos_rejects_overflow() {
+        use chrono::{DateTime, NaiveDateTime, Utc};
+
+        let ts = DateTime::<Utc>::from_naive_utc_and_offset(NaiveDateTime::MAX, Utc);
+        assert!(super::datetime_to_nanos(ts).is_err());
     }
 
     #[test]

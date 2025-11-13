@@ -187,6 +187,37 @@ fn giganto_radius() {
     assert!(Radius::try_from_giganto_record(&rec).is_ok());
 }
 
+#[test]
+fn parse_giganto_timestamp_parses_nanoseconds() {
+    use chrono::{TimeZone, Utc};
+
+    use super::parse_giganto_timestamp;
+
+    let ts = parse_giganto_timestamp("1700000000.123456789").unwrap();
+    let expected = Utc
+        .timestamp_opt(1_700_000_000, 123_456_789)
+        .single()
+        .expect("valid timestamp");
+    assert_eq!(ts, expected);
+}
+
+#[test]
+fn parse_giganto_timestamp_ns_returns_nanoseconds() {
+    use super::parse_giganto_timestamp_ns;
+
+    let ns = parse_giganto_timestamp_ns("1700000000.000000111").unwrap();
+    assert_eq!(ns, 1_700_000_000_000_000_111);
+}
+
+#[test]
+fn parse_giganto_timestamp_rejects_invalid() {
+    use super::parse_giganto_timestamp;
+
+    assert!(parse_giganto_timestamp("invalid").is_err());
+    assert!(parse_giganto_timestamp("1700000000.not_number").is_err());
+    assert!(parse_giganto_timestamp("1700000000").is_err());
+}
+
 fn stringrecord(data: &str) -> StringRecord {
     let rdr = ReaderBuilder::new()
         .delimiter(b'\t')
