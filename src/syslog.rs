@@ -19,7 +19,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
@@ -241,6 +241,12 @@ pub(crate) fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
     }
 }
 
+pub(crate) fn parse_sysmon_timestamp_ns(time: &str) -> Result<i64> {
+    parse_sysmon_time(time)?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
+}
+
 pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
@@ -255,4 +261,141 @@ pub(crate) trait TryFromSysmonRecord: Sized {
 
 trait EventToCsv: Sized {
     fn parse(data: &Value) -> Vec<Self>;
+}
+
+#[cfg(test)]
+mod sysmon_timestamp_tests {
+    use chrono::{Datelike, Timelike};
+
+    use super::*;
+
+    #[test]
+    fn test_parse_sysmon_time_valid() {
+        // Valid timestamp with microseconds
+        let result = parse_sysmon_time("2023-01-15 14:30:45.123456");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2023);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 14);
+        assert_eq!(dt.minute(), 30);
+        assert_eq!(dt.second(), 45);
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_no_subseconds() {
+        // Timestamp without fractional seconds
+        let result = parse_sysmon_time("2023-01-15 14:30:45");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.timestamp_subsec_nanos(), 0);
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_milliseconds() {
+        // Timestamp with milliseconds only
+        let result = parse_sysmon_time("2023-01-15 14:30:45.123");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.timestamp_subsec_millis(), 123);
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_nanoseconds() {
+        // Timestamp with full nanosecond precision
+        let result = parse_sysmon_time("2023-01-15 14:30:45.123456789");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.timestamp_subsec_nanos(), 123_456_789);
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_midnight() {
+        // Midnight timestamp
+        let result = parse_sysmon_time("2023-01-15 00:00:00.000000");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 0);
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_end_of_day() {
+        // End of day timestamp
+        let result = parse_sysmon_time("2023-01-15 23:59:59.999999");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.hour(), 23);
+        assert_eq!(dt.minute(), 59);
+        assert_eq!(dt.second(), 59);
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_leap_day() {
+        // Leap day: February 29, 2024
+        let result = parse_sysmon_time("2024-02-29 12:00:00.000000");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.day(), 29);
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_invalid_date() {
+        // Invalid date: February 30
+        let result = parse_sysmon_time("2023-02-30 12:00:00.000000");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_invalid_month() {
+        // Invalid month: 13
+        let result = parse_sysmon_time("2023-13-15 12:00:00.000000");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_invalid_hour() {
+        // Invalid hour: 24
+        let result = parse_sysmon_time("2023-01-15 24:00:00.000000");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_invalid_format() {
+        // Wrong format
+        let result = parse_sysmon_time("2023/01/15 14:30:45");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_empty_string() {
+        // Empty string
+        let result = parse_sysmon_time("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_sysmon_time_conversion_to_nanos() {
+        // Verify nanosecond conversion
+        let result = parse_sysmon_time("2023-01-15 14:30:45.123456");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        let nanos = dt.timestamp_nanos_opt();
+        assert!(nanos.is_some());
+    }
+
+    #[test]
+    fn test_parse_sysmon_timestamp_ns_returns_nanoseconds() {
+        let ns = parse_sysmon_timestamp_ns("2023-08-08 07:51:14.875").unwrap();
+        assert_eq!(ns, 1_691_481_074_875_000_000);
+    }
+
+    #[test]
+    fn test_parse_sysmon_timestamp_ns_rejects_invalid_input() {
+        assert!(parse_sysmon_timestamp_ns("invalid").is_err());
+    }
 }

@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Datelike, FixedOffset, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
@@ -14,13 +14,15 @@ fn get_ubuntu_regex() -> &'static Regex {
         .get_or_init(|| Regex::new(r"(?<datetime>\w{3} \d{1,2} \d{2}:\d{2}:\d{2})").expect("regex"))
 }
 
-fn parse_ubuntu_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_ubuntu_timestamp_ns(datetime: &str) -> Result<i64> {
     let now = Utc::now();
     DateTime::parse_from_str(
         &format!("{} {datetime} +0900", now.year()),
         "%Y %b %d %H:%M:%S %z",
     )
-    .map_err(|e| anyhow!("{e:?}"))
+    .map_err(|e| anyhow!("{e:?}"))?
+    .timestamp_nanos_opt()
+    .context("to_timestamp_nanos")
 }
 
 impl ParseSecurityLog for Ubuntu {
@@ -38,10 +40,7 @@ impl ParseSecurityLog for Ubuntu {
             None => bail!("invalid datetime"),
         };
 
-        let timestamp = parse_ubuntu_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_ubuntu_timestamp_ns(datetime)? + serial;
 
         Ok((
             SecuLog {
@@ -57,5 +56,25 @@ impl ParseSecurityLog for Ubuntu {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Datelike, FixedOffset, TimeZone, Utc};
+
+    use super::*;
+
+    #[test]
+    fn parse_ubuntu_timestamp_ns_returns_expected_nanos() {
+        let ns = parse_ubuntu_timestamp_ns("Jan 02 03:04:05").unwrap();
+        let year = Utc::now().year();
+        let expected = FixedOffset::east_opt(9 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(year, 1, 2, 3, 4, 5)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        assert_eq!(ns, expected);
     }
 }

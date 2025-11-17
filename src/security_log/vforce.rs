@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Datelike, FixedOffset, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
@@ -16,13 +16,15 @@ fn get_vforce_regex() -> &'static Regex {
     })
 }
 
-fn parse_vforce_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_vforce_timestamp_ns(datetime: &str) -> Result<i64> {
     let now = Utc::now();
     DateTime::parse_from_str(
         &format!("{} {datetime} +0900", now.year()),
         "%Y %b %d %H:%M:%S %z",
     )
-    .map_err(|e| anyhow!("{e:?}"))
+    .map_err(|e| anyhow!("{e:?}"))?
+    .timestamp_nanos_opt()
+    .context("to_timestamp_nanos")
 }
 
 impl ParseSecurityLog for Vforce {
@@ -65,10 +67,7 @@ impl ParseSecurityLog for Vforce {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_vforce_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_vforce_timestamp_ns(datetime)? + serial;
 
         Ok((
             SecuLog {
@@ -84,5 +83,25 @@ impl ParseSecurityLog for Vforce {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Datelike, FixedOffset, TimeZone, Utc};
+
+    use super::*;
+
+    #[test]
+    fn parse_vforce_timestamp_ns_returns_expected_nanos() {
+        let ns = parse_vforce_timestamp_ns("Jan 02 03:04:05").unwrap();
+        let year = Utc::now().year();
+        let expected = FixedOffset::east_opt(9 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(year, 1, 2, 3, 4, 5)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        assert_eq!(ns, expected);
     }
 }
