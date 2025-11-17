@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
@@ -18,9 +18,11 @@ fn get_sniper_regex() -> &'static Regex {
     })
 }
 
-fn parse_sniper_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_sniper_timestamp_ns(datetime: &str) -> Result<i64> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y/%m/%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{e:?}"))
+        .map_err(|e| anyhow!("{e:?}"))?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
 }
 
 impl ParseSecurityLog for SniperIps {
@@ -63,10 +65,7 @@ impl ParseSecurityLog for SniperIps {
             None => "TCP",
         };
 
-        let timestamp = parse_sniper_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_sniper_timestamp_ns(datetime)? + serial;
 
         Ok((
             SecuLog {
@@ -82,5 +81,16 @@ impl ParseSecurityLog for SniperIps {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sniper_timestamp_ns_returns_expected_nanos() {
+        let ns = parse_sniper_timestamp_ns("2024/01/02 03:04:05").unwrap();
+        assert_eq!(ns, 1_704_132_245_000_000_000);
     }
 }
