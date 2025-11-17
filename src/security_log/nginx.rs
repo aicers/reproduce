@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
@@ -16,8 +16,11 @@ fn get_nginx_regex() -> &'static Regex {
     })
 }
 
-fn parse_nginx_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z").map_err(|e| anyhow!("{e:?}"))
+fn parse_nginx_timestamp_ns(datetime: &str) -> Result<i64> {
+    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z")
+        .map_err(|e| anyhow!("{e:?}"))?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
 }
 
 impl ParseSecurityLog for Nginx {
@@ -40,10 +43,7 @@ impl ParseSecurityLog for Nginx {
             None => DEFAULT_IPADDR,
         };
 
-        let timestamp = parse_nginx_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_nginx_timestamp_ns(datetime)? + serial;
 
         Ok((
             SecuLog {
@@ -59,5 +59,16 @@ impl ParseSecurityLog for Nginx {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_nginx_timestamp_ns_returns_expected_nanos() {
+        let ns = parse_nginx_timestamp_ns("02/Jan/2024:03:04:05 +0900").unwrap();
+        assert_eq!(ns, 1_704_132_245_000_000_000);
     }
 }
