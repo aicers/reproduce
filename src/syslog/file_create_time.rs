@@ -46,11 +46,15 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
         };
         let creation_utc_time = if let Some(creation_utc_time) = rec.get(8) {
             parse_sysmon_time(creation_utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing creation_utc_time"));
         };
         let previous_creation_utc_time = if let Some(previous_creation_utc_time) = rec.get(9) {
             parse_sysmon_time(previous_creation_utc_time)?
+                .timestamp_nanos_opt()
+                .context("to_timestamp_nanos")?
         } else {
             return Err(anyhow!("missing previous_creation_utc_time"));
         };
