@@ -16,9 +16,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `resp_l2_bytes`, and `duration`) to all raw network event structures for
   machine learning purposes. These fields enable comprehensive session tracking
   and analysis in Semi-supervised and Unsupervised learning engines.
-- Unified time field types across all raw events to use `DateTime<Utc>` for
-  `start_time` and `end_time` fields, ensuring consistent temporal data
-  representation.
+- Removed the `last_time` field from all raw network event structures. The
+  combination of `start_time` and `duration` sufficiently represents the event’s
+  time range, making `last_time` redundant.
 - Updated FTP event structure to support multiple commands per session instead
   of single commands. The FTP struct now uses `Vec<FtpCommand>` to store all
   commands and responses within a single FTP session, enabling comprehensive
@@ -27,15 +27,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Giganto export files, supporting the new multi-command structure.
 - Updated Zeek FTP log processing to maintain backward compatibility while
   adapting single commands to the new vector-based structure.
-- Renamed `last_time` field to `end_time` in raw event structures to improve
-  clarity and consistency with the corresponding `start_time` field.
-- Renamed `duration` field to `end_time` in connection (`Conn`) raw event
-  structures to better reflect its meaning as the session end time.
-- Updated giganto-client dependency to support the new field names.
 - Added `start_time` field to all network raw event structures to enable proper
-  session tracking and temporal analysis. This field contains the timestamp
-  when the network session or event began, providing consistency with the
-  existing `end_time` field.
+  session tracking and temporal analysis.
 - Consolidated HTTP event fields for better data organization: merged
   `orig_mime_types` and `resp_mime_types` into unified `mime_types` field,
   merged `orig_filenames` and `resp_filenames` into unified `filenames` field,
