@@ -2,21 +2,25 @@ use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::FileDelete;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time};
+use super::{
+    EventToCsv, TryFromSysmonRecord, is_datastore_format, parse_datastore_time, parse_sysmon_time,
+};
 
 impl TryFromSysmonRecord for FileDelete {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
-        let agent_name = if let Some(agent_name) = rec.get(0) {
-            agent_name.to_string()
-        } else {
-            return Err(anyhow!("missing agent_name"));
-        };
-        let agent_id = if let Some(agent_id) = rec.get(1) {
-            agent_id.to_string()
-        } else {
-            return Err(anyhow!("missing agent_id"));
-        };
-        let time = if let Some(utc_time) = rec.get(3) {
+        let is_datastore = is_datastore_format(rec);
+        let field_offset = if is_datastore { 2 } else { 0 };
+
+        let time = if is_datastore {
+            if let Some(timestamp) = rec.get(0) {
+                parse_datastore_time(timestamp)?
+                    .timestamp_nanos_opt()
+                    .context("to_timestamp_nanos")?
+                    + serial
+            } else {
+                return Err(anyhow!("missing timestamp"));
+            }
+        } else if let Some(utc_time) = rec.get(3) {
             parse_sysmon_time(utc_time)?
                 .timestamp_nanos_opt()
                 .context("to_timestamp_nanos")?
@@ -24,32 +28,43 @@ impl TryFromSysmonRecord for FileDelete {
         } else {
             return Err(anyhow!("missing time"));
         };
-        let process_guid = if let Some(process_guid) = rec.get(4) {
+
+        let agent_name = if let Some(agent_name) = rec.get(field_offset) {
+            agent_name.to_string()
+        } else {
+            return Err(anyhow!("missing agent_name"));
+        };
+        let agent_id = if let Some(agent_id) = rec.get(field_offset + 1) {
+            agent_id.to_string()
+        } else {
+            return Err(anyhow!("missing agent_id"));
+        };
+        let process_guid = if let Some(process_guid) = rec.get(field_offset + 2) {
             process_guid.to_string()
         } else {
             return Err(anyhow!("missing process_guid"));
         };
-        let process_id = if let Some(process_id) = rec.get(5) {
+        let process_id = if let Some(process_id) = rec.get(field_offset + 3) {
             process_id.parse::<u32>().context("invalid process_id")?
         } else {
             return Err(anyhow!("missing process_id"));
         };
-        let user = if let Some(user) = rec.get(6) {
+        let user = if let Some(user) = rec.get(field_offset + 4) {
             user.to_string()
         } else {
             return Err(anyhow!("missing user"));
         };
-        let image = if let Some(image) = rec.get(7) {
+        let image = if let Some(image) = rec.get(field_offset + 5) {
             image.to_string()
         } else {
             return Err(anyhow!("missing image"));
         };
-        let target_filename = if let Some(target_filename) = rec.get(8) {
+        let target_filename = if let Some(target_filename) = rec.get(field_offset + 6) {
             target_filename.to_string()
         } else {
             return Err(anyhow!("missing target_filename"));
         };
-        let hashes = if let Some(hashes) = rec.get(9) {
+        let hashes = if let Some(hashes) = rec.get(field_offset + 7) {
             hashes
                 .split(',')
                 .map(std::string::ToString::to_string)
@@ -57,7 +72,7 @@ impl TryFromSysmonRecord for FileDelete {
         } else {
             return Err(anyhow!("missing hashes"));
         };
-        let is_executable = if let Some(is_executable) = rec.get(10) {
+        let is_executable = if let Some(is_executable) = rec.get(field_offset + 8) {
             if is_executable.eq("true") {
                 true
             } else if is_executable.eq("false") || is_executable.eq("-") {
@@ -68,7 +83,7 @@ impl TryFromSysmonRecord for FileDelete {
         } else {
             return Err(anyhow!("missing is_executable"));
         };
-        let archived = if let Some(archived) = rec.get(11) {
+        let archived = if let Some(archived) = rec.get(field_offset + 9) {
             if archived.eq("true") {
                 true
             } else if archived.starts_with("false") || archived.eq("-") {
