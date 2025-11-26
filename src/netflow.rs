@@ -38,11 +38,7 @@ impl ParseNetflowDatasets for Netflow5 {
         let mut events = vec![];
         if let Ok(values) = input.parse_netflow_v5_datasets(header) {
             for v5 in values {
-                events.push((
-                    DateTime::from_timestamp(i64::from(header.unix_secs), *nanos)
-                        .map_or(0, |t| t.timestamp_nanos_opt().unwrap_or_default()),
-                    v5,
-                ));
+                events.push((netflow_timestamp(i64::from(header.unix_secs), *nanos), v5));
                 *nanos += 1;
             }
             stats.add(ProcessStats::Events, usize::from(header.count));
@@ -112,11 +108,7 @@ impl ParseNetflowDatasets for Netflow9 {
                 if let Some(template) = templates.get(&flow_key) {
                     let flows = input.parse_netflow_v9_datasets(template, header, flowset_id);
                     for v9 in flows {
-                        events.push((
-                            DateTime::from_timestamp(i64::from(header.unix_secs), *nanos)
-                                .map_or(0, |t| t.timestamp_nanos_opt().unwrap_or_default()),
-                            v9,
-                        ));
+                        events.push((netflow_timestamp(i64::from(header.unix_secs), *nanos), v9));
                         *nanos += 1;
                     }
                     stats.add(ProcessStats::Events, usize::from(header.count));
@@ -127,5 +119,27 @@ impl ParseNetflowDatasets for Netflow9 {
             }
         }
         Ok(events)
+    }
+}
+
+fn netflow_timestamp(unix_secs: i64, nanos: u32) -> i64 {
+    DateTime::from_timestamp(unix_secs, nanos)
+        .map_or(0, |t| t.timestamp_nanos_opt().unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::netflow_timestamp;
+
+    #[test]
+    fn netflow_timestamp_combines_seconds_and_nanos() {
+        let result = netflow_timestamp(1, 42);
+        assert_eq!(result, 1_000_000_000 + 42);
+    }
+
+    #[test]
+    fn netflow_timestamp_rejects_invalid_nanos() {
+        assert_eq!(netflow_timestamp(1, 1_000_000_000), 0);
+        assert_eq!(netflow_timestamp(1, u32::MAX), 0);
     }
 }
