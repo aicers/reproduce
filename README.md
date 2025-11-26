@@ -7,7 +7,7 @@ entries to a Giganto server.
 
 ## Requirements
 
-- Giganto 0.23.0 or higher.
+- Giganto 0.26.0 or higher.
 
 ## Usage
 
