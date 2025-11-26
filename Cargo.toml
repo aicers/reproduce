@@ -1,6 +1,6 @@
 [package]
 name = "reproduce"
-version = "0.22.1"
+version = "0.23.0"
 edition = "2024"
 
 [dependencies]
@@ -13,7 +13,7 @@ chrono = "0.4"
 config = { version = "0.15", features = ["toml"], default-features = false }
 csv = "1"
 ctrlc = { version = "3", features = ["termination"] }
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "6fe7654" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.25.0" }
 num-traits = "0.2"
 num_enum = "0.7"
 pcap = "2"

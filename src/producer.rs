@@ -57,7 +57,7 @@ use crate::{
 const CHANNEL_CLOSE_COUNT: u8 = 150;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
-const REQUIRED_GIGANTO_VERSION: &str = "0.26.0-alpha.7";
+const REQUIRED_GIGANTO_VERSION: &str = "0.26.0";
 const INTERVAL: u64 = 5;
 const BATCH_SIZE: usize = 100;
 
