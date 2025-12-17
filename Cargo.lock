@@ -54,6 +54,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd6a120d2e16b3e1b4a24bd70f23b12d3e16b81f113364a26935f8db7245452d"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -463,7 +469,7 @@ version = "0.25.0"
 source = "git+https://github.com/aicers/giganto-client.git?tag=0.25.0#17379bdc1ffda7287cdc95508e23438c2fc8d414"
 dependencies = [
  "anyhow",
- "bincode",
+ "bincode 1.3.3",
  "num_enum",
  "quinn",
  "semver",
@@ -1281,7 +1287,7 @@ version = "0.23.0"
 dependencies = [
  "anyhow",
  "base64",
- "bincode",
+ "bincode 3.0.0",
  "byteorder",
  "bytesize",
  "chrono",
