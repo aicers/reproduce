@@ -89,4 +89,59 @@ mod tests {
         let ns = parse_srx_timestamp_ns("2024-01-02T03:04:05.123+09:00").unwrap();
         assert_eq!(ns, 1_704_132_245_123_000_000);
     }
+
+    #[test]
+    fn test_parse_srx_timestamp_single_digit_subsecond() {
+        let ns = parse_srx_timestamp_ns("2024-01-02T03:04:05.1+09:00").unwrap();
+        assert_eq!(ns, 1_704_132_245_100_000_000);
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_max_subseconds() {
+        let ns = parse_srx_timestamp_ns("2024-01-02T03:04:05.999999999+09:00").unwrap();
+        assert_eq!(ns, 1_704_132_245_999_999_999);
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_midnight() {
+        let ns = parse_srx_timestamp_ns("2024-01-01T00:00:00.000+09:00").unwrap();
+        assert_eq!(ns, 1_704_034_800_000_000_000); // 2023-12-31 15:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_end_of_day() {
+        let ns = parse_srx_timestamp_ns("2023-12-31T23:59:59.999+09:00").unwrap();
+        assert_eq!(ns, 1_704_034_799_999_000_000); // 14:59:59.999 UTC
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_leap_day() {
+        let ns = parse_srx_timestamp_ns("2024-02-29T12:00:00.000+09:00").unwrap();
+        assert_eq!(ns, 1_709_175_600_000_000_000); // 03:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_invalid_date() {
+        assert!(parse_srx_timestamp_ns("2023-02-30T12:00:00.000+09:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_invalid_month() {
+        assert!(parse_srx_timestamp_ns("2023-13-15T12:00:00.000+09:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_invalid_hour() {
+        assert!(parse_srx_timestamp_ns("2023-01-15T24:00:00.000+09:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_invalid_format() {
+        assert!(parse_srx_timestamp_ns("2023-01-15 12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_srx_timestamp_empty() {
+        assert!(parse_srx_timestamp_ns("").is_err());
+    }
 }

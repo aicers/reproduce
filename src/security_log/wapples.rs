@@ -81,4 +81,47 @@ mod tests {
         let ns = parse_wapples_timestamp_ns("2024-01-02 03:04:05 +0900").unwrap();
         assert_eq!(ns, 1_704_132_245_000_000_000);
     }
+
+    #[test]
+    fn test_parse_wapples_timestamp_midnight() {
+        let ns = parse_wapples_timestamp_ns("2024-01-01 00:00:00 +0900").unwrap();
+        assert_eq!(ns, 1_704_034_800_000_000_000); // 15:00:00 UTC previous day
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_end_of_day() {
+        let ns = parse_wapples_timestamp_ns("2023-12-31 23:59:59 +0900").unwrap();
+        assert_eq!(ns, 1_704_034_799_000_000_000); // 14:59:59 UTC
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_leap_day() {
+        let ns = parse_wapples_timestamp_ns("2024-02-29 12:00:00 +0900").unwrap();
+        assert_eq!(ns, 1_709_175_600_000_000_000);
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_date() {
+        assert!(parse_wapples_timestamp_ns("2023-02-30 12:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_month() {
+        assert!(parse_wapples_timestamp_ns("2023-13-15 12:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_hour() {
+        assert!(parse_wapples_timestamp_ns("2023-01-15 24:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_format() {
+        assert!(parse_wapples_timestamp_ns("2023/01/15 12:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_empty() {
+        assert!(parse_wapples_timestamp_ns("").is_err());
+    }
 }

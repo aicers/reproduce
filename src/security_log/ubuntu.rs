@@ -77,4 +77,55 @@ mod tests {
             .unwrap();
         assert_eq!(ns, expected);
     }
+
+    #[test]
+    fn test_parse_ubuntu_timestamp_midnight() {
+        let ns = parse_ubuntu_timestamp_ns("Jan 01 00:00:00").unwrap();
+        let year = Utc::now().year();
+        let expected = FixedOffset::east_opt(9 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        assert_eq!(ns, expected);
+    }
+
+    #[test]
+    fn test_parse_ubuntu_timestamp_end_of_day() {
+        let ns = parse_ubuntu_timestamp_ns("Dec 31 23:59:59").unwrap();
+        let year = Utc::now().year();
+        let expected = FixedOffset::east_opt(9 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(year, 12, 31, 23, 59, 59)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap();
+        assert_eq!(ns, expected);
+    }
+
+    #[test]
+    fn test_parse_ubuntu_timestamp_invalid_date() {
+        assert!(parse_ubuntu_timestamp_ns("Feb 30 12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_ubuntu_timestamp_invalid_month() {
+        assert!(parse_ubuntu_timestamp_ns("Jnn 01 12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_ubuntu_timestamp_invalid_hour() {
+        assert!(parse_ubuntu_timestamp_ns("Jan 01 24:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_ubuntu_timestamp_invalid_format() {
+        assert!(parse_ubuntu_timestamp_ns("Jan-01 12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_ubuntu_timestamp_empty() {
+        assert!(parse_ubuntu_timestamp_ns("").is_err());
+    }
 }
