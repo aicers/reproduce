@@ -38,7 +38,7 @@ impl ParseNetflowDatasets for Netflow5 {
         let mut events = vec![];
         if let Ok(values) = input.parse_netflow_v5_datasets(header) {
             for v5 in values {
-                events.push((netflow_timestamp(i64::from(header.unix_secs), *nanos), v5));
+                events.push((netflow_timestamp(header.unix_secs, *nanos), v5));
                 *nanos += 1;
             }
             stats.add(ProcessStats::Events, usize::from(header.count));
@@ -108,7 +108,7 @@ impl ParseNetflowDatasets for Netflow9 {
                 if let Some(template) = templates.get(&flow_key) {
                     let flows = input.parse_netflow_v9_datasets(template, header, flowset_id);
                     for v9 in flows {
-                        events.push((netflow_timestamp(i64::from(header.unix_secs), *nanos), v9));
+                        events.push((netflow_timestamp(header.unix_secs, *nanos), v9));
                         *nanos += 1;
                     }
                     stats.add(ProcessStats::Events, usize::from(header.count));
@@ -122,8 +122,8 @@ impl ParseNetflowDatasets for Netflow9 {
     }
 }
 
-fn netflow_timestamp(unix_secs: i64, nanos: u32) -> i64 {
-    DateTime::from_timestamp(unix_secs, nanos)
+fn netflow_timestamp(unix_secs: u32, nanos: u32) -> i64 {
+    DateTime::from_timestamp(i64::from(unix_secs), nanos)
         .map_or(0, |t| t.timestamp_nanos_opt().unwrap_or_default())
 }
 

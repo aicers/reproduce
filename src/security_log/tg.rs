@@ -89,4 +89,47 @@ mod tests {
         let ns = parse_tg_timestamp_ns("20240102`03:04:05").unwrap();
         assert_eq!(ns, 1_704_132_245_000_000_000);
     }
+
+    #[test]
+    fn test_parse_tg_timestamp_midnight() {
+        let ns = parse_tg_timestamp_ns("20240101`00:00:00").unwrap();
+        assert_eq!(ns, 1_704_034_800_000_000_000); // 2023-12-31 15:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_end_of_day() {
+        let ns = parse_tg_timestamp_ns("20231231`23:59:59").unwrap();
+        assert_eq!(ns, 1_704_034_799_000_000_000); // 14:59:59 UTC
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_leap_day() {
+        let ns = parse_tg_timestamp_ns("20240229`12:00:00").unwrap();
+        assert_eq!(ns, 1_709_175_600_000_000_000); // 03:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_date() {
+        assert!(parse_tg_timestamp_ns("20230230`12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_month() {
+        assert!(parse_tg_timestamp_ns("20231315`12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_hour() {
+        assert!(parse_tg_timestamp_ns("20230115`24:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_format() {
+        assert!(parse_tg_timestamp_ns("2023-01-15`12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_empty() {
+        assert!(parse_tg_timestamp_ns("").is_err());
+    }
 }
