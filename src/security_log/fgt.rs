@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
@@ -16,9 +16,11 @@ fn get_fgt_regex() -> &'static Regex {
     })
 }
 
-fn parse_fgt_timestamp(date: &str, time: &str, tz: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_fgt_timestamp_ns(date: &str, time: &str, tz: &str) -> Result<i64> {
     DateTime::parse_from_str(&format!("{date} {time} {tz}"), "%Y-%m-%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{e:?}"))
+        .map_err(|e| anyhow!("{e:?}"))?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
 }
 
 impl ParseSecurityLog for Fgt {
@@ -67,10 +69,7 @@ impl ParseSecurityLog for Fgt {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_fgt_timestamp(date, time, tz)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_fgt_timestamp_ns(date, time, tz)? + serial;
 
         Ok((
             SecuLog {
@@ -86,5 +85,60 @@ impl ParseSecurityLog for Fgt {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_fgt_timestamp_ns_returns_expected_nanos() {
+        let ns = parse_fgt_timestamp_ns("2024-01-02", "03:04:05", "+0900").unwrap();
+        assert_eq!(ns, 1_704_132_245_000_000_000);
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_midnight() {
+        let ns = parse_fgt_timestamp_ns("2024-01-01", "00:00:00", "+0900").unwrap();
+        assert_eq!(ns, 1_704_034_800_000_000_000); // 2024-01-01 00:00:00 +0900 is 2023-12-31 15:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_end_of_day() {
+        let ns = parse_fgt_timestamp_ns("2023-12-31", "23:59:59", "+0900").unwrap();
+        assert_eq!(ns, 1_704_034_799_000_000_000); // 2023-12-31 23:59:59 +0900 is 2023-12-31 14:59:59 UTC
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_leap_day() {
+        let ns = parse_fgt_timestamp_ns("2024-02-29", "12:00:00", "+0900").unwrap();
+        assert_eq!(ns, 1_709_175_600_000_000_000); // 2024-02-29 12:00:00 +0900 is 03:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_invalid_date() {
+        assert!(parse_fgt_timestamp_ns("2023-02-30", "12:00:00", "+0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_invalid_month() {
+        assert!(parse_fgt_timestamp_ns("2023-13-15", "12:00:00", "+0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_invalid_hour() {
+        assert!(parse_fgt_timestamp_ns("2023-01-15", "24:00:00", "+0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_invalid_format() {
+        // Since arguments are splits, invalid format mainly means the strings themselves don't parse
+        assert!(parse_fgt_timestamp_ns("2023/01/15", "12:00:00", "+0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_fgt_timestamp_empty() {
+        assert!(parse_fgt_timestamp_ns("", "", "").is_err());
     }
 }

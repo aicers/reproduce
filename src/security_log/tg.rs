@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
@@ -16,9 +16,11 @@ fn get_tg_regex() -> &'static Regex {
     })
 }
 
-fn parse_tg_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
+fn parse_tg_timestamp_ns(datetime: &str) -> Result<i64> {
     DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y%m%d`%H:%M:%S %z")
-        .map_err(|e| anyhow!("{e:?}"))
+        .map_err(|e| anyhow!("{e:?}"))?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
 }
 
 impl ParseSecurityLog for Tg {
@@ -59,10 +61,7 @@ impl ParseSecurityLog for Tg {
             None => PROTO_TCP,
         };
 
-        let timestamp = parse_tg_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_tg_timestamp_ns(datetime)? + serial;
 
         Ok((
             SecuLog {
@@ -78,5 +77,59 @@ impl ParseSecurityLog for Tg {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_tg_timestamp_ns_returns_expected_nanos() {
+        let ns = parse_tg_timestamp_ns("20240102`03:04:05").unwrap();
+        assert_eq!(ns, 1_704_132_245_000_000_000);
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_midnight() {
+        let ns = parse_tg_timestamp_ns("20240101`00:00:00").unwrap();
+        assert_eq!(ns, 1_704_034_800_000_000_000); // 2023-12-31 15:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_end_of_day() {
+        let ns = parse_tg_timestamp_ns("20231231`23:59:59").unwrap();
+        assert_eq!(ns, 1_704_034_799_000_000_000); // 14:59:59 UTC
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_leap_day() {
+        let ns = parse_tg_timestamp_ns("20240229`12:00:00").unwrap();
+        assert_eq!(ns, 1_709_175_600_000_000_000); // 03:00:00 UTC
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_date() {
+        assert!(parse_tg_timestamp_ns("20230230`12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_month() {
+        assert!(parse_tg_timestamp_ns("20231315`12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_hour() {
+        assert!(parse_tg_timestamp_ns("20230115`24:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_invalid_format() {
+        assert!(parse_tg_timestamp_ns("2023-01-15`12:00:00").is_err());
+    }
+
+    #[test]
+    fn test_parse_tg_timestamp_empty() {
+        assert!(parse_tg_timestamp_ns("").is_err());
     }
 }

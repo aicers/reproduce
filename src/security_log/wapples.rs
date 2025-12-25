@@ -1,7 +1,7 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, FixedOffset};
+use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
@@ -16,8 +16,11 @@ fn get_wapples_regex() -> &'static Regex {
     })
 }
 
-fn parse_wapples_timestamp(datetime: &str) -> Result<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S %z").map_err(|e| anyhow!("{e:?}"))
+fn parse_wapples_timestamp_ns(datetime: &str) -> Result<i64> {
+    DateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S %z")
+        .map_err(|e| anyhow!("{e:?}"))?
+        .timestamp_nanos_opt()
+        .context("to_timestamp_nanos")
 }
 
 impl ParseSecurityLog for Wapples {
@@ -50,10 +53,7 @@ impl ParseSecurityLog for Wapples {
             None => DEFAULT_PORT,
         };
 
-        let timestamp = parse_wapples_timestamp(datetime)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?
-            + serial;
+        let timestamp = parse_wapples_timestamp_ns(datetime)? + serial;
 
         Ok((
             SecuLog {
@@ -69,5 +69,59 @@ impl ParseSecurityLog for Wapples {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_wapples_timestamp_ns_returns_expected_nanos() {
+        let ns = parse_wapples_timestamp_ns("2024-01-02 03:04:05 +0900").unwrap();
+        assert_eq!(ns, 1_704_132_245_000_000_000);
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_midnight() {
+        let ns = parse_wapples_timestamp_ns("2024-01-01 00:00:00 +0900").unwrap();
+        assert_eq!(ns, 1_704_034_800_000_000_000); // 15:00:00 UTC previous day
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_end_of_day() {
+        let ns = parse_wapples_timestamp_ns("2023-12-31 23:59:59 +0900").unwrap();
+        assert_eq!(ns, 1_704_034_799_000_000_000); // 14:59:59 UTC
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_leap_day() {
+        let ns = parse_wapples_timestamp_ns("2024-02-29 12:00:00 +0900").unwrap();
+        assert_eq!(ns, 1_709_175_600_000_000_000);
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_date() {
+        assert!(parse_wapples_timestamp_ns("2023-02-30 12:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_month() {
+        assert!(parse_wapples_timestamp_ns("2023-13-15 12:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_hour() {
+        assert!(parse_wapples_timestamp_ns("2023-01-15 24:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_invalid_format() {
+        assert!(parse_wapples_timestamp_ns("2023/01/15 12:00:00 +0900").is_err());
+    }
+
+    #[test]
+    fn test_parse_wapples_timestamp_empty() {
+        assert!(parse_wapples_timestamp_ns("").is_err());
     }
 }
