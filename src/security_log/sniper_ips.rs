@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
 use super::{
@@ -19,10 +19,11 @@ fn get_sniper_regex() -> &'static Regex {
 }
 
 fn parse_sniper_timestamp_ns(datetime: &str) -> Result<i64> {
-    DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y/%m/%d %H:%M:%S %z")
+    Timestamp::strptime("%Y/%m/%d %H:%M:%S %z", format!("{datetime} +0900"))
         .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+        .as_nanosecond()
+        .try_into()
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for SniperIps {

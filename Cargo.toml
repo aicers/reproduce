@@ -9,11 +9,11 @@ base64 = "0.22"
 bincode = "1"
 byteorder = "1"
 bytesize = "2"
-chrono = "0.4"
 config = { version = "0.15", features = ["toml"], default-features = false }
 csv = "1"
 ctrlc = { version = "3", features = ["termination"] }
 giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.25.0" }
+jiff = { version = "0.2", features = ["serde"] }
 num-traits = "0.2"
 num_enum = "0.7"
 pcap = "2"
@@ -35,6 +35,9 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2"
+
+[dev-dependencies]
+chrono = "0.4"
 
 [lints.clippy]
 pedantic = "warn"

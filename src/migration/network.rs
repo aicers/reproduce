@@ -7,8 +7,7 @@ use giganto_client::ingest::network::{
 };
 
 use super::{
-    TryFromGigantoRecord, parse_comma_separated, parse_giganto_timestamp,
-    parse_giganto_timestamp_ns, parse_post_body,
+    TryFromGigantoRecord, parse_comma_separated, parse_giganto_timestamp_ns, parse_post_body,
 };
 
 impl TryFromGigantoRecord for Conn {
@@ -56,9 +55,7 @@ impl TryFromGigantoRecord for Conn {
             return Err(anyhow!("missing conn state"));
         };
         let start_time = if let Some(start_time) = rec.get(8) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -178,9 +175,7 @@ impl TryFromGigantoRecord for Dns {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -373,14 +368,12 @@ impl TryFromGigantoRecord for MalformedDns {
             .context("missing protocol")?
             .parse::<u8>()
             .context("invalid proto")?;
-        let start_time = parse_giganto_timestamp(rec.get(7).context("missing start_time")?)?
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?;
         let duration = rec
             .get(8)
             .context("missing duration")?
             .parse::<i64>()
             .context("invalid duration")?;
+        let start_time = parse_giganto_timestamp_ns(rec.get(7).context("missing start_time")?)?;
         let orig_pkts = rec
             .get(9)
             .context("missing source packets")?
@@ -525,9 +518,7 @@ impl TryFromGigantoRecord for Http {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -748,9 +739,7 @@ impl TryFromGigantoRecord for Rdp {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -852,9 +841,7 @@ impl TryFromGigantoRecord for Smtp {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -991,9 +978,7 @@ impl TryFromGigantoRecord for Ntlm {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -1118,9 +1103,7 @@ impl TryFromGigantoRecord for Kerberos {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -1275,9 +1258,7 @@ impl TryFromGigantoRecord for Ssh {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -1450,9 +1431,7 @@ impl TryFromGigantoRecord for DceRpc {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -1571,9 +1550,7 @@ impl TryFromGigantoRecord for Ftp {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -1763,9 +1740,7 @@ impl TryFromGigantoRecord for Mqtt {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -1898,9 +1873,7 @@ impl TryFromGigantoRecord for Ldap {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -2052,9 +2025,7 @@ impl TryFromGigantoRecord for Tls {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -2277,9 +2248,7 @@ impl TryFromGigantoRecord for Smb {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -2441,9 +2410,7 @@ impl TryFromGigantoRecord for Nfs {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -2556,9 +2523,7 @@ impl TryFromGigantoRecord for Bootp {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -2718,9 +2683,7 @@ impl TryFromGigantoRecord for Dhcp {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };
@@ -2998,9 +2961,7 @@ impl TryFromGigantoRecord for Radius {
             return Err(anyhow!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_giganto_timestamp(start_time)?
-                .timestamp_nanos_opt()
-                .context("to_timestamp_nanos")?
+            parse_giganto_timestamp_ns(start_time)?
         } else {
             return Err(anyhow!("missing start_time"));
         };

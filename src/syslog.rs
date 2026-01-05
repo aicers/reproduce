@@ -21,8 +21,8 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
-use chrono::{DateTime, NaiveDateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
+use jiff::{Timestamp, tz::TimeZone};
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use reqwest::{
     Client,
@@ -47,8 +47,8 @@ use crate::config::ElasticSearch;
 
 #[allow(clippy::unused_async)]
 pub(crate) async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {
-    let now = Utc::now();
-    let exec_time = format!("{}", now.format("%F %T"));
+    let now = Timestamp::now().to_zoned(TimeZone::UTC);
+    let exec_time = now.strftime("%F %T").to_string();
 
     let size = elasticsearch.size;
     let event_codes = elasticsearch
@@ -233,18 +233,17 @@ fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) ->
     Ok(())
 }
 
-pub(crate) fn parse_sysmon_time(time: &str) -> Result<DateTime<Utc>> {
-    if let Ok(ndt) = NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S%.f") {
-        Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
-    } else {
-        Err(anyhow!("invalid time: {time}"))
-    }
+pub(crate) fn parse_sysmon_time(time: &str) -> Result<Timestamp> {
+    let dt = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", time)
+        .map_err(|_| anyhow!("invalid time: {time}"))?;
+    dt.to_zoned(TimeZone::UTC)
+        .map_err(|e| anyhow!("failed to create zoned datetime: {e}"))
+        .map(|z| z.timestamp())
 }
 
 pub(crate) fn parse_sysmon_timestamp_ns(time: &str) -> Result<i64> {
-    parse_sysmon_time(time)?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+    let ts = parse_sysmon_time(time)?;
+    i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
 pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
@@ -265,8 +264,6 @@ trait EventToCsv: Sized {
 
 #[cfg(test)]
 mod sysmon_timestamp_tests {
-    use chrono::{Datelike, Timelike};
-
     use super::*;
 
     #[test]
@@ -274,13 +271,14 @@ mod sysmon_timestamp_tests {
         // Valid timestamp with microseconds
         let result = parse_sysmon_time("2023-01-15 14:30:45.123456");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.year(), 2023);
-        assert_eq!(dt.month(), 1);
-        assert_eq!(dt.day(), 15);
-        assert_eq!(dt.hour(), 14);
-        assert_eq!(dt.minute(), 30);
-        assert_eq!(dt.second(), 45);
+        let ts = result.unwrap();
+        let zoned = ts.to_zoned(TimeZone::UTC);
+        assert_eq!(zoned.year(), 2023);
+        assert_eq!(zoned.month(), 1);
+        assert_eq!(zoned.day(), 15);
+        assert_eq!(zoned.hour(), 14);
+        assert_eq!(zoned.minute(), 30);
+        assert_eq!(zoned.second(), 45);
     }
 
     #[test]
@@ -288,8 +286,8 @@ mod sysmon_timestamp_tests {
         // Timestamp without fractional seconds
         let result = parse_sysmon_time("2023-01-15 14:30:45");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp_subsec_nanos(), 0);
+        let ts = result.unwrap();
+        assert_eq!(ts.subsec_nanosecond(), 0);
     }
 
     #[test]
@@ -297,8 +295,8 @@ mod sysmon_timestamp_tests {
         // Timestamp with milliseconds only
         let result = parse_sysmon_time("2023-01-15 14:30:45.123");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp_subsec_millis(), 123);
+        let ts = result.unwrap();
+        assert_eq!(ts.subsec_millisecond(), 123);
     }
 
     #[test]
@@ -306,8 +304,8 @@ mod sysmon_timestamp_tests {
         // Timestamp with full nanosecond precision
         let result = parse_sysmon_time("2023-01-15 14:30:45.123456789");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp_subsec_nanos(), 123_456_789);
+        let ts = result.unwrap();
+        assert_eq!(ts.subsec_nanosecond(), 123_456_789);
     }
 
     #[test]
@@ -315,10 +313,11 @@ mod sysmon_timestamp_tests {
         // Midnight timestamp
         let result = parse_sysmon_time("2023-01-15 00:00:00.000000");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.hour(), 0);
-        assert_eq!(dt.minute(), 0);
-        assert_eq!(dt.second(), 0);
+        let ts = result.unwrap();
+        let zoned = ts.to_zoned(TimeZone::UTC);
+        assert_eq!(zoned.hour(), 0);
+        assert_eq!(zoned.minute(), 0);
+        assert_eq!(zoned.second(), 0);
     }
 
     #[test]
@@ -326,10 +325,11 @@ mod sysmon_timestamp_tests {
         // End of day timestamp
         let result = parse_sysmon_time("2023-01-15 23:59:59.999999");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.hour(), 23);
-        assert_eq!(dt.minute(), 59);
-        assert_eq!(dt.second(), 59);
+        let ts = result.unwrap();
+        let zoned = ts.to_zoned(TimeZone::UTC);
+        assert_eq!(zoned.hour(), 23);
+        assert_eq!(zoned.minute(), 59);
+        assert_eq!(zoned.second(), 59);
     }
 
     #[test]
@@ -337,10 +337,11 @@ mod sysmon_timestamp_tests {
         // Leap day: February 29, 2024
         let result = parse_sysmon_time("2024-02-29 12:00:00.000000");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.year(), 2024);
-        assert_eq!(dt.month(), 2);
-        assert_eq!(dt.day(), 29);
+        let ts = result.unwrap();
+        let zoned = ts.to_zoned(TimeZone::UTC);
+        assert_eq!(zoned.year(), 2024);
+        assert_eq!(zoned.month(), 2);
+        assert_eq!(zoned.day(), 29);
     }
 
     #[test]
@@ -383,9 +384,9 @@ mod sysmon_timestamp_tests {
         // Verify nanosecond conversion
         let result = parse_sysmon_time("2023-01-15 14:30:45.123456");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        let nanos = dt.timestamp_nanos_opt();
-        assert!(nanos.is_some());
+        let ts = result.unwrap();
+        let nanos = i64::try_from(ts.as_nanosecond());
+        assert!(nanos.is_ok());
     }
 
     #[test]

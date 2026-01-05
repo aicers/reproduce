@@ -1,8 +1,8 @@
-use std::{str::FromStr, sync::OnceLock};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{OpLog, OpLogLevel};
+use jiff::Timestamp;
 use regex::Regex;
 
 fn get_log_regex() -> &'static Regex {
@@ -14,8 +14,8 @@ fn get_log_regex() -> &'static Regex {
     })
 }
 
-fn parse_oplog_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
-    DateTime::from_str(datetime).map_err(|e| anyhow!("{e:?}"))
+fn parse_oplog_timestamp(datetime: &str) -> Result<Timestamp> {
+    datetime.parse().map_err(|e| anyhow!("{e:?}"))
 }
 
 fn parse_log_level(level: &str) -> Result<OpLogLevel> {
@@ -40,9 +40,8 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
         Some(d) => d.as_str(),
         None => bail!("invalid datetime"),
     };
-    let timestamp = parse_oplog_timestamp(datetime)?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")?;
+    let ts = parse_oplog_timestamp(datetime)?;
+    let timestamp = i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")?;
 
     let log = match caps.name("contents") {
         Some(l) => l.as_str(),

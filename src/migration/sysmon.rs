@@ -8,13 +8,11 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 
-use super::{TryFromGigantoRecord, parse_giganto_timestamp};
+use super::{TryFromGigantoRecord, parse_giganto_timestamp_ns};
 
 fn record_timestamp(rec: &StringRecord, idx: usize) -> Result<i64> {
     let timestamp = rec.get(idx).ok_or_else(|| anyhow!("missing timestamp"))?;
-    parse_giganto_timestamp(timestamp)?
-        .timestamp_nanos_opt()
-        .context("failed to convert timestamp to nanoseconds")
+    parse_giganto_timestamp_ns(timestamp)
 }
 
 fn field<'a>(rec: &'a StringRecord, idx: usize, name: &str) -> Result<&'a str> {
@@ -25,12 +23,9 @@ fn parse_string(rec: &StringRecord, idx: usize, name: &str) -> Result<String> {
     Ok(field(rec, idx, name)?.to_string())
 }
 
-fn parse_timestamp(rec: &StringRecord, idx: usize, name: &str) -> Result<i64> {
+fn parse_timestamp_ns(rec: &StringRecord, idx: usize, name: &str) -> Result<i64> {
     let value = field(rec, idx, name)?;
-    parse_giganto_timestamp(value)
-        .with_context(|| format!("invalid {name}"))?
-        .timestamp_nanos_opt()
-        .context("failed to convert timestamp to nanoseconds")
+    parse_giganto_timestamp_ns(value).with_context(|| format!("invalid {name}"))
 }
 
 fn parse_u32(rec: &StringRecord, idx: usize, name: &str) -> Result<u32> {
@@ -129,8 +124,8 @@ impl TryFromGigantoRecord for FileCreationTimeChanged {
         let process_id = parse_u32(rec, 5, "process_id")?;
         let image = parse_string(rec, 6, "image")?;
         let target_filename = parse_string(rec, 7, "target_filename")?;
-        let creation_utc_time = parse_timestamp(rec, 8, "creation_utc_time")?;
-        let previous_creation_utc_time = parse_timestamp(rec, 9, "previous_creation_utc_time")?;
+        let creation_utc_time = parse_timestamp_ns(rec, 8, "creation_utc_time")?;
+        let previous_creation_utc_time = parse_timestamp_ns(rec, 9, "previous_creation_utc_time")?;
         let user = parse_string(rec, 10, "user")?;
 
         Ok((
@@ -281,7 +276,7 @@ impl TryFromGigantoRecord for FileCreate {
         let process_id = parse_u32(rec, 5, "process_id")?;
         let image = parse_string(rec, 6, "image")?;
         let target_filename = parse_string(rec, 7, "target_filename")?;
-        let creation_utc_time = parse_timestamp(rec, 8, "creation_utc_time")?;
+        let creation_utc_time = parse_timestamp_ns(rec, 8, "creation_utc_time")?;
         let user = parse_string(rec, 9, "user")?;
 
         Ok((
@@ -370,7 +365,7 @@ impl TryFromGigantoRecord for FileCreateStreamHash {
         let process_id = parse_u32(rec, 5, "process_id")?;
         let image = parse_string(rec, 6, "image")?;
         let target_filename = parse_string(rec, 7, "target_filename")?;
-        let creation_utc_time = parse_timestamp(rec, 8, "creation_utc_time")?;
+        let creation_utc_time = parse_timestamp_ns(rec, 8, "creation_utc_time")?;
         let hash = parse_vec_field(rec, 9, "hash", ',')?;
         let contents = parse_string(rec, 10, "contents")?;
         let user = parse_string(rec, 11, "user")?;
