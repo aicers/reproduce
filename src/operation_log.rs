@@ -1,8 +1,8 @@
-use std::{str::FromStr, sync::OnceLock};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
 use giganto_client::ingest::log::{OpLog, OpLogLevel};
+use jiff::Timestamp;
 use regex::Regex;
 
 fn get_log_regex() -> &'static Regex {
@@ -14,8 +14,8 @@ fn get_log_regex() -> &'static Regex {
     })
 }
 
-fn parse_oplog_timestamp(datetime: &str) -> Result<DateTime<Utc>> {
-    DateTime::from_str(datetime).map_err(|e| anyhow!("{e:?}"))
+fn parse_oplog_timestamp(datetime: &str) -> Result<Timestamp> {
+    datetime.parse().map_err(|e| anyhow!("{e:?}"))
 }
 
 fn parse_log_level(level: &str) -> Result<OpLogLevel> {
@@ -40,9 +40,8 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
         Some(d) => d.as_str(),
         None => bail!("invalid datetime"),
     };
-    let timestamp = parse_oplog_timestamp(datetime)?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")?;
+    let ts = parse_oplog_timestamp(datetime)?;
+    let timestamp = i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")?;
 
     let log = match caps.name("contents") {
         Some(l) => l.as_str(),
@@ -62,7 +61,7 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use jiff::Timestamp;
 
     use super::{OpLogLevel, log_regex};
 
@@ -84,13 +83,9 @@ mod tests {
         assert!(log_regex(invalid_dt, "agent").is_err());
         assert!(log_regex(invalid_level, "agent").is_err());
         assert!(log_regex(no_contents, "agent").is_err());
-        assert_eq!(
-            dt,
-            Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap()
-        );
+        // 2023-01-02T07:36:17Z in nanoseconds since Unix epoch
+        let expected_ts = Timestamp::new(1_672_644_977, 0).unwrap();
+        assert_eq!(dt, i64::try_from(expected_ts.as_nanosecond()).unwrap());
         assert_eq!(res_info.agent_name, "agent".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));
         assert_eq!(res_info.contents, "infolog".to_string());

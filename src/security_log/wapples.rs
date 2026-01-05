@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::tz::{Offset, TimeZone};
 use regex::Regex;
 
 use super::{DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Wapples};
@@ -17,10 +17,43 @@ fn get_wapples_regex() -> &'static Regex {
 }
 
 fn parse_wapples_timestamp_ns(datetime: &str) -> Result<i64> {
-    DateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+    // Parse the offset from the datetime string (format: "2024-01-02 03:04:05 +0900")
+    let parts: Vec<&str> = datetime.rsplitn(2, ' ').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!("invalid datetime format: {datetime}"));
+    }
+    let offset_str = parts[0];
+    let datetime_part = parts[1];
+
+    // Parse offset like "+0900" or "-0500"
+    let offset_secs = parse_offset_seconds(offset_str)?;
+
+    let civil_dt = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", datetime_part)
+        .map_err(|e| anyhow!("parse error: {e}"))?;
+    let offset = Offset::from_seconds(offset_secs).map_err(|e| anyhow!("invalid offset: {e}"))?;
+    let tz = TimeZone::fixed(offset);
+    let zoned = civil_dt
+        .to_zoned(tz)
+        .map_err(|e| anyhow!("zoned conversion error: {e}"))?;
+    i64::try_from(zoned.timestamp().as_nanosecond()).context("timestamp nanoseconds overflow")
+}
+
+fn parse_offset_seconds(offset_str: &str) -> Result<i32> {
+    if offset_str.len() != 5 {
+        return Err(anyhow!("invalid offset format: {offset_str}"));
+    }
+    let sign = match &offset_str[..1] {
+        "+" => 1,
+        "-" => -1,
+        _ => return Err(anyhow!("invalid offset sign: {offset_str}")),
+    };
+    let hours: i32 = offset_str[1..3]
+        .parse()
+        .map_err(|_| anyhow!("invalid offset hours: {offset_str}"))?;
+    let minutes: i32 = offset_str[3..5]
+        .parse()
+        .map_err(|_| anyhow!("invalid offset minutes: {offset_str}"))?;
+    Ok(sign * (hours * 3600 + minutes * 60))
 }
 
 impl ParseSecurityLog for Wapples {

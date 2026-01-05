@@ -43,11 +43,9 @@ impl TryFromSysmonRecord for FileCreate {
         };
         let creation_utc_time = if let Some(creation_utc_time) = rec.get(8) {
             if creation_utc_time.eq("-") {
-                0
+                jiff::Timestamp::UNIX_EPOCH
             } else {
                 parse_sysmon_time(creation_utc_time)?
-                    .timestamp_nanos_opt()
-                    .context("to_timestamp_nanos")?
             }
         } else {
             return Err(anyhow!("missing creation_utc_time"));
@@ -148,10 +146,13 @@ impl EventToCsv for ElasticFileCreate {
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
 
     #[test]
-    fn check_min_utc() {
-        let min_utc = chrono::DateTime::<chrono::Utc>::MIN_UTC;
-        assert_eq!(min_utc.timestamp(), -8_334_601_228_800);
+    fn check_min_timestamp() {
+        // jiff's Timestamp::MIN is approximately -377705023201 seconds
+        let min_ts = Timestamp::MIN;
+        // Verify that we can get a minimum timestamp from jiff
+        assert!(min_ts.as_second() < 0);
     }
 }

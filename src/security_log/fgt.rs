@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::tz::{Offset, TimeZone};
 use regex::Regex;
 
 use super::{DEFAULT_IPADDR, DEFAULT_PORT, Fgt, PROTO_TCP, ParseSecurityLog, SecurityLogInfo};
@@ -17,10 +17,25 @@ fn get_fgt_regex() -> &'static Regex {
 }
 
 fn parse_fgt_timestamp_ns(date: &str, time: &str, tz: &str) -> Result<i64> {
-    DateTime::parse_from_str(&format!("{date} {time} {tz}"), "%Y-%m-%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+    let datetime_str = format!("{date} {time}");
+    let civil_dt = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", &datetime_str)
+        .map_err(|e| anyhow!("parse error: {e}"))?;
+    // Parse timezone offset like "+0900"
+    let offset_hours: i8 = tz[1..3]
+        .parse()
+        .map_err(|_| anyhow!("invalid offset hours"))?;
+    let offset_mins: i8 = tz[3..5]
+        .parse()
+        .map_err(|_| anyhow!("invalid offset minutes"))?;
+    let sign: i32 = if tz.starts_with('-') { -1 } else { 1 };
+    let offset =
+        Offset::from_seconds(sign * (i32::from(offset_hours) * 3600 + i32::from(offset_mins) * 60))
+            .map_err(|e| anyhow!("invalid offset: {e}"))?;
+    let tz_fixed = TimeZone::fixed(offset);
+    let zoned = civil_dt
+        .to_zoned(tz_fixed)
+        .map_err(|e| anyhow!("zoned conversion error: {e}"))?;
+    i64::try_from(zoned.timestamp().as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
 impl ParseSecurityLog for Fgt {
