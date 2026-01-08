@@ -12,9 +12,8 @@ use super::{TryFromGigantoRecord, parse_giganto_timestamp};
 
 fn record_timestamp(rec: &StringRecord, idx: usize) -> Result<i64> {
     let timestamp = rec.get(idx).ok_or_else(|| anyhow!("missing timestamp"))?;
-    parse_giganto_timestamp(timestamp)?
-        .timestamp_nanos_opt()
-        .context("failed to convert timestamp to nanoseconds")
+    let ts = parse_giganto_timestamp(timestamp)?;
+    i64::try_from(ts.as_nanosecond()).context("failed to convert timestamp to nanoseconds")
 }
 
 fn field<'a>(rec: &'a StringRecord, idx: usize, name: &str) -> Result<&'a str> {
@@ -25,12 +24,10 @@ fn parse_string(rec: &StringRecord, idx: usize, name: &str) -> Result<String> {
     Ok(field(rec, idx, name)?.to_string())
 }
 
-fn parse_timestamp(rec: &StringRecord, idx: usize, name: &str) -> Result<i64> {
+fn parse_timestamp(rec: &StringRecord, idx: usize, name: &str) -> Result<jiff::Timestamp> {
     let value = field(rec, idx, name)?;
     parse_giganto_timestamp(value)
-        .with_context(|| format!("invalid {name}"))?
-        .timestamp_nanos_opt()
-        .context("failed to convert timestamp to nanoseconds")
+        .with_context(|| format!("invalid {name}"))
 }
 
 fn parse_u32(rec: &StringRecord, idx: usize, name: &str) -> Result<u32> {

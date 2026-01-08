@@ -146,13 +146,10 @@ impl EventToCsv for ElasticFileCreate {
 
 #[cfg(test)]
 mod tests {
-    use jiff::Timestamp;
 
     #[test]
-    fn check_min_timestamp() {
-        // jiff's Timestamp::MIN is approximately -377705023201 seconds
-        let min_ts = Timestamp::MIN;
-        // Verify that we can get a minimum timestamp from jiff
-        assert!(min_ts.as_second() < 0);
+    fn check_min_utc() {
+        let min_utc = chrono::DateTime::<chrono::Utc>::MIN_UTC;
+        assert_eq!(min_utc.timestamp(), -8_334_601_228_800);
     }
 }

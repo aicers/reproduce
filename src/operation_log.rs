@@ -61,7 +61,7 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
 
 #[cfg(test)]
 mod tests {
-    use jiff::Timestamp;
+    use chrono::{TimeZone, Utc};
 
     use super::{OpLogLevel, log_regex};
 
@@ -83,9 +83,13 @@ mod tests {
         assert!(log_regex(invalid_dt, "agent").is_err());
         assert!(log_regex(invalid_level, "agent").is_err());
         assert!(log_regex(no_contents, "agent").is_err());
-        // 2023-01-02T07:36:17Z in nanoseconds since Unix epoch
-        let expected_ts = Timestamp::new(1_672_644_977, 0).unwrap();
-        assert_eq!(dt, i64::try_from(expected_ts.as_nanosecond()).unwrap());
+        assert_eq!(
+            dt,
+            Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap()
+        );
         assert_eq!(res_info.agent_name, "agent".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));
         assert_eq!(res_info.contents, "infolog".to_string());

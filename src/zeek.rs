@@ -19,12 +19,30 @@ pub(crate) trait TryFromZeekRecord: Sized {
 pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
     if let Some(i) = timestamp.find('.') {
         let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
-        let micros = timestamp[i + 1..]
-            .parse::<i32>()
-            .context("invalid timestamp")?;
+        let micros_str = &timestamp[i + 1..];
+        let micros_abs = micros_str.parse::<u32>().context("invalid timestamp")?;
+
         // Convert microseconds to nanoseconds
-        let nanos = micros.checked_mul(1000).context("microseconds overflow")?;
-        Timestamp::new(secs, nanos).map_err(|e| anyhow!("failed to create Timestamp: {e}"))
+        let nanos_abs = i32::try_from(micros_abs)
+            .ok()
+            .and_then(|m| m.checked_mul(1000))
+            .context("microseconds overflow")?;
+
+        // For negative timestamps, jiff normalizes differently than chrono
+        // To match chrono's behavior where .timestamp() returns the integer seconds part,
+        // we need to subtract a second and use negative nanoseconds for negative fractional parts
+        let (final_secs, final_nanos) = if secs < 0 && nanos_abs > 0 {
+            // e.g., -1000000.5 should be -1000001 seconds + 500000000 nanos
+            // so that .as_second() rounds towards -infinity giving -1000000
+            // Actually, we want .as_second() to return -1000000 for "-1000000.5"
+            // In jiff, timestamp.as_second() truncates towards zero
+            // So -1000000.5 with as_second() should give -1000000 if properly constructed
+            (secs - 1, 1_000_000_000 - nanos_abs)
+        } else {
+            (secs, nanos_abs)
+        };
+
+        Timestamp::new(final_secs, final_nanos).map_err(|e| anyhow!("failed to create Timestamp: {e}"))
     } else {
         Err(anyhow!("invalid timestamp: {timestamp}"))
     }
@@ -104,11 +122,10 @@ mod zeek_timestamp_tests {
     #[test]
     fn test_parse_zeek_timestamp_negative() {
         // Negative timestamp (before Unix epoch)
-        // jiff normalizes: -1000000.5s becomes -999999 seconds - 500000000 nanos
         let result = parse_zeek_timestamp("-1000000.500000");
         assert!(result.is_ok());
         let ts = result.unwrap();
-        assert_eq!(ts.as_second(), -999_999);
+        assert_eq!(ts.as_second(), -1_000_000);
     }
 
     #[test]

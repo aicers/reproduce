@@ -13,9 +13,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.26.1.
-
-### Changed
-
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
 - Updated `giganto-client` dependency from 0.25.0 to 0.24.0 to align with the
