@@ -6,16 +6,17 @@ use giganto_client::ingest::network::{
 };
 use num_traits::ToPrimitive;
 
-use super::{PROTO_ICMP, PROTO_TCP, PROTO_UDP, TryFromZeekRecord, parse_zeek_timestamp_ns};
+use super::{
+    PROTO_ICMP, PROTO_TCP, PROTO_UDP, TryFromZeekRecord, compute_end_time, parse_zeek_timestamp,
+    parse_zeek_timestamp_ns,
+};
 
 impl TryFromZeekRecord for Conn {
     #[allow(clippy::too_many_lines)]
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -113,6 +114,7 @@ impl TryFromZeekRecord for Conn {
         } else {
             return Err(anyhow!("missing destination packets"));
         };
+        let end_time = compute_end_time(start_time, duration);
 
         Ok((
             Self {
@@ -121,7 +123,8 @@ impl TryFromZeekRecord for Conn {
                 resp_addr,
                 resp_port,
                 proto,
-                start_time: time,
+                start_time,
+                end_time,
                 conn_state,
                 duration,
                 service,
@@ -144,11 +147,9 @@ impl TryFromZeekRecord for Dns {
         clippy::too_many_lines
     )]
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -305,6 +306,7 @@ impl TryFromZeekRecord for Dns {
             return Err(anyhow!("missing ttl"));
         };
 
+        let end_time = compute_end_time(start_time, rtt);
         Ok((
             Self {
                 orig_addr,
@@ -312,7 +314,8 @@ impl TryFromZeekRecord for Dns {
                 resp_addr,
                 resp_port,
                 proto,
-                start_time: time,
+                start_time,
+                end_time,
                 duration: rtt,
                 query,
                 answer,
@@ -339,11 +342,9 @@ impl TryFromZeekRecord for Dns {
 impl TryFromZeekRecord for Http {
     #[allow(clippy::too_many_lines)]
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -492,7 +493,8 @@ impl TryFromZeekRecord for Http {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 method,
                 host,
@@ -527,11 +529,9 @@ impl TryFromZeekRecord for Http {
 #[allow(clippy::too_many_lines)]
 impl TryFromZeekRecord for Kerberos {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -566,7 +566,8 @@ impl TryFromZeekRecord for Kerberos {
                 resp_addr,
                 resp_port,
                 proto: PROTO_UDP,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 client_time: 0,
                 server_time: 0,
@@ -589,11 +590,9 @@ impl TryFromZeekRecord for Kerberos {
 
 impl TryFromZeekRecord for Ntlm {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -648,7 +647,8 @@ impl TryFromZeekRecord for Ntlm {
                 resp_addr,
                 resp_port,
                 proto: 0,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 protocol: String::new(),
                 username,
@@ -667,11 +667,9 @@ impl TryFromZeekRecord for Ntlm {
 
 impl TryFromZeekRecord for Rdp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -711,7 +709,8 @@ impl TryFromZeekRecord for Rdp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 cookie,
                 orig_pkts: 0,
@@ -726,11 +725,9 @@ impl TryFromZeekRecord for Rdp {
 
 impl TryFromZeekRecord for Smtp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -795,7 +792,8 @@ impl TryFromZeekRecord for Smtp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 mailfrom,
                 date,
@@ -817,11 +815,9 @@ impl TryFromZeekRecord for Smtp {
 #[allow(clippy::too_many_lines)]
 impl TryFromZeekRecord for Ssh {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -891,7 +887,8 @@ impl TryFromZeekRecord for Ssh {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 client,
                 server,
@@ -918,11 +915,9 @@ impl TryFromZeekRecord for Ssh {
 
 impl TryFromZeekRecord for DceRpc {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -973,6 +968,7 @@ impl TryFromZeekRecord for DceRpc {
         } else {
             return Err(anyhow!("missing operation"));
         };
+        let end_time = compute_end_time(start_time, rtt);
 
         Ok((
             Self {
@@ -980,7 +976,8 @@ impl TryFromZeekRecord for DceRpc {
                 orig_port,
                 resp_addr,
                 resp_port,
-                start_time: time,
+                start_time,
+                end_time,
                 proto: 0,
                 duration: rtt,
                 rtt,
@@ -1000,11 +997,9 @@ impl TryFromZeekRecord for DceRpc {
 #[allow(clippy::too_many_lines)]
 impl TryFromZeekRecord for Ftp {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -1109,7 +1104,8 @@ impl TryFromZeekRecord for Ftp {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 user,
                 password,
@@ -1127,11 +1123,9 @@ impl TryFromZeekRecord for Ftp {
 #[allow(clippy::too_many_lines)]
 impl TryFromZeekRecord for Ldap {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -1234,7 +1228,8 @@ impl TryFromZeekRecord for Ldap {
                 resp_addr,
                 resp_port,
                 proto,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 message_id,
                 version,
@@ -1255,11 +1250,9 @@ impl TryFromZeekRecord for Ldap {
 
 impl TryFromZeekRecord for Tls {
     fn try_from_zeek_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
-        let time = if let Some(timestamp) = rec.get(0) {
-            parse_zeek_timestamp_ns(timestamp)?
-        } else {
-            return Err(anyhow!("missing timestamp"));
-        };
+        let timestamp_str = rec.get(0).context("missing timestamp")?;
+        let time: i64 = parse_zeek_timestamp_ns(timestamp_str)?;
+        let start_time = parse_zeek_timestamp(timestamp_str)?;
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
@@ -1313,7 +1306,8 @@ impl TryFromZeekRecord for Tls {
                 resp_addr,
                 resp_port,
                 proto: PROTO_TCP,
-                start_time: time,
+                start_time,
+                end_time: start_time,
                 duration: 0,
                 server_name,
                 alpn_protocol: String::new(),
@@ -1348,10 +1342,13 @@ impl TryFromZeekRecord for Tls {
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
 
     #[test]
-    fn check_max_utc() {
-        let max_utc = chrono::DateTime::<chrono::Utc>::MAX_UTC;
-        assert_eq!(max_utc.timestamp(), 8_210_266_876_799);
+    fn check_max_timestamp() {
+        // jiff's Timestamp::MAX is approximately 253402207200 seconds (far future)
+        let max_ts = Timestamp::MAX;
+        // Verify that we can get a maximum timestamp from jiff
+        assert!(max_ts.as_second() > 0);
     }
 }

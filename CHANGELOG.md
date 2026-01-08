@@ -13,6 +13,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.26.1.
+- Migrated from `chrono` to `jiff` crate for datetime handling, providing more
+  ergonomic APIs and better timezone support.
+- Updated `giganto-client` dependency from 0.25.0 to 0.24.0 to align with the
+  jiff migration. This includes API changes where `start_time` fields are now
+  `jiff::Timestamp` type instead of `i64`, and network event structs require a
+  new `end_time` field.
 
 ## [0.23.0] - 2025-11-26
 

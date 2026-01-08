@@ -4,8 +4,8 @@ mod statistics;
 mod templates;
 
 use anyhow::{Result, bail};
-use chrono::DateTime;
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
+use jiff::Timestamp;
 #[allow(clippy::module_name_repetitions)]
 pub(super) use packet::{NetflowHeader, PktBuf};
 pub(super) use statistics::{ProcessStats, Stats};
@@ -123,8 +123,12 @@ impl ParseNetflowDatasets for Netflow9 {
 }
 
 fn netflow_timestamp(unix_secs: u32, nanos: u32) -> i64 {
-    DateTime::from_timestamp(i64::from(unix_secs), nanos)
-        .map_or(0, |t| t.timestamp_nanos_opt().unwrap_or_default())
+    // nanos must be less than 1 billion (0-999999999)
+    if nanos >= 1_000_000_000 {
+        return 0;
+    }
+    Timestamp::new(i64::from(unix_secs), i32::try_from(nanos).unwrap_or(0))
+        .map_or(0, |t| i64::try_from(t.as_nanosecond()).unwrap_or_default())
 }
 
 #[cfg(test)]

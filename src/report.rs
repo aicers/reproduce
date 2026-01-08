@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use bytesize::ByteSize;
-use chrono::{DateTime, Duration, Utc};
+use jiff::{SignedDuration, Timestamp, tz::TimeZone};
 
 use crate::controller::input_type;
 use crate::{Config, InputType};
@@ -17,9 +17,9 @@ pub(crate) struct Report {
     skip_bytes: usize,
     skip_cnt: usize,
     process_cnt: usize,
-    time_start: DateTime<Utc>,
-    time_now: DateTime<Utc>,
-    time_diff: Duration,
+    time_start: Timestamp,
+    time_now: Timestamp,
+    time_diff: SignedDuration,
 }
 
 impl Report {
@@ -34,9 +34,9 @@ impl Report {
             skip_bytes: 0,
             skip_cnt: 0,
             process_cnt: 0,
-            time_start: Utc::now(),
-            time_now: Utc::now(),
-            time_diff: Duration::zero(),
+            time_start: Timestamp::now(),
+            time_now: Timestamp::now(),
+            time_diff: SignedDuration::ZERO,
         }
     }
 
@@ -45,7 +45,7 @@ impl Report {
             return;
         }
 
-        self.time_start = Utc::now();
+        self.time_start = Timestamp::now();
     }
 
     pub(crate) fn process(&mut self, bytes: usize) {
@@ -94,8 +94,8 @@ impl Report {
             .create(true)
             .open(report_path)?;
 
-        self.time_now = Utc::now();
-        self.time_diff = self.time_now - self.time_start;
+        self.time_now = Timestamp::now();
+        self.time_diff = self.time_now.duration_since(self.time_start);
 
         #[allow(clippy::cast_precision_loss)] // approximation is ok
         if self.process_cnt > 0 {
@@ -103,10 +103,11 @@ impl Report {
         }
 
         report_file.write_all(b"--------------------------------------------------\n")?;
+        let time_now_zoned = self.time_now.to_zoned(TimeZone::UTC);
         report_file.write_fmt(format_args!(
             "{:width$}{}\n",
             "Time:",
-            self.time_now,
+            time_now_zoned,
             width = ARRANGE_VAR,
         ))?;
         let input_type = input_type(&self.config.input);
@@ -150,11 +151,14 @@ impl Report {
             ByteSize(self.skip_cnt as u64),
             width = ARRANGE_VAR,
         ))?;
-        #[allow(clippy::cast_precision_loss)] // approximation is okay
+        let elapsed_ms = self.time_diff.as_millis();
+        #[allow(clippy::cast_precision_loss)]
+        // approximation is okay; i128 -> f64 loses precision but that's fine for display
+        let elapsed_sec = elapsed_ms as f64 / 1_000.;
         report_file.write_fmt(format_args!(
             "{:width$}{:.2} sec\n",
             "Elapsed Time:",
-            self.time_diff.num_milliseconds() as f64 / 1_000.,
+            elapsed_sec,
             width = ARRANGE_VAR,
         ))?;
         #[allow(clippy::cast_possible_truncation)] // rounded number
@@ -163,10 +167,7 @@ impl Report {
         report_file.write_fmt(format_args!(
             "{:width$}{}/s\n",
             "Performance:",
-            ByteSize(
-                (processed_bytes as f64 / (self.time_diff.num_milliseconds() as f64 / 1_000.))
-                    .round() as u64
-            ),
+            ByteSize((processed_bytes as f64 / (elapsed_ms as f64 / 1_000.)).round() as u64),
             width = ARRANGE_VAR,
         ))?;
         Ok(())

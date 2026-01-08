@@ -1,8 +1,11 @@
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Datelike, Utc};
 use giganto_client::ingest::log::SecuLog;
+use jiff::{
+    Timestamp,
+    tz::{Offset, TimeZone},
+};
 use regex::Regex;
 
 use super::{ParseSecurityLog, SecurityLogInfo, Ubuntu};
@@ -15,14 +18,18 @@ fn get_ubuntu_regex() -> &'static Regex {
 }
 
 fn parse_ubuntu_timestamp_ns(datetime: &str) -> Result<i64> {
-    let now = Utc::now();
-    DateTime::parse_from_str(
-        &format!("{} {datetime} +0900", now.year()),
-        "%Y %b %d %H:%M:%S %z",
-    )
-    .map_err(|e| anyhow!("{e:?}"))?
-    .timestamp_nanos_opt()
-    .context("to_timestamp_nanos")
+    let now = Timestamp::now().to_zoned(TimeZone::UTC);
+    let year = now.year();
+    let format_str = format!("{year} {datetime}");
+    let civil_dt = jiff::civil::DateTime::strptime("%Y %b %d %H:%M:%S", &format_str)
+        .map_err(|e| anyhow!("parse error: {e}"))?;
+    // +0900 offset
+    let offset = Offset::from_seconds(9 * 3600).map_err(|e| anyhow!("invalid offset: {e}"))?;
+    let tz = TimeZone::fixed(offset);
+    let zoned = civil_dt
+        .to_zoned(tz)
+        .map_err(|e| anyhow!("zoned conversion error: {e}"))?;
+    i64::try_from(zoned.timestamp().as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
 impl ParseSecurityLog for Ubuntu {
@@ -61,46 +68,39 @@ impl ParseSecurityLog for Ubuntu {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Datelike, FixedOffset, TimeZone, Utc};
+    use jiff::tz::{Offset, TimeZone};
 
     use super::*;
+
+    fn expected_nanos(year: i16, month: i8, day: i8, hour: i8, min: i8, sec: i8) -> i64 {
+        let offset = Offset::from_seconds(9 * 3600).unwrap();
+        let tz = TimeZone::fixed(offset);
+        let civil_dt = jiff::civil::DateTime::new(year, month, day, hour, min, sec, 0).unwrap();
+        let zoned = civil_dt.to_zoned(tz).unwrap();
+        i64::try_from(zoned.timestamp().as_nanosecond()).unwrap()
+    }
 
     #[test]
     fn parse_ubuntu_timestamp_ns_returns_expected_nanos() {
         let ns = parse_ubuntu_timestamp_ns("Jan 02 03:04:05").unwrap();
-        let year = Utc::now().year();
-        let expected = FixedOffset::east_opt(9 * 3600)
-            .unwrap()
-            .with_ymd_and_hms(year, 1, 2, 3, 4, 5)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let year = Timestamp::now().to_zoned(TimeZone::UTC).year();
+        let expected = expected_nanos(year, 1, 2, 3, 4, 5);
         assert_eq!(ns, expected);
     }
 
     #[test]
     fn test_parse_ubuntu_timestamp_midnight() {
         let ns = parse_ubuntu_timestamp_ns("Jan 01 00:00:00").unwrap();
-        let year = Utc::now().year();
-        let expected = FixedOffset::east_opt(9 * 3600)
-            .unwrap()
-            .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let year = Timestamp::now().to_zoned(TimeZone::UTC).year();
+        let expected = expected_nanos(year, 1, 1, 0, 0, 0);
         assert_eq!(ns, expected);
     }
 
     #[test]
     fn test_parse_ubuntu_timestamp_end_of_day() {
         let ns = parse_ubuntu_timestamp_ns("Dec 31 23:59:59").unwrap();
-        let year = Utc::now().year();
-        let expected = FixedOffset::east_opt(9 * 3600)
-            .unwrap()
-            .with_ymd_and_hms(year, 12, 31, 23, 59, 59)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let year = Timestamp::now().to_zoned(TimeZone::UTC).year();
+        let expected = expected_nanos(year, 12, 31, 23, 59, 59);
         assert_eq!(ns, expected);
     }
 

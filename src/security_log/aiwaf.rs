@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::tz::{Offset, TimeZone};
 use regex::Regex;
 
 use super::{Aiwaf, DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo};
@@ -17,10 +17,14 @@ fn get_aiwaf_regex() -> &'static Regex {
 }
 
 fn parse_aiwaf_timestamp_ns(datetime: &str) -> Result<i64> {
-    DateTime::parse_from_str(&format!("{datetime} +0900"), "%Y-%m-%d %H:%M:%S %z")
-        .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+    let civil_dt = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", datetime)
+        .map_err(|e| anyhow!("parse error: {e}"))?;
+    let offset = Offset::from_seconds(9 * 3600).map_err(|e| anyhow!("invalid offset: {e}"))?;
+    let tz = TimeZone::fixed(offset);
+    let zoned = civil_dt
+        .to_zoned(tz)
+        .map_err(|e| anyhow!("zoned conversion error: {e}"))?;
+    i64::try_from(zoned.timestamp().as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
 impl ParseSecurityLog for Aiwaf {

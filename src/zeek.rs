@@ -5,8 +5,8 @@ mod tests;
 use std::{fs::File, path::Path};
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Utc};
 use csv::{Reader, ReaderBuilder, StringRecord};
+use jiff::{SignedDuration, Timestamp};
 
 const PROTO_TCP: u8 = 0x06;
 const PROTO_UDP: u8 = 0x11;
@@ -16,25 +16,48 @@ pub(crate) trait TryFromZeekRecord: Sized {
     fn try_from_zeek_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
-pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
     if let Some(i) = timestamp.find('.') {
         let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
-        let micros = timestamp[i + 1..]
-            .parse::<u32>()
-            .context("invalid timestamp")?;
-        let Some(time) = DateTime::from_timestamp(secs, micros * 1000) else {
-            return Err(anyhow!("failed to create DatTime<Utc> from timestamp"));
+        let micros_str = &timestamp[i + 1..];
+        let micros_abs = micros_str.parse::<u32>().context("invalid timestamp")?;
+
+        // Convert microseconds to nanoseconds
+        let nanos_abs = i32::try_from(micros_abs)
+            .ok()
+            .and_then(|m| m.checked_mul(1000))
+            .context("microseconds overflow")?;
+
+        // For negative timestamps, jiff normalizes differently than chrono
+        // To match chrono's behavior where .timestamp() returns the integer seconds part,
+        // we need to subtract a second and use negative nanoseconds for negative fractional parts
+        let (final_secs, final_nanos) = if secs < 0 && nanos_abs > 0 {
+            // e.g., -1000000.5 should be -1000001 seconds + 500000000 nanos
+            // so that .as_second() rounds towards -infinity giving -1000000
+            // Actually, we want .as_second() to return -1000000 for "-1000000.5"
+            // In jiff, timestamp.as_second() truncates towards zero
+            // So -1000000.5 with as_second() should give -1000000 if properly constructed
+            (secs - 1, 1_000_000_000 - nanos_abs)
+        } else {
+            (secs, nanos_abs)
         };
-        Ok(time)
+
+        Timestamp::new(final_secs, final_nanos)
+            .map_err(|e| anyhow!("failed to create Timestamp: {e}"))
     } else {
         Err(anyhow!("invalid timestamp: {timestamp}"))
     }
 }
 
 pub(crate) fn parse_zeek_timestamp_ns(timestamp: &str) -> Result<i64> {
-    parse_zeek_timestamp(timestamp)?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+    let ts = parse_zeek_timestamp(timestamp)?;
+    i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")
+}
+
+fn compute_end_time(start_time: Timestamp, duration_nanos: i64) -> Timestamp {
+    start_time
+        .checked_add(SignedDuration::from_nanos(duration_nanos))
+        .unwrap_or(start_time)
 }
 
 pub(crate) fn open_raw_event_log_file(path: &Path) -> Result<Reader<File>> {
@@ -55,9 +78,9 @@ mod zeek_timestamp_tests {
         // Valid timestamp: 2019-07-02 20:45:21.655728 UTC
         let result = parse_zeek_timestamp("1562093121.655728");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp(), 1_562_093_121);
-        assert_eq!(dt.timestamp_subsec_micros(), 655_728);
+        let ts = result.unwrap();
+        assert_eq!(ts.as_second(), 1_562_093_121);
+        assert_eq!(ts.subsec_microsecond(), 655_728);
     }
 
     #[test]
@@ -65,9 +88,9 @@ mod zeek_timestamp_tests {
         // Timestamp with zero microseconds
         let result = parse_zeek_timestamp("1562093121.000000");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp(), 1_562_093_121);
-        assert_eq!(dt.timestamp_subsec_micros(), 0);
+        let ts = result.unwrap();
+        assert_eq!(ts.as_second(), 1_562_093_121);
+        assert_eq!(ts.subsec_microsecond(), 0);
     }
 
     #[test]
@@ -75,8 +98,8 @@ mod zeek_timestamp_tests {
         // Timestamp with one microsecond
         let result = parse_zeek_timestamp("1562093121.000001");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp_subsec_micros(), 1);
+        let ts = result.unwrap();
+        assert_eq!(ts.subsec_microsecond(), 1);
     }
 
     #[test]
@@ -84,8 +107,8 @@ mod zeek_timestamp_tests {
         // Maximum microseconds (999999)
         let result = parse_zeek_timestamp("1562093121.999999");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp_subsec_micros(), 999_999);
+        let ts = result.unwrap();
+        assert_eq!(ts.subsec_microsecond(), 999_999);
     }
 
     #[test]
@@ -93,8 +116,8 @@ mod zeek_timestamp_tests {
         // Unix epoch
         let result = parse_zeek_timestamp("0.000000");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp(), 0);
+        let ts = result.unwrap();
+        assert_eq!(ts.as_second(), 0);
     }
 
     #[test]
@@ -102,8 +125,8 @@ mod zeek_timestamp_tests {
         // Negative timestamp (before Unix epoch)
         let result = parse_zeek_timestamp("-1000000.500000");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp(), -1_000_000);
+        let ts = result.unwrap();
+        assert_eq!(ts.as_second(), -1_000_000);
     }
 
     #[test]
@@ -139,7 +162,7 @@ mod zeek_timestamp_tests {
         // Microseconds > 999999 will cause overflow when converted to nanoseconds
         // This tests that very large microsecond values are handled
         let result = parse_zeek_timestamp("1562093121.1000000");
-        // This will parse the microseconds as u32, but may fail in timestamp creation
+        // This will parse the microseconds as i32, but may fail in timestamp creation
         // depending on the overflow behavior
         let _ = result; // Just verify it doesn't panic
         assert!(result.is_err());
@@ -150,8 +173,8 @@ mod zeek_timestamp_tests {
         // Y2K timestamp: 2000-01-01 00:00:00 UTC
         let result = parse_zeek_timestamp("946684800.000000");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp(), 946_684_800);
+        let ts = result.unwrap();
+        assert_eq!(ts.as_second(), 946_684_800);
     }
 
     #[test]
@@ -159,8 +182,8 @@ mod zeek_timestamp_tests {
         // Near 32-bit Unix timestamp limit: 2038-01-19 03:14:07 UTC
         let result = parse_zeek_timestamp("2147483647.999999");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        assert_eq!(dt.timestamp(), 2_147_483_647);
+        let ts = result.unwrap();
+        assert_eq!(ts.as_second(), 2_147_483_647);
     }
 
     #[test]
@@ -168,9 +191,9 @@ mod zeek_timestamp_tests {
         // Verify nanosecond conversion
         let result = parse_zeek_timestamp("1562093121.655728");
         assert!(result.is_ok());
-        let dt = result.unwrap();
-        let nanos = dt.timestamp_nanos_opt();
-        assert!(nanos.is_some());
+        let ts = result.unwrap();
+        let nanos = i64::try_from(ts.as_nanosecond());
+        assert!(nanos.is_ok());
         // 1562093121 seconds * 1_000_000_000 + 655728 microseconds * 1000
         assert_eq!(nanos.unwrap(), 1_562_093_121_655_728_000);
     }

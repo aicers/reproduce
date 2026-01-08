@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::tz::{Offset, TimeZone};
 use regex::Regex;
 
 use super::{DEFAULT_IPADDR, Nginx, ParseSecurityLog, SecurityLogInfo};
@@ -17,10 +17,34 @@ fn get_nginx_regex() -> &'static Regex {
 }
 
 fn parse_nginx_timestamp_ns(datetime: &str) -> Result<i64> {
-    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z")
-        .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+    // datetime includes the offset, e.g. "02/Jan/2024:03:04:05 +0900"
+    // We need to parse date/time and offset separately for jiff
+    let parts: Vec<&str> = datetime.rsplitn(2, ' ').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!("invalid datetime format"));
+    }
+    let offset_str = parts[0];
+    let dt_str = parts[1];
+
+    // Parse the offset string like "+0900" to get hours and minutes
+    let offset_hours: i8 = offset_str[1..3]
+        .parse()
+        .map_err(|_| anyhow!("invalid offset hours"))?;
+    let offset_mins: i8 = offset_str[3..5]
+        .parse()
+        .map_err(|_| anyhow!("invalid offset minutes"))?;
+    let sign: i32 = if offset_str.starts_with('-') { -1 } else { 1 };
+    let offset =
+        Offset::from_seconds(sign * (i32::from(offset_hours) * 3600 + i32::from(offset_mins) * 60))
+            .map_err(|e| anyhow!("invalid offset: {e}"))?;
+
+    let civil_dt = jiff::civil::DateTime::strptime("%d/%b/%Y:%H:%M:%S", dt_str)
+        .map_err(|e| anyhow!("parse error: {e}"))?;
+    let tz = TimeZone::fixed(offset);
+    let zoned = civil_dt
+        .to_zoned(tz)
+        .map_err(|e| anyhow!("zoned conversion error: {e}"))?;
+    i64::try_from(zoned.timestamp().as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
 impl ParseSecurityLog for Nginx {
@@ -107,11 +131,11 @@ mod tests {
 
     #[test]
     fn test_parse_nginx_timestamp_invalid_format() {
-        assert!(parse_nginx_timestamp_ns("2023-01-15 12:00:00").is_err());
+        assert!(parse_nginx_timestamp_ns("2023-01-15 12:00:00 +0900").is_err());
     }
 
     #[test]
     fn test_parse_nginx_timestamp_empty() {
-        assert!(parse_nginx_timestamp_ns("").is_err());
+        assert!(parse_nginx_timestamp_ns(" +0900").is_err());
     }
 }

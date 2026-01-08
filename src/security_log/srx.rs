@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
 use super::{DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, Srx, proto_to_u8};
@@ -17,10 +17,9 @@ fn get_srx_regex() -> &'static Regex {
 }
 
 fn parse_srx_timestamp_ns(datetime: &str) -> Result<i64> {
-    DateTime::parse_from_str(datetime, "%Y-%m-%dT%H:%M:%S%.f%z")
-        .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+    // jiff can parse RFC 3339 style timestamps with offsets
+    let ts: Timestamp = datetime.parse().map_err(|e| anyhow!("parse error: {e}"))?;
+    i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
 impl ParseSecurityLog for Srx {
