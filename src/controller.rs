@@ -444,3 +444,214 @@ async fn producer(config: &Config) -> Producer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn input_type_elastic() {
+        // When input string is "elastic", it should return InputType::Elastic
+        let result = input_type("elastic");
+        assert_eq!(result, InputType::Elastic);
+    }
+
+    #[test]
+    fn input_type_directory() {
+        // Create a temporary directory
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path().to_string_lossy().to_string();
+
+        // When input is a directory path, it should return InputType::Dir
+        let result = input_type(&dir_path);
+        assert_eq!(result, InputType::Dir);
+    }
+
+    #[test]
+    fn input_type_file() {
+        // Create a temporary directory and file
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_file.csv");
+        File::create(&file_path).expect("Failed to create temp file");
+
+        // When input is a file path, it should return InputType::Log
+        let result = input_type(&file_path.to_string_lossy());
+        assert_eq!(result, InputType::Log);
+    }
+
+    #[test]
+    fn input_type_nonexistent_path() {
+        // When input is a non-existent path, it should return InputType::Log
+        // (since Path::is_dir() returns false for non-existent paths)
+        let result = input_type("/nonexistent/path/to/file.log");
+        assert_eq!(result, InputType::Log);
+    }
+
+    #[test]
+    fn files_in_dir_returns_all_files() {
+        // Create a temporary directory with multiple files
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Create test files
+        File::create(dir_path.join("a.csv")).expect("Failed to create file");
+        File::create(dir_path.join("b.csv")).expect("Failed to create file");
+        File::create(dir_path.join("c.txt")).expect("Failed to create file");
+
+        // Call files_in_dir without prefix filter
+        let result = files_in_dir(&dir_path.to_string_lossy(), None, &[]);
+
+        // Should return all 3 files
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&dir_path.join("a.csv")));
+        assert!(result.contains(&dir_path.join("b.csv")));
+        assert!(result.contains(&dir_path.join("c.txt")));
+    }
+
+    #[test]
+    fn files_in_dir_prefix_filtering() {
+        // Create a temporary directory with files that have different prefixes
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Create test files with different prefixes
+        File::create(dir_path.join("keep_a.csv")).expect("Failed to create file");
+        File::create(dir_path.join("keep_b.csv")).expect("Failed to create file");
+        File::create(dir_path.join("drop_a.csv")).expect("Failed to create file");
+        File::create(dir_path.join("other.txt")).expect("Failed to create file");
+
+        // Call files_in_dir with prefix filter "keep_"
+        let result = files_in_dir(&dir_path.to_string_lossy(), Some("keep_"), &[]);
+
+        // Should return only files starting with "keep_"
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&dir_path.join("keep_a.csv")));
+        assert!(result.contains(&dir_path.join("keep_b.csv")));
+        assert!(!result.contains(&dir_path.join("drop_a.csv")));
+        assert!(!result.contains(&dir_path.join("other.txt")));
+    }
+
+    #[test]
+    fn files_in_dir_skip_processed_files() {
+        // Create a temporary directory with files
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Create test files
+        File::create(dir_path.join("file1.csv")).expect("Failed to create file");
+        File::create(dir_path.join("file2.csv")).expect("Failed to create file");
+        File::create(dir_path.join("file3.csv")).expect("Failed to create file");
+
+        // Mark file1.csv and file2.csv as already processed
+        let skip = vec![dir_path.join("file1.csv"), dir_path.join("file2.csv")];
+
+        // Call files_in_dir with skip list
+        let result = files_in_dir(&dir_path.to_string_lossy(), None, &skip);
+
+        // Should return only file3.csv
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&dir_path.join("file3.csv")));
+    }
+
+    #[test]
+    fn files_in_dir_empty_directory() {
+        // Create an empty temporary directory
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Call files_in_dir on empty directory
+        let result = files_in_dir(&dir_path.to_string_lossy(), None, &[]);
+
+        // Should return empty vector
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn files_in_dir_prefix_matches_nothing() {
+        // Create a temporary directory with files
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Create test files
+        File::create(dir_path.join("a.csv")).expect("Failed to create file");
+        File::create(dir_path.join("b.csv")).expect("Failed to create file");
+
+        // Call files_in_dir with prefix that matches nothing
+        let result = files_in_dir(&dir_path.to_string_lossy(), Some("nonexistent_"), &[]);
+
+        // Should return empty vector
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn files_in_dir_excludes_directories() {
+        // Create a temporary directory with files and a subdirectory
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Create a file
+        File::create(dir_path.join("file.csv")).expect("Failed to create file");
+
+        // Create a subdirectory
+        std::fs::create_dir(dir_path.join("subdir")).expect("Failed to create subdir");
+
+        // Call files_in_dir
+        let result = files_in_dir(&dir_path.to_string_lossy(), None, &[]);
+
+        // Should return only the file, not the directory
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&dir_path.join("file.csv")));
+    }
+
+    #[test]
+    fn files_in_dir_with_nested_files() {
+        // Create a temporary directory with nested structure
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Create files at root level
+        File::create(dir_path.join("root.csv")).expect("Failed to create file");
+
+        // Create subdirectory with files
+        let subdir = dir_path.join("subdir");
+        std::fs::create_dir(&subdir).expect("Failed to create subdir");
+        File::create(subdir.join("nested.csv")).expect("Failed to create nested file");
+
+        // Call files_in_dir
+        let result = files_in_dir(&dir_path.to_string_lossy(), None, &[]);
+
+        // Should return both files (WalkDir follows into subdirectories)
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&dir_path.join("root.csv")));
+        assert!(result.contains(&subdir.join("nested.csv")));
+    }
+
+    #[test]
+    fn files_in_dir_prefix_filtering_with_skip() {
+        // Test combination of prefix filtering and skip list
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // Create test files
+        File::create(dir_path.join("keep_a.csv")).expect("Failed to create file");
+        File::create(dir_path.join("keep_b.csv")).expect("Failed to create file");
+        File::create(dir_path.join("keep_c.csv")).expect("Failed to create file");
+        File::create(dir_path.join("drop_a.csv")).expect("Failed to create file");
+
+        // Skip one of the "keep_" files
+        let skip = vec![dir_path.join("keep_a.csv")];
+
+        // Call files_in_dir with prefix filter and skip list
+        let result = files_in_dir(&dir_path.to_string_lossy(), Some("keep_"), &skip);
+
+        // Should return only keep_b.csv and keep_c.csv
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&dir_path.join("keep_b.csv")));
+        assert!(result.contains(&dir_path.join("keep_c.csv")));
+        assert!(!result.contains(&dir_path.join("keep_a.csv")));
+    }
+}
