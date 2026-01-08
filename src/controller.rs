@@ -448,6 +448,7 @@ async fn producer(config: &Config) -> Producer {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::path::Path;
 
     use tempfile::tempdir;
 
@@ -657,5 +658,127 @@ mod tests {
         assert!(result.contains(&dir_path.join("keep_b.csv")));
         assert!(result.contains(&dir_path.join("keep_c.csv")));
         assert!(!result.contains(&dir_path.join("keep_a.csv")));
+    }
+
+    /// Helper to extract agent name from filename, replicating the validation
+    /// logic in `run_single`. This panics on invalid formats (no filename,
+    /// non-UTF8, or no dot in filename) and returns `None` for invalid agent
+    /// names.
+    fn validate_agent_filename(filename: &Path) -> Option<&str> {
+        let agent = filename
+            .file_name()
+            .expect("input file name")
+            .to_str()
+            .expect("tostr")
+            .split_once('.')
+            .expect("agent.log")
+            .0;
+        if AGENTS_LIST.contains(&agent) {
+            Some(agent)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn valid_agent_filenames() {
+        // All valid agent names from AGENTS_LIST with .log extension
+        let valid_filenames = [
+            "manager.log",
+            "data_store.log",
+            "sensor.log",
+            "semi_supervised.log",
+            "time_series_generator.log",
+            "unsupervised.log",
+            "ti_container.log",
+        ];
+
+        for filename in valid_filenames {
+            let path = Path::new(filename);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_some(),
+                "Expected valid agent filename: {filename}"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_agent_filenames_with_directory() {
+        // Valid agent filenames with directory paths
+        let valid_paths = [
+            "/var/log/manager.log",
+            "/home/user/logs/data_store.log",
+            "relative/path/sensor.log",
+            "./semi_supervised.log",
+            "../time_series_generator.log",
+        ];
+
+        for path_str in valid_paths {
+            let path = Path::new(path_str);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_some(),
+                "Expected valid agent filename with path: {path_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_agent_name_returns_none() {
+        // Invalid agent names (not in AGENTS_LIST) should return None
+        let invalid_agent_filenames = [
+            "unknown_agent.log",
+            "invalid.log",
+            "test.log",
+            "other_service.log",
+            "agent.log", // "agent" is not in AGENTS_LIST
+        ];
+
+        for filename in invalid_agent_filenames {
+            let path = Path::new(filename);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_none(),
+                "Expected invalid agent name to return None: {filename}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "agent.log")]
+    fn panic_on_filename_without_dot() {
+        // Filenames without a dot should panic with "agent.log" message
+        let path = Path::new("manager_no_extension");
+        let _ = validate_agent_filename(path);
+    }
+
+    #[test]
+    #[should_panic(expected = "input file name")]
+    fn panic_on_empty_path() {
+        // Empty path (root directory) should panic with "input file name"
+        let path = Path::new("/");
+        let _ = validate_agent_filename(path);
+    }
+
+    #[test]
+    fn valid_agent_with_different_extensions() {
+        // Valid agent names with extensions other than .log
+        // The validation only checks the part before the first dot
+        let valid_with_other_ext = [
+            "manager.txt",
+            "sensor.csv",
+            "data_store.json",
+            "unsupervised.log.1", // "unsupervised" before first dot
+        ];
+
+        for filename in valid_with_other_ext {
+            let path = Path::new(filename);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_some(),
+                "Expected valid agent name regardless of extension: {filename}"
+            );
+        }
     }
 }
