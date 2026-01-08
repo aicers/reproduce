@@ -42,7 +42,8 @@ pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
             (secs, nanos_abs)
         };
 
-        Timestamp::new(final_secs, final_nanos).map_err(|e| anyhow!("failed to create Timestamp: {e}"))
+        Timestamp::new(final_secs, final_nanos)
+            .map_err(|e| anyhow!("failed to create Timestamp: {e}"))
     } else {
         Err(anyhow!("invalid timestamp: {timestamp}"))
     }

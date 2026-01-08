@@ -26,8 +26,7 @@ fn parse_string(rec: &StringRecord, idx: usize, name: &str) -> Result<String> {
 
 fn parse_timestamp(rec: &StringRecord, idx: usize, name: &str) -> Result<jiff::Timestamp> {
     let value = field(rec, idx, name)?;
-    parse_giganto_timestamp(value)
-        .with_context(|| format!("invalid {name}"))
+    parse_giganto_timestamp(value).with_context(|| format!("invalid {name}"))
 }
 
 fn parse_u32(rec: &StringRecord, idx: usize, name: &str) -> Result<u32> {
