@@ -111,6 +111,7 @@ where
 mod tests {
     use std::io::Write;
 
+    use config::{File, FileFormat};
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -122,6 +123,29 @@ mod tests {
         file.flush().expect("Failed to flush");
         file
     }
+
+    /// Helper function to build a Config from an in-memory TOML string.
+    fn build_config(toml_str: &str) -> Result<Config, config::ConfigError> {
+        config::Config::builder()
+            .set_default("report", DEFAULT_REPORT_MODE)?
+            .set_default("file.polling_mode", DEFAULT_POLLING_MODE)?
+            .set_default("directory.polling_mode", DEFAULT_POLLING_MODE)?
+            .set_default("file.export_from_giganto", DEFAULT_EXPORT_FROM_GIGANTO)?
+            .add_source(File::from_str(toml_str, FileFormat::Toml))
+            .build()
+            .and_then(config::Config::try_deserialize)
+    }
+
+    // Minimal required TOML for a valid config (required fields only, including kind)
+    const MINIMAL_TOML: &str = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
 
     #[test]
     fn config_new_missing_kind_returns_error() {
@@ -208,5 +232,123 @@ input = "/path/to/file"
         );
         let config = result.unwrap();
         assert_eq!(config.kind, "valid log");
+    }
+
+    #[test]
+    fn default_values_applied() {
+        let config = build_config(MINIMAL_TOML).expect("should parse minimal TOML");
+
+        // Assert default values are correctly applied
+        assert!(!config.report);
+    }
+
+    #[test]
+    fn default_file_polling_mode() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+
+[file]
+"#;
+        let config = build_config(toml).expect("should parse TOML with file section");
+
+        let file = config.file.expect("file section should exist");
+        assert!(!file.polling_mode);
+        assert_eq!(file.export_from_giganto, Some(false));
+    }
+
+    #[test]
+    fn default_directory_polling_mode() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+
+[directory]
+"#;
+        let config = build_config(toml).expect("should parse TOML with directory section");
+
+        let directory = config.directory.expect("directory section should exist");
+        assert!(!directory.polling_mode);
+    }
+
+    #[test]
+    fn socket_addr_ipv4_parses() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let config = build_config(toml).expect("should parse IPv4 socket address");
+
+        assert_eq!(
+            config.giganto_ingest_srv_addr,
+            "127.0.0.1:8080".parse().expect("valid socket addr")
+        );
+    }
+
+    #[test]
+    fn socket_addr_ipv6_parses() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "[::1]:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let config = build_config(toml).expect("should parse IPv6 socket address");
+
+        assert_eq!(
+            config.giganto_ingest_srv_addr,
+            "[::1]:8080".parse().expect("valid socket addr")
+        );
+    }
+
+    #[test]
+    fn socket_addr_missing_port_fails() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let result = build_config(toml);
+        assert!(result.is_err(), "missing port should fail to parse");
+    }
+
+    #[test]
+    fn socket_addr_hostname_fails() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "localhost:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let result = build_config(toml);
+        assert!(
+            result.is_err(),
+            "hostname should fail to parse as socket address"
+        );
     }
 }
