@@ -104,16 +104,16 @@ where
 mod tests {
     use config::{File, FileFormat};
 
-    use crate::Config;
+    use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
 
     /// Helper function to build a Config from an in-memory TOML string.
     fn build_config(toml_str: &str) -> Result<Config, config::ConfigError> {
         config::Config::builder()
             .set_default("kind", String::new())?
-            .set_default("report", false)?
-            .set_default("file.polling_mode", false)?
-            .set_default("directory.polling_mode", false)?
-            .set_default("file.export_from_giganto", false)?
+            .set_default("report", DEFAULT_REPORT_MODE)?
+            .set_default("file.polling_mode", DEFAULT_POLLING_MODE)?
+            .set_default("directory.polling_mode", DEFAULT_POLLING_MODE)?
+            .set_default("file.export_from_giganto", DEFAULT_EXPORT_FROM_GIGANTO)?
             .add_source(File::from_str(toml_str, FileFormat::Toml))
             .build()
             .and_then(config::Config::try_deserialize)
@@ -135,7 +135,7 @@ input = "/path/to/input"
 
         // Assert default values are correctly applied
         assert_eq!(config.kind, "");
-        assert!(!config.report);
+        assert_eq!(config.report, DEFAULT_REPORT_MODE);
     }
 
     #[test]
@@ -153,8 +153,8 @@ input = "/path/to/input"
         let config = build_config(toml).expect("should parse TOML with file section");
 
         let file = config.file.expect("file section should exist");
-        assert!(!file.polling_mode);
-        assert_eq!(file.export_from_giganto, Some(false));
+        assert_eq!(file.polling_mode, DEFAULT_POLLING_MODE);
+        assert_eq!(file.export_from_giganto, Some(DEFAULT_EXPORT_FROM_GIGANTO));
     }
 
     #[test]
@@ -172,7 +172,7 @@ input = "/path/to/input"
         let config = build_config(toml).expect("should parse TOML with directory section");
 
         let directory = config.directory.expect("directory section should exist");
-        assert!(!directory.polling_mode);
+        assert_eq!(directory.polling_mode, DEFAULT_POLLING_MODE);
     }
 
     #[test]
