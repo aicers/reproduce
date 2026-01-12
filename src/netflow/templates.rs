@@ -136,3 +136,115 @@ impl TemplatesBox {
         file.write_all(&buf).context("fail to write templates")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use tempfile::tempdir;
+
+    use super::super::packet::test_utils::netflow9_header_fixture;
+    use super::*;
+
+    #[test]
+    fn templates_missing_returns_not_found_error() {
+        let temp_dir = tempdir().expect("temp dir");
+        let missing_path = temp_dir.path().join("missing_templates.bin");
+        let missing_path = missing_path.to_str().expect("valid temp path");
+
+        let result = TemplatesBox::from_path(missing_path);
+        assert!(result.is_err(), "loading from nonexistent path should fail");
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<std::io::Error>()
+                    .map(std::io::Error::kind),
+                Some(ErrorKind::NotFound)
+            ),
+            "error kind should be NotFound, got: {err}"
+        );
+    }
+
+    #[test]
+    fn templates_invalid_content_returns_deserialize_error() {
+        let temp_dir = tempdir().expect("temp dir");
+        let temp_file = temp_dir.path().join("templates_invalid.bin");
+        let temp_path = temp_file.to_str().expect("valid temp path");
+
+        std::fs::write(temp_path, b"invalid bincode content").expect("write should succeed");
+
+        let result = TemplatesBox::from_path(temp_path);
+        assert!(
+            result.is_err(),
+            "loading invalid content should return error"
+        );
+
+        let err = result.unwrap_err();
+        let err_string = err.to_string();
+        // The error should indicate deserialization failure
+        assert!(
+            err_string.contains("fail to read templates"),
+            "error message should indicate deserialization failure, got: {err_string}"
+        );
+    }
+
+    #[test]
+    fn templates_save_and_load_roundtrip_empty() {
+        let temp_dir = tempdir().expect("temp dir");
+        let temp_file = temp_dir.path().join("templates_roundtrip_empty.bin");
+        let temp_path = temp_file.to_str().expect("valid temp path");
+
+        let templates = TemplatesBox::new();
+        assert!(templates.is_empty());
+
+        templates.save(temp_path).expect("save should succeed");
+        let loaded = TemplatesBox::from_path(temp_path).expect("load should succeed");
+
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn templates_save_and_load_roundtrip_with_template() {
+        let header = netflow9_header_fixture(42);
+        let template = Template {
+            header,
+            template_id: 256,
+            field_count: 1,
+            flow_length: 4,
+            fields: vec![(1, 4)],
+            options_template: false,
+            scope_field_count: 0,
+        };
+        let mut templates = TemplatesBox::new();
+        templates.add(
+            1,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            std::slice::from_ref(&template),
+        );
+
+        let temp_dir = tempdir().expect("temp dir");
+        let temp_file = temp_dir.path().join("templates_roundtrip.bin");
+        let temp_path = temp_file.to_str().expect("valid temp path");
+
+        templates.save(temp_path).expect("save should succeed");
+        let loaded = TemplatesBox::from_path(temp_path).expect("load should succeed");
+
+        let key = (IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 42, 256);
+        let stored = loaded.get(&key).expect("template should be loaded");
+        assert_eq!(stored.template_id, 256);
+    }
+
+    #[test]
+    fn new_templates_box_is_empty() {
+        let templates = TemplatesBox::new();
+        assert!(templates.is_empty());
+    }
+
+    #[test]
+    fn default_templates_box_is_empty() {
+        let templates = TemplatesBox::default();
+        assert!(templates.is_empty());
+    }
+}

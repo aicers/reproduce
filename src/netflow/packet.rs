@@ -641,3 +641,19 @@ impl PktBuf {
             .map_err(|e| anyhow!("fail to parse flag. {e}"))
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use super::Netflow9Header;
+
+    pub(crate) fn netflow9_header_fixture(source_id: u32) -> Netflow9Header {
+        Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 1,
+            source_id,
+        }
+    }
+}
