@@ -114,7 +114,7 @@ mod tests {
     use config::{File, FileFormat};
     use tempfile::NamedTempFile;
 
-    use super::*;
+    use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
 
     fn create_temp_config(content: &str) -> NamedTempFile {
         let mut file = NamedTempFile::with_suffix(".toml").expect("Failed to create temp file");
@@ -239,7 +239,7 @@ input = "/path/to/file"
         let config = build_config(MINIMAL_TOML).expect("should parse minimal TOML");
 
         // Assert default values are correctly applied
-        assert!(!config.report);
+        assert_eq!(config.report, DEFAULT_REPORT_MODE);
     }
 
     #[test]
@@ -258,8 +258,8 @@ input = "/path/to/input"
         let config = build_config(toml).expect("should parse TOML with file section");
 
         let file = config.file.expect("file section should exist");
-        assert!(!file.polling_mode);
-        assert_eq!(file.export_from_giganto, Some(false));
+        assert_eq!(file.polling_mode, DEFAULT_POLLING_MODE);
+        assert_eq!(file.export_from_giganto, Some(DEFAULT_EXPORT_FROM_GIGANTO));
     }
 
     #[test]
@@ -278,7 +278,7 @@ input = "/path/to/input"
         let config = build_config(toml).expect("should parse TOML with directory section");
 
         let directory = config.directory.expect("directory section should exist");
-        assert!(!directory.polling_mode);
+        assert_eq!(directory.polling_mode, DEFAULT_POLLING_MODE);
     }
 
     #[test]
