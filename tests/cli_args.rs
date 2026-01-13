@@ -7,8 +7,6 @@
 //! - Version flag (-V, --version)
 
 use assert_cmd::Command;
-#[allow(deprecated)]
-use assert_cmd::cargo::cargo_bin;
 use predicates::prelude::*;
 
 /// Returns the package version from Cargo.toml at compile time.
@@ -16,8 +14,7 @@ const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Helper function to create a `Command` for the binary under test.
 fn reproduce_cmd() -> Command {
-    #[allow(deprecated)]
-    Command::new(cargo_bin("reproduce"))
+    assert_cmd::cargo::cargo_bin_cmd!()
 }
 
 /// Tests that running with `-h` flag prints help information and exits
