@@ -15,6 +15,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.26.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
+- Timestamp parsing functions now reject negative timestamp values (before
+  Unix epoch). Affected functions: `parse_giganto_timestamp`,
+  `parse_zeek_timestamp`, and `parse_oplog_timestamp`.
 
 ### Fixed
 

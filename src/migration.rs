@@ -13,9 +13,21 @@ pub(crate) trait TryFromGigantoRecord: Sized {
     fn try_from_giganto_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
+/// Parses a giganto timestamp in the format `{seconds}.{nanoseconds}`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The timestamp format is invalid (missing decimal point)
+/// * The seconds or nanoseconds part cannot be parsed as a number
+/// * The timestamp value is negative (before Unix epoch)
+/// * The timestamp cannot be converted to a valid `Timestamp`
 fn parse_giganto_timestamp(timestamp: &str) -> Result<Timestamp> {
     if let Some(i) = timestamp.find('.') {
         let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
+        if secs < 0 {
+            return Err(anyhow!("negative timestamp not allowed: {timestamp}"));
+        }
         let nanos = timestamp[i + 1..]
             .parse::<i32>()
             .context("invalid timestamp")?;
@@ -83,6 +95,12 @@ mod giganto_timestamp_tests {
         let ts = parse_giganto_timestamp("0.000000000").unwrap();
         assert_eq!(ts.as_second(), 0);
         assert_eq!(ts.subsec_nanosecond(), 0);
+    }
+
+    #[test]
+    fn parse_giganto_timestamp_negative_rejected() {
+        assert!(parse_giganto_timestamp("-1000000.500000000").is_err());
+        assert!(parse_giganto_timestamp("-1.000000000").is_err());
     }
 
     #[test]

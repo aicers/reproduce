@@ -16,12 +16,24 @@ pub(crate) trait TryFromZeekRecord: Sized {
     fn try_from_zeek_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
+/// Parses a Zeek timestamp in the format `{seconds}.{microseconds}`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The timestamp format is invalid (missing decimal point)
+/// * The seconds or microseconds part cannot be parsed as a number
+/// * The timestamp value is negative (before Unix epoch)
+/// * The timestamp cannot be converted to a valid `Timestamp`
 pub(crate) fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
     let (secs_str, micros_str) = timestamp
         .split_once('.')
         .ok_or_else(|| anyhow!("invalid timestamp: {timestamp}"))?;
 
     let secs: i64 = secs_str.parse().context("invalid timestamp")?;
+    if secs < 0 {
+        return Err(anyhow!("negative timestamp not allowed: {timestamp}"));
+    }
     let micros: u32 = micros_str.parse().context("invalid timestamp")?;
 
     let nanos: i32 = i32::try_from(micros)
@@ -95,6 +107,13 @@ mod zeek_timestamp_tests {
         assert!(result.is_ok());
         let ts = result.unwrap();
         assert_eq!(ts.as_second(), 0);
+    }
+
+    #[test]
+    fn test_parse_zeek_timestamp_negative_rejected() {
+        // Negative timestamps (before Unix epoch) are rejected
+        assert!(parse_zeek_timestamp("-1000000.500000").is_err());
+        assert!(parse_zeek_timestamp("-1.000000").is_err());
     }
 
     #[test]

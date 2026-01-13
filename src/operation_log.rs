@@ -14,8 +14,19 @@ fn get_log_regex() -> &'static Regex {
     })
 }
 
+/// Parses an operation log timestamp in ISO 8601 format.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The timestamp format is invalid
+/// * The timestamp value is negative (before Unix epoch)
 fn parse_oplog_timestamp(datetime: &str) -> Result<Timestamp> {
-    datetime.parse().map_err(|e| anyhow!("{e:?}"))
+    let ts: Timestamp = datetime.parse().map_err(|e| anyhow!("{e:?}"))?;
+    if ts.as_second() < 0 {
+        return Err(anyhow!("negative timestamp not allowed: {datetime}"));
+    }
+    Ok(ts)
 }
 
 fn parse_log_level(level: &str) -> Result<OpLogLevel> {
@@ -63,7 +74,7 @@ pub(crate) fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::{OpLogLevel, log_regex};
+    use super::{OpLogLevel, log_regex, parse_oplog_timestamp};
 
     #[test]
     fn parse_oplog() {
@@ -104,5 +115,18 @@ mod tests {
         assert!(matches!(res_error.log_level, OpLogLevel::Error));
         assert_eq!(res_error.contents, "errorlog".to_string());
         assert_eq!(res_error.sensor, String::new());
+    }
+
+    #[test]
+    fn parse_oplog_timestamp_negative_rejected() {
+        // Negative timestamps (before Unix epoch) are rejected
+        assert!(parse_oplog_timestamp("1969-12-31T23:59:59Z").is_err());
+        assert!(parse_oplog_timestamp("1960-01-01T00:00:00Z").is_err());
+    }
+
+    #[test]
+    fn parse_oplog_timestamp_epoch_accepted() {
+        // Unix epoch (0) should be accepted
+        assert!(parse_oplog_timestamp("1970-01-01T00:00:00Z").is_ok());
     }
 }
