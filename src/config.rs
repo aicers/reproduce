@@ -111,7 +111,6 @@ where
 mod tests {
     use std::io::Write;
 
-    use config::{File, FileFormat};
     use tempfile::NamedTempFile;
 
     use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
@@ -122,18 +121,6 @@ mod tests {
             .expect("Failed to write config");
         file.flush().expect("Failed to flush");
         file
-    }
-
-    /// Helper function to build a Config from an in-memory TOML string.
-    fn build_config(toml_str: &str) -> Result<Config, config::ConfigError> {
-        config::Config::builder()
-            .set_default("report", DEFAULT_REPORT_MODE)?
-            .set_default("file.polling_mode", DEFAULT_POLLING_MODE)?
-            .set_default("directory.polling_mode", DEFAULT_POLLING_MODE)?
-            .set_default("file.export_from_giganto", DEFAULT_EXPORT_FROM_GIGANTO)?
-            .add_source(File::from_str(toml_str, FileFormat::Toml))
-            .build()
-            .and_then(config::Config::try_deserialize)
     }
 
     // Minimal required TOML for a valid config (required fields only, including kind)
@@ -236,7 +223,14 @@ input = "/path/to/file"
 
     #[test]
     fn default_values_applied() {
-        let config = build_config(MINIMAL_TOML).expect("should parse minimal TOML");
+        let mut file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("should create temp file");
+        file.write_all(MINIMAL_TOML.as_bytes())
+            .expect("should write to temp file");
+
+        let config = Config::new(file.path()).expect("should parse minimal TOML");
 
         // Assert default values are correctly applied
         assert_eq!(config.report, DEFAULT_REPORT_MODE);
@@ -255,11 +249,21 @@ input = "/path/to/input"
 
 [file]
 "#;
-        let config = build_config(toml).expect("should parse TOML with file section");
+        let mut file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("should create temp file");
+        file.write_all(toml.as_bytes())
+            .expect("should write to temp file");
 
-        let file = config.file.expect("file section should exist");
-        assert_eq!(file.polling_mode, DEFAULT_POLLING_MODE);
-        assert_eq!(file.export_from_giganto, Some(DEFAULT_EXPORT_FROM_GIGANTO));
+        let config = Config::new(file.path()).expect("should parse TOML with file section");
+
+        let file_section = config.file.expect("file section should exist");
+        assert_eq!(file_section.polling_mode, DEFAULT_POLLING_MODE);
+        assert_eq!(
+            file_section.export_from_giganto,
+            Some(DEFAULT_EXPORT_FROM_GIGANTO)
+        );
     }
 
     #[test]
@@ -275,7 +279,14 @@ input = "/path/to/input"
 
 [directory]
 "#;
-        let config = build_config(toml).expect("should parse TOML with directory section");
+        let mut file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("should create temp file");
+        file.write_all(toml.as_bytes())
+            .expect("should write to temp file");
+
+        let config = Config::new(file.path()).expect("should parse TOML with directory section");
 
         let directory = config.directory.expect("directory section should exist");
         assert_eq!(directory.polling_mode, DEFAULT_POLLING_MODE);
@@ -292,7 +303,14 @@ giganto_name = "test"
 kind = "log"
 input = "/path/to/input"
 "#;
-        let config = build_config(toml).expect("should parse IPv4 socket address");
+        let mut file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("should create temp file");
+        file.write_all(toml.as_bytes())
+            .expect("should write to temp file");
+
+        let config = Config::new(file.path()).expect("should parse IPv4 socket address");
 
         assert_eq!(
             config.giganto_ingest_srv_addr,
@@ -311,7 +329,14 @@ giganto_name = "test"
 kind = "log"
 input = "/path/to/input"
 "#;
-        let config = build_config(toml).expect("should parse IPv6 socket address");
+        let mut file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("should create temp file");
+        file.write_all(toml.as_bytes())
+            .expect("should write to temp file");
+
+        let config = Config::new(file.path()).expect("should parse IPv6 socket address");
 
         assert_eq!(
             config.giganto_ingest_srv_addr,
@@ -330,7 +355,14 @@ giganto_name = "test"
 kind = "log"
 input = "/path/to/input"
 "#;
-        let result = build_config(toml);
+        let mut file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("should create temp file");
+        file.write_all(toml.as_bytes())
+            .expect("should write to temp file");
+
+        let result = Config::new(file.path());
         assert!(result.is_err(), "missing port should fail to parse");
     }
 
@@ -345,7 +377,14 @@ giganto_name = "test"
 kind = "log"
 input = "/path/to/input"
 "#;
-        let result = build_config(toml);
+        let mut file = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("should create temp file");
+        file.write_all(toml.as_bytes())
+            .expect("should write to temp file");
+
+        let result = Config::new(file.path());
         assert!(
             result.is_err(),
             "hostname should fail to parse as socket address"
