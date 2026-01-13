@@ -259,7 +259,7 @@ impl Controller {
                         .to_str()
                         .expect("tostr")
                         .split_once('.')
-                        .expect("filename must contain '.'")
+                        .expect("filename must have an extension")
                         .0;
                     if !AGENTS_LIST.contains(&agent) {
                         bail!("invalid agent name `{agent}.log`");
@@ -671,7 +671,7 @@ mod tests {
             .to_str()
             .expect("tostr")
             .split_once('.')
-            .expect("filename must contain '.'")
+            .expect("filename must have an extension")
             .0;
         if AGENTS_LIST.contains(&agent) {
             Some(agent)
@@ -746,9 +746,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "filename must contain '.'")]
+    #[should_panic(expected = "filename must have an extension")]
     fn panic_on_filename_without_dot() {
-        // Filenames without a dot should panic
+        // Filenames without an extension should panic
         let path = Path::new("manager_no_extension");
         let _ = validate_agent_filename(path);
     }
