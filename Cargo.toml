@@ -43,7 +43,7 @@ walkdir = "2"
 chrono = "0.4"
 assert_cmd = "2"
 predicates = "3"
-tempfile = "3"
+tempfile = "3.24.0"
 
 [lints.clippy]
 pedantic = "warn"

@@ -183,6 +183,7 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::net::SocketAddr;
 
     use tempfile::NamedTempFile;
 
@@ -207,6 +208,24 @@ report = {report_enabled}
             .expect("Failed to write config");
         file.flush().expect("Failed to flush");
         Config::new(file.path()).expect("Failed to create config")
+    }
+
+    /// Creates a test `Config` with the given parameters.
+    fn test_config(report: bool, kind: &str, input: &str) -> Config {
+        Config {
+            cert: String::new(),
+            key: String::new(),
+            ca_certs: vec![],
+            giganto_ingest_srv_addr: "127.0.0.1:8080".parse::<SocketAddr>().expect("valid addr"),
+            giganto_name: String::from("test"),
+            kind: String::from(kind),
+            input: String::from(input),
+            report,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        }
     }
 
     #[test]
@@ -250,5 +269,211 @@ report = {report_enabled}
         report.skip(200);
         assert_eq!(report.skip_bytes, 300);
         assert_eq!(report.skip_cnt, 2);
+    }
+
+    #[test]
+    fn report_false_avoids_file_writes() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let temp_path = temp_dir.path();
+
+        // Create config with report=false and input as a file path (InputType::Log)
+        let input_file = temp_path.join("test.log");
+        std::fs::write(&input_file, "test content").expect("failed to write input file");
+
+        let config = test_config(false, "test_kind", input_file.to_str().expect("valid path"));
+        let mut report = Report::new(config);
+
+        // Call start, process some bytes, and end
+        report.start();
+        report.process(100);
+        report.process(200);
+        let result = report.end();
+
+        // end() should succeed without writing files
+        assert!(result.is_ok());
+
+        // Verify no report file was created in the temp directory
+        let report_file = temp_path.join("test_kind.report");
+        assert!(
+            !report_file.exists(),
+            "Report file should not be created when report=false"
+        );
+
+        // Also check that no files were created with the report name pattern anywhere
+        let files: Vec<_> = std::fs::read_dir(temp_path)
+            .expect("failed to read temp dir")
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".report"))
+            .collect();
+        assert!(
+            files.is_empty(),
+            "No .report files should be created when report=false"
+        );
+    }
+
+    #[test]
+    fn report_false_does_not_update_time_start() {
+        let config = test_config(false, "test_kind", "test.log");
+        let mut report = Report::new(config);
+
+        let initial_time = report.time_start;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        report.start();
+
+        // When report=false, start() returns early without updating time_start
+        assert_eq!(
+            report.time_start, initial_time,
+            "time_start should not be updated when report=false"
+        );
+    }
+
+    #[test]
+    fn report_false_does_not_update_counters() {
+        let config = test_config(false, "test_kind", "test.log");
+        let mut report = Report::new(config);
+
+        // Call process with some bytes
+        report.process(100);
+        report.process(200);
+
+        // When report=false, counters should remain at initial values
+        assert_eq!(
+            report.sum_bytes, 0,
+            "sum_bytes should not be updated when report=false"
+        );
+        assert_eq!(
+            report.process_cnt, 0,
+            "process_cnt should not be updated when report=false"
+        );
+        assert_eq!(
+            report.min_bytes, 0,
+            "min_bytes should not be updated when report=false"
+        );
+        assert_eq!(
+            report.max_bytes, 0,
+            "max_bytes should not be updated when report=false"
+        );
+    }
+
+    #[test]
+    fn byte_accounting_for_log_input() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let temp_path = temp_dir.path();
+
+        // Create a log file to ensure InputType::Log is used
+        let input_file = temp_path.join("test.log");
+        std::fs::write(&input_file, "test content").expect("failed to write input file");
+
+        let config = test_config(true, "test_kind", input_file.to_str().expect("valid path"));
+        let mut report = Report::new(config);
+
+        report.start();
+
+        // Process known byte amounts
+        // Line 1: 50 bytes
+        // Line 2: 100 bytes
+        // Line 3: 150 bytes
+        report.process(50);
+        report.process(100);
+        report.process(150);
+
+        // Verify byte counters are correctly updated
+        assert_eq!(
+            report.sum_bytes, 300,
+            "sum_bytes should be 50 + 100 + 150 = 300"
+        );
+        assert_eq!(report.process_cnt, 3, "process_cnt should be 3");
+        // Note: max_bytes is updated on first call (50 > 0), then min_bytes is set
+        // on second call (100 < 50 is false but min_bytes == 0 is false after first
+        // value set it). Actually on first call: 50 > 0 so max_bytes = 50, else if
+        // not executed. On second call: 100 > 50 so max_bytes = 100, else if not
+        // executed. Third call: 150 > 100 so max_bytes = 150.
+        // min_bytes remains 0 because the condition is else-if and max is always
+        // updated when value > current max (which starts at 0).
+        // This is the existing production behavior.
+        assert_eq!(report.max_bytes, 150, "max_bytes should be 150");
+
+        // For InputType::Log, the processed_bytes calculation adds 1 byte per line
+        // for the newline character: sum_bytes + process_cnt = 300 + 3 = 303
+        let expected_processed_bytes = (report.sum_bytes + report.process_cnt) as u64;
+        assert_eq!(
+            expected_processed_bytes, 303,
+            "processed_bytes for Log should include 1 byte per line for newlines"
+        );
+    }
+
+    #[test]
+    fn byte_accounting_min_max_tracking() {
+        let config = test_config(true, "test_kind", "test.log");
+        let mut report = Report::new(config);
+
+        report.start();
+
+        // The production logic is:
+        //   if process_cnt == 0 { min_bytes = bytes; max_bytes = bytes }
+        //   else if bytes > max_bytes { max_bytes = bytes }
+        //   else if bytes < min_bytes { min_bytes = bytes }
+        //
+        // This means:
+        // - First call with 100: min/max both set to 100
+        // - Second call with 50: min updated to 50
+        // - Third call with 200: max updated to 200
+        // - Fourth call with 75: no update (between min/max)
+
+        report.process(100);
+        // First call: min/max set to 100
+        assert_eq!(
+            report.max_bytes, 100,
+            "max_bytes should be 100 after first call"
+        );
+        assert_eq!(
+            report.min_bytes, 100,
+            "min_bytes should be 100 after first call"
+        );
+
+        report.process(50);
+        // Second call: min updated to 50
+        assert_eq!(
+            report.min_bytes, 50,
+            "min_bytes should be 50 after second call"
+        );
+        assert_eq!(report.max_bytes, 100, "max_bytes should remain 100");
+
+        report.process(200);
+        // Third call: max updated to 200
+        assert_eq!(report.min_bytes, 50, "min_bytes should remain 50");
+        assert_eq!(report.max_bytes, 200, "max_bytes should be updated to 200");
+
+        report.process(75);
+        // Fourth call: no update
+        assert_eq!(report.min_bytes, 50, "min_bytes should remain 50");
+        assert_eq!(report.max_bytes, 200, "max_bytes should remain 200");
+    }
+
+    #[test]
+    fn byte_accounting_average_calculation() {
+        let config = test_config(true, "test_kind", "test.log");
+        let mut report = Report::new(config);
+
+        report.start();
+
+        // Process bytes: 100 + 200 + 300 = 600 total, 3 entries
+        report.process(100);
+        report.process(200);
+        report.process(300);
+
+        assert_eq!(report.sum_bytes, 600, "sum_bytes should be 600");
+        assert_eq!(report.process_cnt, 3, "process_cnt should be 3");
+
+        // avg_bytes is calculated in end(), verify the expected formula
+        // Note: avg_bytes is not updated until end() is called
+        // Here we verify the formula: sum_bytes / process_cnt = 600 / 3 = 200.0
+        #[allow(clippy::cast_precision_loss)]
+        let expected_avg = report.sum_bytes as f64 / report.process_cnt as f64;
+        assert!(
+            (expected_avg - 200.0).abs() < f64::EPSILON,
+            "expected average should be 200.0"
+        );
     }
 }
