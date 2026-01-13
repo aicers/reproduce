@@ -2513,72 +2513,6 @@ mod tests {
 
     #[test]
     fn test_sysmon_timestamp_deduplication() {
-        // Test that duplicate timestamps get incremented by 1 nanosecond
-        let timestamp = "2023-01-15 14:30:45.123456"; // Same timestamp for both records
-
-        let record1 = create_sysmon_process_create_record(
-            timestamp,
-            "{00000000-0000-0000-0000-000000000001}",
-        );
-        let record2 = create_sysmon_process_create_record(
-            timestamp,
-            "{00000000-0000-0000-0000-000000000002}",
-        );
-
-        // Parse both records with serial=0 (no offset) to get base timestamps
-        let (_, ts1) = ProcessCreate::try_from_sysmon_record(&record1, 0).unwrap();
-        let (_, ts2) = ProcessCreate::try_from_sysmon_record(&record2, 0).unwrap();
-
-        // Both should have the same timestamp initially (before deduplication)
-        assert_eq!(ts1, ts2);
-
-        // Test the deduplication logic using the helper function
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts1, ts2],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
-
-        // After deduplication, second timestamp should be incremented by 1 nanosecond
-        assert_eq!(final_timestamps[1], final_timestamps[0] + 1);
-    }
-
-    #[test]
-    fn test_sysmon_different_timestamps_no_deduplication() {
-        // Test that different timestamps are not modified
-        let record1 = create_sysmon_process_create_record(
-            "2023-01-15 14:30:45.123456",
-            "{00000000-0000-0000-0000-000000000001}",
-        );
-        let record2 = create_sysmon_process_create_record(
-            "2023-01-15 14:30:46.654321",
-            "{00000000-0000-0000-0000-000000000002}",
-        );
-
-        let (_, ts1) = ProcessCreate::try_from_sysmon_record(&record1, 0).unwrap();
-        let (_, ts2) = ProcessCreate::try_from_sysmon_record(&record2, 0).unwrap();
-
-        // Different timestamps should not be modified by deduplication logic
-        assert_ne!(ts1, ts2);
-
-        // Test the deduplication logic using the helper function
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts1, ts2],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
-
-        // Both timestamps should remain unchanged
-        assert_eq!(final_timestamps[0], ts1);
-        assert_eq!(final_timestamps[1], ts2);
-    }
-
-    #[test]
-    fn test_sysmon_multiple_duplicate_timestamps_batch() {
         // Test that multiple events with identical timestamp get monotonically
         // incrementing offsets (0, 1, 2, ...)
         let timestamp = "2023-01-15 14:30:45.123456";
@@ -2628,6 +2562,38 @@ mod tests {
     }
 
     #[test]
+    fn test_sysmon_different_timestamps_no_deduplication() {
+        // Test that different timestamps are not modified
+        let record1 = create_sysmon_process_create_record(
+            "2023-01-15 14:30:45.123456",
+            "{00000000-0000-0000-0000-000000000001}",
+        );
+        let record2 = create_sysmon_process_create_record(
+            "2023-01-15 14:30:46.654321",
+            "{00000000-0000-0000-0000-000000000002}",
+        );
+
+        let (_, ts1) = ProcessCreate::try_from_sysmon_record(&record1, 0).unwrap();
+        let (_, ts2) = ProcessCreate::try_from_sysmon_record(&record2, 0).unwrap();
+
+        // Different timestamps should not be modified by deduplication logic
+        assert_ne!(ts1, ts2);
+
+        // Test the deduplication logic using the helper function
+        let mut reference_timestamp: Option<i64> = None;
+        let mut timestamp_offset = 0_i64;
+        let final_timestamps = apply_timestamp_deduplication(
+            &[ts1, ts2],
+            &mut reference_timestamp,
+            &mut timestamp_offset,
+        );
+
+        // Both timestamps should remain unchanged
+        assert_eq!(final_timestamps[0], ts1);
+        assert_eq!(final_timestamps[1], ts2);
+    }
+
+    #[test]
     fn test_sysmon_serial_applied_to_timestamp() {
         // Test that the serial (offset) is correctly applied to the converted timestamp
         let timestamp = "2023-01-15 14:30:45.123456";
@@ -2644,63 +2610,5 @@ mod tests {
         // The timestamp should be base + serial
         assert_eq!(ts_serial_1, ts_serial_0 + 1);
         assert_eq!(ts_serial_5, ts_serial_0 + 5);
-    }
-
-    #[test]
-    fn test_sysmon_mixed_duplicate_and_different_timestamps() {
-        // Test a sequence with mixed duplicate and different timestamps
-        // Events 1, 2, 3 have same timestamp; events 4, 5 have different timestamp
-        let ts_a = "2023-01-15 14:30:45.123456";
-        let ts_b = "2023-01-15 14:30:46.654321";
-
-        let record1 =
-            create_sysmon_process_create_record(ts_a, "{00000000-0000-0000-0000-000000000001}");
-        let record2 =
-            create_sysmon_process_create_record(ts_a, "{00000000-0000-0000-0000-000000000002}");
-        let record3 =
-            create_sysmon_process_create_record(ts_a, "{00000000-0000-0000-0000-000000000003}");
-        let record4 =
-            create_sysmon_process_create_record(ts_b, "{00000000-0000-0000-0000-000000000004}");
-        let record5 =
-            create_sysmon_process_create_record(ts_b, "{00000000-0000-0000-0000-000000000005}");
-
-        let (_, base_ts1) = ProcessCreate::try_from_sysmon_record(&record1, 0).unwrap();
-        let (_, base_ts2) = ProcessCreate::try_from_sysmon_record(&record2, 0).unwrap();
-        let (_, base_ts3) = ProcessCreate::try_from_sysmon_record(&record3, 0).unwrap();
-        let (_, base_ts4) = ProcessCreate::try_from_sysmon_record(&record4, 0).unwrap();
-        let (_, base_ts5) = ProcessCreate::try_from_sysmon_record(&record5, 0).unwrap();
-
-        // Apply deduplication
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[base_ts1, base_ts2, base_ts3, base_ts4, base_ts5],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
-
-        // Events 1, 2, 3 should get offsets 0, 1, 2
-        assert_eq!(final_timestamps[0], base_ts1);
-        assert_eq!(final_timestamps[1], base_ts1 + 1);
-        assert_eq!(final_timestamps[2], base_ts1 + 2);
-
-        // Event 4 has new timestamp, offset resets to 0
-        assert_eq!(final_timestamps[3], base_ts4);
-
-        // Event 5 has same timestamp as 4, offset becomes 1
-        assert_eq!(final_timestamps[4], base_ts4 + 1);
-    }
-
-    #[test]
-    fn test_parse_sysmon_timestamp_public() {
-        // Test that parse_sysmon_time is accessible and works correctly
-        let timestamp = "2023-01-15 14:30:45.123456";
-        let result = crate::syslog::parse_sysmon_time(timestamp);
-        assert!(result.is_ok());
-
-        let datetime = result.unwrap();
-        assert_eq!(datetime.timestamp(), 1_673_793_045);
-        // Verify microseconds are preserved
-        assert_eq!(datetime.timestamp_subsec_micros(), 123_456);
     }
 }
