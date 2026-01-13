@@ -2372,12 +2372,30 @@ impl<B: BufRead> Iterator for BinaryLines<B> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        io::Write,
+        net::{IpAddr, Ipv6Addr, SocketAddr},
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use csv::{ReaderBuilder, StringRecord};
-    use giganto_client::ingest::network::Conn;
-    use giganto_client::ingest::sysmon::ProcessCreate;
+    use giganto_client::{
+        RawEventKind, connection::server_handshake, ingest::network::Conn,
+        ingest::sysmon::ProcessCreate,
+    };
+    use quinn::{Endpoint, ServerConfig, crypto::rustls::QuicServerConfig};
 
     use super::*;
     use crate::syslog::TryFromSysmonRecord;
+
+    const TEST_CERT_PATH: &str = "tests/cert.pem";
+    const TEST_KEY_PATH: &str = "tests/key.pem";
+    const TEST_ROOT_PATH: &str = "tests/root.pem";
+    const TEST_SERVER_NAME: &str = "localhost";
+    type TestServerHandle = tokio::task::JoinHandle<(RawEventKind, Vec<(i64, Vec<u8>)>)>;
+    type TestServer = (SocketAddr, TestServerHandle);
 
     fn create_zeek_record(timestamp: &str, uid: &str) -> StringRecord {
         let data = format!(
@@ -2414,6 +2432,88 @@ mod tests {
                 ts + *timestamp_offset
             })
             .collect()
+    }
+
+    fn test_server_config() -> ServerConfig {
+        let cert_pem = fs::read(TEST_CERT_PATH).expect("read cert");
+        let key_pem = fs::read(TEST_KEY_PATH).expect("read key");
+
+        let cert_chain = rustls_pemfile::certs(&mut &*cert_pem)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("invalid PEM-encoded certificate");
+        let key = rustls_pemfile::private_key(&mut &*key_pem)
+            .expect("malformed private key")
+            .expect("no private key found");
+
+        let root = to_root_cert(&[TEST_ROOT_PATH.to_string()]).expect("root cert");
+        let client_auth = rustls::server::WebPkiClientVerifier::builder(Arc::new(root))
+            .build()
+            .expect("client verifier");
+
+        let server_crypto = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(client_auth)
+            .with_single_cert(cert_chain, key)
+            .expect("server config");
+
+        let mut server_config = ServerConfig::with_crypto(Arc::new(
+            QuicServerConfig::try_from(server_crypto).expect("quic server config"),
+        ));
+
+        Arc::get_mut(&mut server_config.transport)
+            .expect("transport")
+            .max_concurrent_uni_streams(0_u8.into());
+
+        server_config
+    }
+
+    fn spawn_test_server(expected_events: usize) -> TestServer {
+        let server_config = test_server_config();
+        let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
+        let endpoint = Endpoint::server(server_config, server_addr).expect("endpoint");
+        let local_addr = endpoint.local_addr().expect("server address");
+
+        let handle = tokio::spawn(async move {
+            let incoming = endpoint.accept().await.expect("incoming connection");
+            let conn = incoming.await.expect("connection");
+            server_handshake(&conn, REQUIRED_GIGANTO_VERSION)
+                .await
+                .expect("handshake");
+
+            let (_send, mut recv) = conn.accept_bi().await.expect("event stream");
+
+            let mut header_buf = [0u8; std::mem::size_of::<u32>()];
+            recv.read_exact(&mut header_buf)
+                .await
+                .expect("record header");
+            let kind = RawEventKind::try_from(u32::from_le_bytes(header_buf)).expect("record kind");
+
+            let mut events = Vec::new();
+            while events.len() < expected_events {
+                let mut len_buf = [0u8; std::mem::size_of::<u32>()];
+                recv.read_exact(&mut len_buf).await.expect("batch length");
+                let len = u32::from_le_bytes(len_buf) as usize;
+                let mut payload = vec![0u8; len];
+                recv.read_exact(&mut payload).await.expect("batch payload");
+
+                let batch: Vec<(i64, Vec<u8>)> = bincode::deserialize(&payload).expect("events");
+                events.extend(batch);
+            }
+
+            (kind, events)
+        });
+
+        (local_addr, handle)
+    }
+
+    fn sysmon_process_create_line(timestamp: &str, process_guid: &str) -> String {
+        format!(
+            "test-agent\tagent-001\t1\t{timestamp}\t{process_guid}\t1234\t\
+             C:\\Windows\\System32\\cmd.exe\t10.0.0.0\tCommand Prompt\tWindows\t\
+             Microsoft\tcmd.exe\tcmd.exe /c test\tC:\\Windows\tNT AUTHORITY\\SYSTEM\t\
+             {{00000000-0000-0000-0000-000000000000}}\t0x3e7\t1\tSystem\t\
+             SHA256=abc123\t{{00000000-0000-0000-0000-000000000001}}\t0\t\
+             C:\\Windows\\explorer.exe\texplorer.exe\tNT AUTHORITY\\SYSTEM"
+        )
     }
 
     #[test]
@@ -2486,21 +2586,7 @@ mod tests {
     // These mirror the Zeek tests above but for the Sysmon conversion pipeline
 
     fn create_sysmon_process_create_record(timestamp: &str, process_guid: &str) -> StringRecord {
-        // Sysmon ProcessCreate record format (tab-delimited):
-        // 0: agent_name, 1: agent_id, 2: event_code, 3: utc_time, 4: process_guid,
-        // 5: process_id, 6: image, 7: file_version, 8: description, 9: product,
-        // 10: company, 11: original_file_name, 12: command_line, 13: current_directory,
-        // 14: user, 15: logon_guid, 16: logon_id, 17: terminal_session_id,
-        // 18: integrity_level, 19: hashes, 20: parent_process_guid, 21: parent_process_id,
-        // 22: parent_image, 23: parent_command_line, 24: parent_user
-        let data = format!(
-            "test-agent\tagent-001\t1\t{timestamp}\t{process_guid}\t1234\t\
-             C:\\Windows\\System32\\cmd.exe\t10.0.0.0\tCommand Prompt\tWindows\t\
-             Microsoft\tcmd.exe\tcmd.exe /c test\tC:\\Windows\tNT AUTHORITY\\SYSTEM\t\
-             {{00000000-0000-0000-0000-000000000000}}\t0x3e7\t1\tSystem\t\
-             SHA256=abc123\t{{00000000-0000-0000-0000-000000000001}}\t0\t\
-             C:\\Windows\\explorer.exe\texplorer.exe\tNT AUTHORITY\\SYSTEM"
-        );
+        let data = sysmon_process_create_line(timestamp, process_guid);
         ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -2512,103 +2598,148 @@ mod tests {
     }
 
     #[test]
-    fn test_sysmon_timestamp_deduplication() {
-        // Test that multiple events with identical timestamp get monotonically
-        // incrementing offsets (0, 1, 2, ...)
-        let timestamp = "2023-01-15 14:30:45.123456";
+    #[allow(clippy::similar_names)]
+    fn test_sysmon_timestamp_deduplication_offset_resets() {
+        let timestamp_a = "2023-01-15 14:30:45.123456";
+        let timestamp_b = "2023-01-15 14:30:46.654321";
 
-        let record1 = create_sysmon_process_create_record(
-            timestamp,
+        let record_a1 = create_sysmon_process_create_record(
+            timestamp_a,
             "{00000000-0000-0000-0000-000000000001}",
         );
-        let record2 = create_sysmon_process_create_record(
-            timestamp,
+        let record_a2 = create_sysmon_process_create_record(
+            timestamp_a,
             "{00000000-0000-0000-0000-000000000002}",
         );
-        let record3 = create_sysmon_process_create_record(
-            timestamp,
+        let record_b1 = create_sysmon_process_create_record(
+            timestamp_b,
             "{00000000-0000-0000-0000-000000000003}",
         );
-        let record4 = create_sysmon_process_create_record(
-            timestamp,
+        let record_b2 = create_sysmon_process_create_record(
+            timestamp_b,
             "{00000000-0000-0000-0000-000000000004}",
         );
+        let record_b3 = create_sysmon_process_create_record(
+            timestamp_b,
+            "{00000000-0000-0000-0000-000000000005}",
+        );
 
-        // Parse all records with serial=0 to get base timestamps
-        let (_, ts1) = ProcessCreate::try_from_sysmon_record(&record1, 0).unwrap();
-        let (_, ts2) = ProcessCreate::try_from_sysmon_record(&record2, 0).unwrap();
-        let (_, ts3) = ProcessCreate::try_from_sysmon_record(&record3, 0).unwrap();
-        let (_, ts4) = ProcessCreate::try_from_sysmon_record(&record4, 0).unwrap();
+        let (_, ts_a1) = ProcessCreate::try_from_sysmon_record(&record_a1, 0).unwrap();
+        let (_, ts_a2) = ProcessCreate::try_from_sysmon_record(&record_a2, 0).unwrap();
+        let (_, ts_b1) = ProcessCreate::try_from_sysmon_record(&record_b1, 0).unwrap();
+        let (_, ts_b2) = ProcessCreate::try_from_sysmon_record(&record_b2, 0).unwrap();
+        let (_, ts_b3) = ProcessCreate::try_from_sysmon_record(&record_b3, 0).unwrap();
 
-        // All should have the same base timestamp
-        assert_eq!(ts1, ts2);
-        assert_eq!(ts2, ts3);
-        assert_eq!(ts3, ts4);
+        assert_eq!(ts_a1, ts_a2, "A timestamps should be identical");
+        assert_eq!(ts_b1, ts_b2, "B timestamps should be identical");
+        assert_eq!(ts_b2, ts_b3, "B timestamps should be identical");
+        assert_ne!(ts_a1, ts_b1, "A and B timestamps should differ");
 
-        // Test the deduplication logic
         let mut reference_timestamp: Option<i64> = None;
         let mut timestamp_offset = 0_i64;
         let final_timestamps = apply_timestamp_deduplication(
-            &[ts1, ts2, ts3, ts4],
+            &[ts_a1, ts_a2, ts_b1, ts_b2, ts_b3],
             &mut reference_timestamp,
             &mut timestamp_offset,
         );
 
-        // Verify monotonically incrementing offsets
-        assert_eq!(final_timestamps[0], ts1); // offset 0
-        assert_eq!(final_timestamps[1], ts1 + 1); // offset 1
-        assert_eq!(final_timestamps[2], ts1 + 2); // offset 2
-        assert_eq!(final_timestamps[3], ts1 + 3); // offset 3
+        assert_eq!(final_timestamps[0], ts_a1, "First A event: no offset");
+        assert_eq!(final_timestamps[1], ts_a1 + 1, "Second A event: offset +1");
+        assert_eq!(
+            final_timestamps[2], ts_b1,
+            "First B event: offset resets to 0"
+        );
+        assert_eq!(final_timestamps[3], ts_b1 + 1, "Second B event: offset +1");
+        assert_eq!(final_timestamps[4], ts_b1 + 2, "Third B event: offset +2");
     }
 
-    #[test]
-    fn test_sysmon_different_timestamps_no_deduplication() {
-        // Test that different timestamps are not modified
-        let record1 = create_sysmon_process_create_record(
-            "2023-01-15 14:30:45.123456",
-            "{00000000-0000-0000-0000-000000000001}",
-        );
-        let record2 = create_sysmon_process_create_record(
-            "2023-01-15 14:30:46.654321",
-            "{00000000-0000-0000-0000-000000000002}",
-        );
-
-        let (_, ts1) = ProcessCreate::try_from_sysmon_record(&record1, 0).unwrap();
-        let (_, ts2) = ProcessCreate::try_from_sysmon_record(&record2, 0).unwrap();
-
-        // Different timestamps should not be modified by deduplication logic
-        assert_ne!(ts1, ts2);
-
-        // Test the deduplication logic using the helper function
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts1, ts2],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
-
-        // Both timestamps should remain unchanged
-        assert_eq!(final_timestamps[0], ts1);
-        assert_eq!(final_timestamps[1], ts2);
+    fn write_temp_sysmon_log(lines: &[String]) -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let log_path = std::env::temp_dir().join(format!("reproduce-sysmon-{suffix}.log"));
+        let mut log_file = fs::File::create(&log_path).expect("create log file");
+        log_file
+            .write_all(lines.join("\n").as_bytes())
+            .expect("write log file");
+        log_file.write_all(b"\n").expect("newline");
+        log_file.flush().expect("flush log file");
+        drop(log_file);
+        log_path
     }
 
-    #[test]
-    fn test_sysmon_serial_applied_to_timestamp() {
-        // Test that the serial (offset) is correctly applied to the converted timestamp
+    #[tokio::test]
+    async fn test_send_sysmon_timestamp_deduplication_end_to_end() {
+        let expected_events = 3;
+        let (server_addr, server_handle) = spawn_test_server(expected_events);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "process_create".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
         let timestamp = "2023-01-15 14:30:45.123456";
-        let record = create_sysmon_process_create_record(
-            timestamp,
-            "{00000000-0000-0000-0000-000000000001}",
-        );
+        let lines = vec![
+            sysmon_process_create_line(timestamp, "{00000000-0000-0000-0000-000000000001}"),
+            sysmon_process_create_line(timestamp, "{00000000-0000-0000-0000-000000000002}"),
+            sysmon_process_create_line(timestamp, "{00000000-0000-0000-0000-000000000003}"),
+        ];
+        let log_path = write_temp_sysmon_log(&lines);
 
-        // Parse with different serial values
-        let (_, ts_serial_0) = ProcessCreate::try_from_sysmon_record(&record, 0).unwrap();
-        let (_, ts_serial_1) = ProcessCreate::try_from_sysmon_record(&record, 1).unwrap();
-        let (_, ts_serial_5) = ProcessCreate::try_from_sysmon_record(&record, 5).unwrap();
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
 
-        // The timestamp should be base + serial
-        assert_eq!(ts_serial_1, ts_serial_0 + 1);
-        assert_eq!(ts_serial_5, ts_serial_0 + 5);
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_sysmon::<ProcessCreate>(
+                iter,
+                RawEventKind::ProcessCreate,
+                0,
+                0,
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_sysmon");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::ProcessCreate);
+        assert_eq!(events.len(), expected_events);
+
+        let (_, base_ts) = ProcessCreate::try_from_sysmon_record(
+            &create_sysmon_process_create_record(
+                timestamp,
+                "{00000000-0000-0000-0000-000000000001}",
+            ),
+            0,
+        )
+        .expect("parse timestamp");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![base_ts, base_ts + 1, base_ts + 2]);
+
+        let _ = fs::remove_file(&log_path);
     }
 }
