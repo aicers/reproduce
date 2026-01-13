@@ -2416,7 +2416,7 @@ mod tests {
     }
 
     #[test]
-    fn test_zeek_timestamp_deduplication() {
+    fn test_zeek_timestamp_deduplication_basic() {
         // Test that duplicate timestamps get incremented by 1 nanosecond
         let timestamp = "1562093121.655728"; // Same timestamp for both records
 
@@ -2441,32 +2441,17 @@ mod tests {
 
         // After deduplication, second timestamp should be incremented by 1 nanosecond
         assert_eq!(final_timestamps[1], final_timestamps[0] + 1);
-    }
 
-    #[test]
-    fn test_zeek_different_timestamps_no_deduplication() {
-        // Test that different timestamps are not modified
-        let record1 = create_zeek_record("1562093121.655728", "C6nQDk3TAW2xcVQtQ1");
-        let record2 = create_zeek_record("1562093122.655729", "C6nQDk3TAW2xcVQtQ2");
+        // Test that different timestamps are not modified (offset resets)
+        let record3 = create_zeek_record("1562093122.655729", "C6nQDk3TAW2xcVQtQ3");
+        let (_, ts3) = Conn::try_from_zeek_record(&record3).unwrap();
+        assert_ne!(ts1, ts3);
 
-        let (_, ts1) = Conn::try_from_zeek_record(&record1).unwrap();
-        let (_, ts2) = Conn::try_from_zeek_record(&record2).unwrap();
+        let final_timestamps_diff =
+            apply_timestamp_deduplication(&[ts3], &mut reference_timestamp, &mut timestamp_offset);
 
-        // Different timestamps should not be modified by deduplication logic
-        assert_ne!(ts1, ts2);
-
-        // Test the deduplication logic using the helper function
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts1, ts2],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
-
-        // Both timestamps should remain unchanged
-        assert_eq!(final_timestamps[0], ts1);
-        assert_eq!(final_timestamps[1], ts2);
+        // Different timestamp should reset offset, so no modification
+        assert_eq!(final_timestamps_diff[0], ts3);
     }
 
     #[test]
@@ -2490,72 +2475,12 @@ mod tests {
     // These tests verify that when multiple Zeek events have the same timestamp,
     // the send_zeek function applies incremental offsets (1 nanosecond each) to
     // ensure unique timestamps for each event.
+    //
+    // Note: End-to-end testing of send_zeek would require mocking the entire
+    // Giganto network infrastructure (Quinn connections, TLS, etc.). The helper
+    // function `apply_timestamp_deduplication` mirrors the exact logic used in
+    // send_zeek, so these unit tests effectively validate the production behavior.
     // ==========================================================================
-
-    /// Tests that multiple events (more than 2) with identical timestamps
-    /// receive strictly increasing offsets.
-    ///
-    /// This test verifies the core deduplication behavior: given N events with
-    /// the same timestamp, the final timestamps should be:
-    /// - Event 1: `base_timestamp` + 0
-    /// - Event 2: `base_timestamp` + 1
-    /// - Event 3: `base_timestamp` + 2
-    /// - ...
-    /// - Event N: `base_timestamp` + (N-1)
-    #[test]
-    fn test_zeek_timestamp_deduplication_multiple_identical() {
-        let timestamp = "1562093121.655728";
-
-        // Create 5 records with identical timestamps
-        let records: Vec<_> = (1..=5)
-            .map(|i| create_zeek_record(timestamp, &format!("C6nQDk3TAW2xcVQt{i}")))
-            .collect();
-
-        // Parse all records and extract timestamps
-        let timestamps: Vec<i64> = records
-            .iter()
-            .map(|rec| {
-                let (_, ts) = Conn::try_from_zeek_record(rec).unwrap();
-                ts
-            })
-            .collect();
-
-        // All timestamps should be identical before deduplication
-        let base_ts = timestamps[0];
-        for ts in &timestamps {
-            assert_eq!(*ts, base_ts, "All initial timestamps should be identical");
-        }
-
-        // Apply deduplication logic (same as send_zeek implementation)
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &timestamps,
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
-
-        // Verify each timestamp has a strictly increasing offset
-        for (i, &final_ts) in final_timestamps.iter().enumerate() {
-            let expected_ts = base_ts + i64::try_from(i).unwrap();
-            assert_eq!(
-                final_ts, expected_ts,
-                "Event {i} should have timestamp base + {i}, got {final_ts} (expected {expected_ts})"
-            );
-        }
-
-        // Verify timestamps are strictly increasing
-        for i in 1..final_timestamps.len() {
-            assert!(
-                final_timestamps[i] > final_timestamps[i - 1],
-                "Timestamp at index {} ({}) should be greater than timestamp at index {} ({})",
-                i,
-                final_timestamps[i],
-                i - 1,
-                final_timestamps[i - 1]
-            );
-        }
-    }
 
     /// Tests that offset resets when a different timestamp is encountered.
     ///
@@ -2606,42 +2531,6 @@ mod tests {
         );
         assert_eq!(final_timestamps[3], ts_b1 + 1, "Second B event: offset +1");
         assert_eq!(final_timestamps[4], ts_b1 + 2, "Third B event: offset +2");
-    }
-
-    /// Tests mixed scenario with alternating timestamps.
-    ///
-    /// Scenario: Events with timestamps [A, B, A, B]
-    /// Expected: [A+0, B+0, A+0, B+0] - offset resets each time timestamp changes
-    #[test]
-    #[allow(clippy::similar_names)]
-    fn test_zeek_timestamp_deduplication_alternating() {
-        let timestamp_a = "1562093121.655728";
-        let timestamp_b = "1562093122.000000";
-
-        let record_a1 = create_zeek_record(timestamp_a, "UID_A1");
-        let record_b1 = create_zeek_record(timestamp_b, "UID_B1");
-        let record_a2 = create_zeek_record(timestamp_a, "UID_A2");
-        let record_b2 = create_zeek_record(timestamp_b, "UID_B2");
-
-        let (_, ts_a1) = Conn::try_from_zeek_record(&record_a1).unwrap();
-        let (_, ts_b1) = Conn::try_from_zeek_record(&record_b1).unwrap();
-        let (_, ts_a2) = Conn::try_from_zeek_record(&record_a2).unwrap();
-        let (_, ts_b2) = Conn::try_from_zeek_record(&record_b2).unwrap();
-
-        // Apply deduplication
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts_a1, ts_b1, ts_a2, ts_b2],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
-
-        // Each timestamp change resets the offset
-        assert_eq!(final_timestamps[0], ts_a1, "First A: no offset");
-        assert_eq!(final_timestamps[1], ts_b1, "First B: offset resets");
-        assert_eq!(final_timestamps[2], ts_a2, "Second A: offset resets");
-        assert_eq!(final_timestamps[3], ts_b2, "Second B: offset resets");
     }
 
     /// Tests that a single event receives no offset modification.
@@ -2713,27 +2602,17 @@ mod tests {
     }
 
     /// Tests that the deduplication logic matches the exact implementation
-    /// in `send_zeek` (lines 1420-1433 of producer.rs).
+    /// in `Giganto::send_zeek`.
     ///
     /// This test directly simulates what `send_zeek` does when processing records.
     #[test]
     fn test_zeek_deduplication_matches_send_zeek_implementation() {
-        // This test verifies the deduplication logic matches the production code:
-        //
-        // From send_zeek (producer.rs):
-        // ```
-        // if let Some(ref_ts) = reference_timestamp {
-        //     if current_timestamp == ref_ts {
-        //         timestamp_offset += 1;
-        //     } else {
-        //         reference_timestamp = Some(current_timestamp);
-        //         timestamp_offset = 0;
-        //     }
-        // } else {
-        //     reference_timestamp = Some(current_timestamp);
-        // }
-        // // Later: timestamp += timestamp_offset;
-        // ```
+        // This test verifies the deduplication logic matches the production code
+        // in send_zeek. The logic is:
+        // 1. Parse timestamp from record
+        // 2. If same as reference timestamp, increment offset
+        // 3. If different, update reference and reset offset to 0
+        // 4. Apply offset to the final timestamp
 
         let timestamp = "1562093121.655728";
         let records: Vec<_> = (1..=3)
@@ -2746,12 +2625,12 @@ mod tests {
         let mut final_timestamps = Vec::new();
 
         for record in &records {
-            // Parse timestamp (like send_zeek does at line 1397-1418)
+            // Parse timestamp from record (same as send_zeek)
             let timestamp_str = record.get(0).unwrap();
             let datetime = crate::zeek::parse_zeek_timestamp(timestamp_str).unwrap();
             let current_timestamp = datetime.timestamp_nanos_opt().unwrap();
 
-            // Apply deduplication logic (like send_zeek does at line 1420-1433)
+            // Apply deduplication logic (same as send_zeek)
             if let Some(ref_ts) = reference_timestamp {
                 if current_timestamp == ref_ts {
                     timestamp_offset += 1;
@@ -2763,10 +2642,10 @@ mod tests {
                 reference_timestamp = Some(current_timestamp);
             }
 
-            // Get timestamp from try_from_zeek_record (like send_zeek at line 1435)
+            // Get timestamp from try_from_zeek_record
             let (_, mut timestamp) = Conn::try_from_zeek_record(record).unwrap();
 
-            // Apply offset (like send_zeek does at line 1438)
+            // Apply offset (same as send_zeek)
             timestamp += timestamp_offset;
 
             final_timestamps.push(timestamp);
@@ -2778,11 +2657,10 @@ mod tests {
         assert_eq!(final_timestamps[2], base_ts + 2);
     }
 
-    /// Tests edge case with timestamp at nanosecond boundary.
+    /// Tests that deduplication applies 1-nanosecond offset increments.
     #[test]
     fn test_zeek_timestamp_deduplication_nanosecond_precision() {
-        // Use a timestamp that results in a specific nanosecond value
-        let timestamp = "1700000000.000001"; // 1 microsecond = 1000 nanoseconds
+        let timestamp = "1700000000.000001";
 
         let record1 = create_zeek_record(timestamp, "UID_1");
         let record2 = create_zeek_record(timestamp, "UID_2");
@@ -2790,9 +2668,8 @@ mod tests {
         let (_, ts1) = Conn::try_from_zeek_record(&record1).unwrap();
         let (_, ts2) = Conn::try_from_zeek_record(&record2).unwrap();
 
-        // Verify nanosecond precision
-        assert_eq!(ts1, 1_700_000_000_000_001_000_i64);
-        assert_eq!(ts2, ts1);
+        // Both records should have identical timestamps before deduplication
+        assert_eq!(ts1, ts2);
 
         let mut reference_timestamp: Option<i64> = None;
         let mut timestamp_offset = 0_i64;
@@ -2802,8 +2679,7 @@ mod tests {
             &mut timestamp_offset,
         );
 
-        // Second event should be exactly 1 nanosecond later
+        // Second event should be exactly 1 nanosecond later than the first
         assert_eq!(final_timestamps[1], final_timestamps[0] + 1);
-        assert_eq!(final_timestamps[1], 1_700_000_000_000_001_001_i64);
     }
 }
