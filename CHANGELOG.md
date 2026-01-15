@@ -16,6 +16,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
 
+### Fixed
+
+- Switched reqwest TLS backend to `native-tls` to avoid rustls provider
+  conflicts with the 0.13 defaults and prevent runtime panics.
+
 ## [0.23.0] - 2025-11-26
 
 ### Added
