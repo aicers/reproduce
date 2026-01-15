@@ -116,14 +116,20 @@ giganto_name = "test"
 input = "/path/to/input"
 "#;
 
-    #[test]
-    fn default_values_applied() {
+    /// Creates a temporary TOML config file with the given content.
+    fn create_temp_config(content: &str) -> tempfile::NamedTempFile {
         let mut file = tempfile::Builder::new()
             .suffix(".toml")
             .tempfile()
             .expect("should create temp file");
-        file.write_all(MINIMAL_TOML.as_bytes())
+        file.write_all(content.as_bytes())
             .expect("should write to temp file");
+        file
+    }
+
+    #[test]
+    fn default_values_applied() {
+        let file = create_temp_config(MINIMAL_TOML);
 
         let config = Config::new(file.path()).expect("should parse minimal TOML");
 
@@ -144,12 +150,7 @@ input = "/path/to/input"
 
 [file]
 "#;
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .expect("should create temp file");
-        file.write_all(toml.as_bytes())
-            .expect("should write to temp file");
+        let file = create_temp_config(toml);
 
         let config = Config::new(file.path()).expect("should parse TOML with file section");
 
@@ -173,12 +174,7 @@ input = "/path/to/input"
 
 [directory]
 "#;
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .expect("should create temp file");
-        file.write_all(toml.as_bytes())
-            .expect("should write to temp file");
+        let file = create_temp_config(toml);
 
         let config = Config::new(file.path()).expect("should parse TOML with directory section");
 
@@ -196,12 +192,7 @@ giganto_ingest_srv_addr = "127.0.0.1:8080"
 giganto_name = "test"
 input = "/path/to/input"
 "#;
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .expect("should create temp file");
-        file.write_all(toml.as_bytes())
-            .expect("should write to temp file");
+        let file = create_temp_config(toml);
 
         let config = Config::new(file.path()).expect("should parse IPv4 socket address");
 
@@ -221,12 +212,7 @@ giganto_ingest_srv_addr = "[::1]:8080"
 giganto_name = "test"
 input = "/path/to/input"
 "#;
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .expect("should create temp file");
-        file.write_all(toml.as_bytes())
-            .expect("should write to temp file");
+        let file = create_temp_config(toml);
 
         let config = Config::new(file.path()).expect("should parse IPv6 socket address");
 
@@ -246,12 +232,7 @@ giganto_ingest_srv_addr = "127.0.0.1"
 giganto_name = "test"
 input = "/path/to/input"
 "#;
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .expect("should create temp file");
-        file.write_all(toml.as_bytes())
-            .expect("should write to temp file");
+        let file = create_temp_config(toml);
 
         let result = Config::new(file.path());
         assert!(result.is_err(), "missing port should fail to parse");
@@ -267,12 +248,7 @@ giganto_ingest_srv_addr = "localhost:8080"
 giganto_name = "test"
 input = "/path/to/input"
 "#;
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .expect("should create temp file");
-        file.write_all(toml.as_bytes())
-            .expect("should write to temp file");
+        let file = create_temp_config(toml);
 
         let result = Config::new(file.path());
         assert!(
