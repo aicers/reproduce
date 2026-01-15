@@ -115,6 +115,7 @@ mod tests {
 
     use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
 
+    /// Creates a temporary TOML config file with the given content.
     fn create_temp_config(content: &str) -> NamedTempFile {
         let mut file = NamedTempFile::with_suffix(".toml").expect("Failed to create temp file");
         file.write_all(content.as_bytes())
@@ -122,17 +123,6 @@ mod tests {
         file.flush().expect("Failed to flush");
         file
     }
-
-    // Minimal required TOML for a valid config (required fields only, including kind)
-    const MINIMAL_TOML: &str = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-"#;
 
     #[test]
     fn config_new_missing_kind_returns_error() {
@@ -223,7 +213,16 @@ input = "/path/to/file"
 
     #[test]
     fn default_values_applied() {
-        let file = create_temp_config(MINIMAL_TOML);
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let file = create_temp_config(toml);
 
         let config = Config::new(file.path()).expect("should parse minimal TOML");
 
