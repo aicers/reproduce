@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use giganto_client::ingest::sysmon::FileCreate;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_time, parse_sysmon_timestamp_ns};
+use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_timestamp_ns};
 
 impl TryFromSysmonRecord for FileCreate {
     fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
@@ -45,9 +45,7 @@ impl TryFromSysmonRecord for FileCreate {
             if creation_utc_time.eq("-") {
                 0
             } else {
-                parse_sysmon_time(creation_utc_time)?
-                    .timestamp_nanos_opt()
-                    .context("to_timestamp_nanos")?
+                parse_sysmon_timestamp_ns(creation_utc_time)?
             }
         } else {
             return Err(anyhow!("missing creation_utc_time"));

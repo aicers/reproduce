@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
 use super::{DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Wapples};
@@ -17,10 +17,11 @@ fn get_wapples_regex() -> &'static Regex {
 }
 
 fn parse_wapples_timestamp_ns(datetime: &str) -> Result<i64> {
-    DateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S %z")
+    Timestamp::strptime("%Y-%m-%d %H:%M:%S %z", datetime)
         .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+        .as_nanosecond()
+        .try_into()
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Wapples {

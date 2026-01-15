@@ -1,8 +1,8 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::DateTime;
 use giganto_client::ingest::log::SecuLog;
+use jiff::Timestamp;
 use regex::Regex;
 
 use super::{DEFAULT_IPADDR, Nginx, ParseSecurityLog, SecurityLogInfo};
@@ -17,10 +17,11 @@ fn get_nginx_regex() -> &'static Regex {
 }
 
 fn parse_nginx_timestamp_ns(datetime: &str) -> Result<i64> {
-    DateTime::parse_from_str(datetime, "%d/%b/%Y:%T %z")
+    Timestamp::strptime("%d/%b/%Y:%T %z", datetime)
         .map_err(|e| anyhow!("{e:?}"))?
-        .timestamp_nanos_opt()
-        .context("to_timestamp_nanos")
+        .as_nanosecond()
+        .try_into()
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Nginx {
@@ -107,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_parse_nginx_timestamp_invalid_format() {
-        assert!(parse_nginx_timestamp_ns("2023-01-15 12:00:00").is_err());
+        assert!(parse_nginx_timestamp_ns("2023-01-15 12:00:00 +0900").is_err());
     }
 
     #[test]

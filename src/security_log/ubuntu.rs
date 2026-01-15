@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Datelike, Utc};
 use giganto_client::ingest::log::SecuLog;
+use jiff::{Timestamp, tz::TimeZone};
 use regex::Regex;
 
 use super::{ParseSecurityLog, SecurityLogInfo, Ubuntu};
@@ -15,14 +15,13 @@ fn get_ubuntu_regex() -> &'static Regex {
 }
 
 fn parse_ubuntu_timestamp_ns(datetime: &str) -> Result<i64> {
-    let now = Utc::now();
-    DateTime::parse_from_str(
-        &format!("{} {datetime} +0900", now.year()),
-        "%Y %b %d %H:%M:%S %z",
-    )
-    .map_err(|e| anyhow!("{e:?}"))?
-    .timestamp_nanos_opt()
-    .context("to_timestamp_nanos")
+    let year = Timestamp::now().to_zoned(TimeZone::UTC).year();
+    let datetime_with_year = format!("{year} {datetime} +0900");
+    Timestamp::strptime("%Y %b %d %H:%M:%S %z", datetime_with_year)
+        .map_err(|e| anyhow!("{e:?}"))?
+        .as_nanosecond()
+        .try_into()
+        .map_err(|e| anyhow!("{e:?}"))
 }
 
 impl ParseSecurityLog for Ubuntu {

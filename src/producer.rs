@@ -1,4 +1,8 @@
-#![allow(clippy::struct_field_names, clippy::too_many_arguments)]
+#![allow(
+    clippy::struct_field_names,
+    clippy::too_many_arguments,
+    clippy::single_match_else
+)]
 use std::{
     any::type_name,
     env,
@@ -15,7 +19,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::Utc;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
 use giganto_client::{
     RawEventKind,
@@ -36,6 +39,7 @@ use giganto_client::{
         },
     },
 };
+use jiff::Timestamp;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
@@ -1396,15 +1400,14 @@ impl Giganto {
                         // Extract timestamp from record and implement deduplication logic
                         let current_timestamp = if let Some(timestamp) = record.get(0) {
                             match crate::zeek::parse_zeek_timestamp(timestamp) {
-                                Ok(datetime) => {
-                                    if let Some(timestamp) = datetime.timestamp_nanos_opt() {
-                                        timestamp
-                                    } else {
+                                Ok(ts) => match i64::try_from(ts.as_nanosecond()) {
+                                    Ok(timestamp) => timestamp,
+                                    Err(_) => {
                                         failed_cnt += 1;
                                         error!("timestamp conversion failed #{}", next_pos.line());
                                         continue;
                                     }
-                                }
+                                },
                                 Err(e) => {
                                     failed_cnt += 1;
                                     error!("timestamp parsing failed #{}: {e}", next_pos.line());
@@ -1737,10 +1740,9 @@ impl Giganto {
                         // Extract timestamp from record and implement deduplication logic
                         let current_timestamp = if let Some(utc_time) = record.get(3) {
                             match crate::syslog::parse_sysmon_time(utc_time) {
-                                Ok(datetime) => {
-                                    if let Some(timestamp) = datetime.timestamp_nanos_opt() {
-                                        timestamp
-                                    } else {
+                                Ok(ts) => match i64::try_from(ts.as_nanosecond()) {
+                                    Ok(timestamp) => timestamp,
+                                    Err(_) => {
                                         failed_cnt += 1;
                                         error!(
                                             "failed to convert timestamp to nanos #{}",
@@ -1748,7 +1750,7 @@ impl Giganto {
                                         );
                                         continue;
                                     }
-                                }
+                                },
                                 Err(e) => {
                                     failed_cnt += 1;
                                     error!("failed to parse sysmon time #{}: {e}", next_pos.line());
@@ -2140,9 +2142,8 @@ impl Giganto {
             self.init_msg = false;
         }
 
-        let timestamp = Utc::now()
-            .timestamp_nanos_opt()
-            .context("to_timestamp_nanos")?;
+        let timestamp = i64::try_from(Timestamp::now().as_nanosecond())
+            .context("timestamp nanoseconds overflow")?;
         let record_data = bincode::serialize(&send_log)?;
         let buf = vec![(timestamp, record_data)];
 
@@ -2475,8 +2476,8 @@ mod tests {
         let result = crate::zeek::parse_zeek_timestamp(timestamp);
         assert!(result.is_ok());
 
-        let datetime = result.unwrap();
-        assert_eq!(datetime.timestamp(), 1_562_093_121);
-        assert_eq!(datetime.timestamp_subsec_micros(), 655_728);
+        let ts = result.unwrap();
+        assert_eq!(ts.as_second(), 1_562_093_121);
+        assert_eq!(ts.subsec_microsecond(), 655_728);
     }
 }
