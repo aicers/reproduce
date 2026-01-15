@@ -486,7 +486,6 @@ mod tests {
     #[test]
     fn input_type_nonexistent_path() {
         // Create a temporary directory, then construct a path to a non-existent file within it
-        // This guarantees the path doesn't exist, avoiding flakiness from hardcoded paths
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let nonexistent_path = temp_dir.path().join("does_not_exist.log");
 
