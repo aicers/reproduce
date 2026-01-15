@@ -113,6 +113,6 @@ mod tests {
 
     #[test]
     fn test_parse_nginx_timestamp_empty() {
-        assert!(parse_nginx_timestamp_ns(" +0900").is_err());
+        assert!(parse_nginx_timestamp_ns("").is_err());
     }
 }

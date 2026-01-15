@@ -368,12 +368,12 @@ impl TryFromGigantoRecord for MalformedDns {
             .context("missing protocol")?
             .parse::<u8>()
             .context("invalid proto")?;
+        let start_time = parse_giganto_timestamp_ns(rec.get(7).context("missing start_time")?)?;
         let duration = rec
             .get(8)
             .context("missing duration")?
             .parse::<i64>()
             .context("invalid duration")?;
-        let start_time = parse_giganto_timestamp_ns(rec.get(7).context("missing start_time")?)?;
         let orig_pkts = rec
             .get(9)
             .context("missing source packets")?

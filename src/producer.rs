@@ -2160,8 +2160,7 @@ impl Giganto {
     }
 
     async fn send_event_in_batch(&mut self, events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
-        let buf =
-            bincode::serialize(&events).expect("serialization of basic types should not fail");
+        let buf = bincode::serialize(&events)?;
         send_raw(&mut self.giganto_sender, &buf).await
     }
 
