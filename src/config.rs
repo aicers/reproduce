@@ -106,16 +106,6 @@ mod tests {
 
     use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
 
-    // Minimal required TOML for a valid config (required fields only)
-    const MINIMAL_TOML: &str = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-input = "/path/to/input"
-"#;
-
     /// Creates a temporary TOML config file with the given content.
     fn create_temp_config(content: &str) -> tempfile::NamedTempFile {
         let mut file = tempfile::Builder::new()
@@ -129,7 +119,15 @@ input = "/path/to/input"
 
     #[test]
     fn default_values_applied() {
-        let file = create_temp_config(MINIMAL_TOML);
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+input = "/path/to/input"
+"#;
+        let file = create_temp_config(toml);
 
         let config = Config::new(file.path()).expect("should parse minimal TOML");
 
