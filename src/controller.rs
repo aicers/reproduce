@@ -661,9 +661,7 @@ mod tests {
     }
 
     /// Helper to extract agent name from filename, replicating the validation
-    /// logic in `run_single`. This panics on invalid formats (no filename,
-    /// non-UTF8, or no dot in filename) and returns `None` for invalid agent
-    /// names.
+    /// logic in `run_single`.
     fn validate_agent_filename(filename: &Path) -> Option<&str> {
         let agent = filename
             .file_name()
@@ -682,15 +680,14 @@ mod tests {
 
     #[test]
     fn valid_agent_filenames() {
-        // All valid agent names from AGENTS_LIST with .log extension
         let valid_filenames = [
             "manager.log",
-            "data_store.log",
-            "sensor.log",
-            "semi_supervised.log",
-            "time_series_generator.log",
-            "unsupervised.log",
-            "ti_container.log",
+            "data_store.txt",
+            "sensor.csv",
+            "semi_supervised.json",
+            "time_series_generator.log.1",
+            "unsupervised.dat",
+            "ti_container.out",
         ];
 
         for filename in valid_filenames {
@@ -705,13 +702,12 @@ mod tests {
 
     #[test]
     fn valid_agent_filenames_with_directory() {
-        // Valid agent filenames with directory paths
         let valid_paths = [
-            "/var/log/manager.log",
-            "/home/user/logs/data_store.log",
-            "relative/path/sensor.log",
-            "./semi_supervised.log",
-            "../time_series_generator.log",
+            "/var/log/manager.txt",
+            "/home/user/logs/data_store.csv",
+            "relative/path/sensor.json",
+            "./semi_supervised.dat",
+            "../time_series_generator.out",
         ];
 
         for path_str in valid_paths {
@@ -726,13 +722,12 @@ mod tests {
 
     #[test]
     fn invalid_agent_name_returns_none() {
-        // Invalid agent names (not in AGENTS_LIST) should return None
         let invalid_agent_filenames = [
-            "unknown_agent.log",
-            "invalid.log",
-            "test.log",
-            "other_service.log",
-            "agent.log", // "agent" is not in AGENTS_LIST
+            "unknown_agent.txt",
+            "invalid.csv",
+            "test.json",
+            "other_service.dat",
+            "agent.out",
         ];
 
         for filename in invalid_agent_filenames {
@@ -763,8 +758,6 @@ mod tests {
 
     #[test]
     fn valid_agent_with_different_extensions() {
-        // Valid agent names with extensions other than .log
-        // The validation only checks the part before the first dot
         let valid_with_other_ext = [
             "manager.txt",
             "sensor.csv",
