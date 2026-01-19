@@ -743,7 +743,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "filename must have an extension")]
     fn panic_on_filename_without_dot() {
-        // Filenames without an extension should panic
         let path = Path::new("manager_no_extension");
         let _ = validate_agent_filename(path);
     }
@@ -751,7 +750,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "input file name")]
     fn panic_on_empty_path() {
-        // Empty path (root directory) should panic with "input file name"
         let path = Path::new("/");
         let _ = validate_agent_filename(path);
     }
@@ -762,7 +760,7 @@ mod tests {
             "manager.txt",
             "sensor.csv",
             "data_store.json",
-            "unsupervised.log.1", // "unsupervised" before first dot
+            "unsupervised.log.1",
         ];
 
         for filename in valid_with_other_ext {

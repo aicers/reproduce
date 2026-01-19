@@ -172,7 +172,7 @@ mod tests {
             "   ",                                        // Whitespace only
             "INFO message without timestamp",             // Missing timestamp
             "2023-01-02T07:36:17Z message without level", // Missing level
-            "2023-01-02T07:36:17Z  INFO",                 // Empty content (trailing space)
+            "2023-01-02T07:36:17Z  INFO ",                // Empty content (trailing space)
             // Invalid log levels
             "2023-01-02T07:36:17Z  DEBUG debug message", // DEBUG not supported
             "2023-01-02T07:36:17Z  TRACE trace message", // TRACE not supported
