@@ -222,4 +222,51 @@ mod tests {
             assert_eq!(oplog.contents, expected_content);
         }
     }
+
+    #[test]
+    fn log_regex_timestamp_parsing() {
+        // Verify timestamp parsing with different precision levels
+        let test_cases = [
+            // (log line, expected nanoseconds)
+            (
+                "2023-01-02T07:36:17Z  INFO msg",
+                Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
+                    .unwrap()
+                    .timestamp_nanos_opt()
+                    .unwrap(),
+            ),
+            (
+                "2023-06-15T12:30:45.123Z  INFO msg",
+                Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 45)
+                    .unwrap()
+                    .timestamp_nanos_opt()
+                    .unwrap()
+                    + 123_000_000, // 123 milliseconds
+            ),
+            (
+                "2023-06-15T12:30:45.123456Z  INFO msg",
+                Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 45)
+                    .unwrap()
+                    .timestamp_nanos_opt()
+                    .unwrap()
+                    + 123_456_000, // 123456 microseconds
+            ),
+            (
+                "2023-06-15T12:30:45.123456789Z  INFO msg",
+                Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 45)
+                    .unwrap()
+                    .timestamp_nanos_opt()
+                    .unwrap()
+                    + 123_456_789, // 123456789 nanoseconds
+            ),
+        ];
+
+        for (line, expected_nanos) in test_cases {
+            let (_, timestamp) = log_regex(line, "agent").unwrap();
+            assert_eq!(
+                timestamp, expected_nanos,
+                "Timestamp mismatch for line: {line}"
+            );
+        }
+    }
 }
