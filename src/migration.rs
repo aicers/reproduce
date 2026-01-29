@@ -136,4 +136,45 @@ mod giganto_timestamp_tests {
         let ns = parse_giganto_timestamp_ns("1700000000.765432111").unwrap();
         assert_eq!(ns, 1_700_000_000_765_432_111);
     }
+
+    #[test]
+    fn parse_giganto_timestamp_negative() {
+        // Large negative seconds with positive subseconds (before Unix epoch)
+        // Input: -1000000 seconds + 500000000 nanoseconds = -999999.5 seconds total
+        // jiff represents this with truncation toward zero:
+        //   as_second() = -999999 (truncated toward zero)
+        //   subsec_nanosecond() = -500000000 (remainder, preserving sign)
+        let ts = parse_giganto_timestamp("-1000000.500000000").unwrap();
+        assert_eq!(ts.as_second(), -999_999);
+        assert_eq!(ts.subsec_nanosecond(), -500_000_000);
+    }
+
+    #[test]
+    fn parse_giganto_timestamp_negative_one_second() {
+        // Negative one second with small nanos
+        // Input: -1 seconds + 1 nanosecond = -0.999999999 seconds total
+        // jiff represents this with truncation toward zero:
+        //   as_second() = 0 (truncated toward zero)
+        //   subsec_nanosecond() = -999999999 (remainder, preserving sign)
+        let ts = parse_giganto_timestamp("-1.000000001").unwrap();
+        assert_eq!(ts.as_second(), 0);
+        assert_eq!(ts.subsec_nanosecond(), -999_999_999);
+    }
+
+    #[test]
+    fn parse_giganto_timestamp_negative_fractional() {
+        // Small negative fraction less than 1 second
+        // Note: "-0" parses as 0, so this represents a positive timestamp (0.5 seconds)
+        let ts = parse_giganto_timestamp("-0.500000000").unwrap();
+        assert_eq!(ts.as_second(), 0);
+        assert_eq!(ts.subsec_nanosecond(), 500_000_000);
+    }
+
+    #[test]
+    fn parse_giganto_timestamp_negative_ns_conversion() {
+        // Verify nanosecond conversion for negative timestamps
+        // Total: -1000000 * 1e9 + 500000000 = -999999500000000 nanoseconds
+        let ns = parse_giganto_timestamp_ns("-1000000.500000000").unwrap();
+        assert_eq!(ns, -999_999_500_000_000);
+    }
 }
