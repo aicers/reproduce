@@ -86,10 +86,7 @@ impl Config {
         let config: Self = config.try_deserialize()?;
 
         if config.kind.trim().is_empty() {
-            anyhow::bail!(
-                "config: missing or empty 'kind' - set kind to a supported value \
-                 (e.g., 'http', 'dns', 'conn'). See documentation for all supported kinds."
-            );
+            anyhow::bail!("kind cannot be empty");
         }
 
         Ok(config)
@@ -164,7 +161,7 @@ input = "/path/to/file"
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("missing or empty 'kind'"),
+            err_msg.contains("kind cannot be empty"),
             "Error message should indicate empty kind: {err_msg}"
         );
     }
@@ -186,42 +183,20 @@ input = "/path/to/file"
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("missing or empty 'kind'"),
+            err_msg.contains("kind cannot be empty"),
             "Error message should indicate empty kind: {err_msg}"
         );
     }
 
     #[test]
-    fn config_new_valid_kind_succeeds() {
+    fn config_new_valid_log_kind_succeeds() {
         let config_content = r#"
 cert = "tests/cert.pem"
 key = "tests/key.pem"
 ca_certs = ["tests/root.pem"]
 giganto_ingest_srv_addr = "127.0.0.1:38370"
 giganto_name = "aicers"
-kind = "http"
-input = "/path/to/file"
-"#;
-        let temp_file = create_temp_config(config_content);
-        let result = Config::new(temp_file.path());
-
-        assert!(
-            result.is_ok(),
-            "Config should load successfully: {result:?}"
-        );
-        let config = result.unwrap();
-        assert_eq!(config.kind, "http");
-    }
-
-    #[test]
-    fn config_new_log_kind_succeeds() {
-        let config_content = r#"
-cert = "tests/cert.pem"
-key = "tests/key.pem"
-ca_certs = ["tests/root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "aicers"
-kind = "log"
+kind = "valid log"
 input = "/path/to/file"
 "#;
         let temp_file = create_temp_config(config_content);
@@ -232,6 +207,6 @@ input = "/path/to/file"
             "Config with 'log' kind should load successfully: {result:?}"
         );
         let config = result.unwrap();
-        assert_eq!(config.kind, "log");
+        assert_eq!(config.kind, "valid log");
     }
 }

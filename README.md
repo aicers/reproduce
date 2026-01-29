@@ -225,25 +225,29 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 ### Netflow, Logs
 
-| Category     | Kind                   | Description                   |
-| ------------ | ---------------------- | ----------------------------- |
-| OpLog        | oplog                  | Operation log of applications |
-| Netflow      | netflow5               | Netflow v5 pcap               |
-|              | netflow9               | Netflow v9 pcap               |
-| Security log | wapples_fw_6.0         | PentaSecurity                 |
-|              | mf2_ips_4.0            | SECU-I                        |
-|              | sniper_ips_8.0         | WINS                          |
-|              | aiwaf_waf_4.1          | Monitorapp                    |
-|              | tg_ips_2.7             | Ahnlab                        |
-|              | vforce_ips_4.6         | NexG                          |
-|              | srx_ips_15.1           | Juniper                       |
-|              | sonicwall_fw_6.5       | SonicWALL                     |
-|              | fgt_ips_6.2            | Fortinet                      |
-|              | shadowwall_ips_5.0     | Duruan                        |
-|              | axgate_fw_2.1          | AXGATE                        |
-| OS log       | ubuntu_syslog_20.04    | Ubuntu 20.04                  |
-| Web log      | nginx_accesslog_1.25.2 | NGINX                         |
-| Generic      | log                    | Unstructured log data         |
+| Category         | Kind                   | Description                   |
+| -----------------| ---------------------- | ----------------------------- |
+| OpLog            | oplog                  | Operation log of applications |
+| Netflow          | netflow5               | Netflow v5 pcap               |
+|                  | netflow9               | Netflow v9 pcap               |
+| Security log     | wapples_fw_6.0         | PentaSecurity                 |
+|                  | mf2_ips_4.0            | SECU-I                        |
+|                  | sniper_ips_8.0         | WINS                          |
+|                  | aiwaf_waf_4.1          | Monitorapp                    |
+|                  | tg_ips_2.7             | Ahnlab                        |
+|                  | vforce_ips_4.6         | NexG                          |
+|                  | srx_ips_15.1           | Juniper                       |
+|                  | sonicwall_fw_6.5       | SonicWALL                     |
+|                  | fgt_ips_6.2            | Fortinet                      |
+|                  | shadowwall_ips_5.0     | Duruan                        |
+|                  | axgate_fw_2.1          | AXGATE                        |
+| OS log           | ubuntu_syslog_20.04    | Ubuntu 20.04                  |
+| Web log          | nginx_accesslog_1.25.2 | NGINX                         |
+| unstructured log | any non-empty string   | Unstructured log data         |
+
+Note: For unstructured logs, `kind` is not empty; it can be any user-defined
+kind. The chosen `kind` is used to send data to the data store and to identify
+it for storage and queries.
 
 ## License
 

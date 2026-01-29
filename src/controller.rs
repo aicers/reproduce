@@ -63,7 +63,6 @@ const SYSMON_KINDS: [&str; 14] = [
     "file_delete_detected",
 ];
 const NETFLOW_KIND: [&str; 2] = ["netflow5", "netflow9"];
-const UNSTRUCTURED_LOG_KIND: &str = "log";
 const SUPPORTED_SECURITY_KIND: [&str; 13] = [
     "wapples_fw_6.0",
     "mf2_ips_4.0",
@@ -312,7 +311,7 @@ impl Controller {
                             &mut report,
                         )
                         .await?
-                } else if kind == UNSTRUCTURED_LOG_KIND {
+                } else {
                     producer
                         .send_log_to_giganto(
                             filename,
@@ -324,19 +323,6 @@ impl Controller {
                             running,
                         )
                         .await?
-                } else {
-                    bail!(
-                        "unknown kind '{kind}'. Supported kinds: conn, http, rdp, smtp, dns, \
-                         ntlm, kerberos, ssh, dce_rpc, ftp, mqtt, ldap, tls, smb, nfs, bootp, \
-                         dhcp, radius, malformed_dns, oplog, process_create, file_create_time, \
-                         network_connect, process_terminate, image_load, file_create, \
-                         registry_value_set, registry_key_rename, file_create_stream_hash, \
-                         pipe_event, dns_query, file_delete, process_tamper, file_delete_detected, \
-                         netflow5, netflow9, wapples_fw_6.0, mf2_ips_4.0, sniper_ips_8.0, \
-                         aiwaf_waf_4.1, tg_ips_2.7, vforce_ips_4.6, srx_ips_15.1, sonicwall_fw_6.5, \
-                         fgt_ips_6.2, shadowwall_ips_5.0, axgate_fw_2.1, ubuntu_syslog_20.04, \
-                         nginx_accesslog_1.25.2, log"
-                    );
                 }
             }
             InputType::Dir | InputType::Elastic => {
