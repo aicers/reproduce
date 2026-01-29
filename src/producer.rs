@@ -2373,23 +2373,43 @@ impl<B: BufRead> Iterator for BinaryLines<B> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        io::Write,
+        net::{IpAddr, Ipv6Addr, SocketAddr},
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use csv::{ReaderBuilder, StringRecord};
-    use giganto_client::ingest::network::Conn;
+    use giganto_client::{RawEventKind, connection::server_handshake, ingest::network::Conn};
+    use quinn::{ServerConfig, crypto::rustls::QuicServerConfig};
 
     use super::*;
 
-    fn create_zeek_record(timestamp: &str, uid: &str) -> StringRecord {
-        let data = format!(
+    const TEST_CERT_PATH: &str = "tests/cert.pem";
+    const TEST_KEY_PATH: &str = "tests/key.pem";
+    const TEST_ROOT_PATH: &str = "tests/root.pem";
+    const TEST_SERVER_NAME: &str = "localhost";
+    type TestServerHandle = tokio::task::JoinHandle<(RawEventKind, Vec<(i64, Vec<u8>)>)>;
+    type TestServer = (SocketAddr, TestServerHandle);
+
+    fn zeek_conn_line(timestamp: &str, uid: &str) -> String {
+        format!(
             "{timestamp}\t{uid}\t192.168.1.77\t57655\t209.197.168.151\t1024\ttcp\tirc-dcc-data\t2.256935\t124\t42208\tSF\t-\t-\t0\tShAdDaFf\t28\t1592\t43\t44452\t-"
-        );
+        )
+    }
+
+    fn create_zeek_record(timestamp: &str, uid: &str) -> StringRecord {
+        let data = zeek_conn_line(timestamp, uid);
         ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
             .from_reader(data.as_bytes())
             .into_records()
             .next()
-            .unwrap()
-            .unwrap()
+            .expect("record")
+            .expect("parsed record")
     }
 
     fn apply_timestamp_deduplication(
@@ -2415,58 +2435,91 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn test_zeek_timestamp_deduplication() {
-        // Test that duplicate timestamps get incremented by 1 nanosecond
-        let timestamp = "1562093121.655728"; // Same timestamp for both records
+    fn test_server_config() -> ServerConfig {
+        let cert_pem = fs::read(TEST_CERT_PATH).expect("read cert");
+        let key_pem = fs::read(TEST_KEY_PATH).expect("read key");
 
-        let record1 = create_zeek_record(timestamp, "C6nQDk3TAW2xcVQtQ1");
-        let record2 = create_zeek_record(timestamp, "C6nQDk3TAW2xcVQtQ2");
+        let cert_chain = rustls_pemfile::certs(&mut &*cert_pem)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("invalid PEM-encoded certificate");
+        let key = rustls_pemfile::private_key(&mut &*key_pem)
+            .expect("malformed private key")
+            .expect("no private key found");
 
-        // Parse both records
-        let (_, ts1) = Conn::try_from_zeek_record(&record1).unwrap();
-        let (_, ts2) = Conn::try_from_zeek_record(&record2).unwrap();
+        let root = to_root_cert(&[TEST_ROOT_PATH.to_string()]).expect("root cert");
+        let client_auth = rustls::server::WebPkiClientVerifier::builder(Arc::new(root))
+            .build()
+            .expect("client verifier");
 
-        // Both should have the same timestamp initially (before deduplication)
-        assert_eq!(ts1, ts2);
+        let server_crypto = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(client_auth)
+            .with_single_cert(cert_chain, key)
+            .expect("server config");
 
-        // Test the deduplication logic using the helper function
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts1, ts2],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
+        let mut server_config = ServerConfig::with_crypto(Arc::new(
+            QuicServerConfig::try_from(server_crypto).expect("quic server config"),
+        ));
 
-        // After deduplication, second timestamp should be incremented by 1 nanosecond
-        assert_eq!(final_timestamps[1], final_timestamps[0] + 1);
+        Arc::get_mut(&mut server_config.transport)
+            .expect("transport")
+            .max_concurrent_uni_streams(0_u8.into());
+
+        server_config
     }
 
-    #[test]
-    fn test_zeek_different_timestamps_no_deduplication() {
-        // Test that different timestamps are not modified
-        let record1 = create_zeek_record("1562093121.655728", "C6nQDk3TAW2xcVQtQ1");
-        let record2 = create_zeek_record("1562093122.655729", "C6nQDk3TAW2xcVQtQ2");
+    fn spawn_test_server(expected_events: usize) -> TestServer {
+        let server_config = test_server_config();
+        let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
+        let endpoint = Endpoint::server(server_config, server_addr).expect("endpoint");
+        let local_addr = endpoint.local_addr().expect("server address");
 
-        let (_, ts1) = Conn::try_from_zeek_record(&record1).unwrap();
-        let (_, ts2) = Conn::try_from_zeek_record(&record2).unwrap();
+        let handle = tokio::spawn(async move {
+            let incoming = endpoint.accept().await.expect("incoming connection");
+            let conn = incoming.await.expect("connection");
+            server_handshake(&conn, REQUIRED_GIGANTO_VERSION)
+                .await
+                .expect("handshake");
 
-        // Different timestamps should not be modified by deduplication logic
-        assert_ne!(ts1, ts2);
+            let (_send, mut recv) = conn.accept_bi().await.expect("event stream");
 
-        // Test the deduplication logic using the helper function
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts1, ts2],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
+            let mut header_buf = [0u8; std::mem::size_of::<u32>()];
+            recv.read_exact(&mut header_buf)
+                .await
+                .expect("record header");
+            let kind = RawEventKind::try_from(u32::from_le_bytes(header_buf)).expect("record kind");
 
-        // Both timestamps should remain unchanged
-        assert_eq!(final_timestamps[0], ts1);
-        assert_eq!(final_timestamps[1], ts2);
+            let mut events = Vec::new();
+            while events.len() < expected_events {
+                let mut len_buf = [0u8; std::mem::size_of::<u32>()];
+                recv.read_exact(&mut len_buf).await.expect("batch length");
+                let len = u32::from_le_bytes(len_buf) as usize;
+                let mut payload = vec![0u8; len];
+                recv.read_exact(&mut payload).await.expect("batch payload");
+
+                let batch: Vec<(i64, Vec<u8>)> = bincode::deserialize(&payload).expect("events");
+                events.extend(batch);
+            }
+
+            (kind, events)
+        });
+
+        (local_addr, handle)
+    }
+
+    fn write_temp_zeek_log(lines: &[String]) -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let log_path = std::env::temp_dir().join(format!("reproduce-zeek-{suffix}.log"));
+        let mut log_file = fs::File::create(&log_path).expect("create log file");
+        log_file
+            .write_all(lines.join("\n").as_bytes())
+            .expect("write log file");
+        log_file.write_all(b"\n").expect("newline");
+        log_file.flush().expect("flush log file");
+        drop(log_file);
+        log_path
     }
 
     #[test]
@@ -2479,5 +2532,271 @@ mod tests {
         let ts = result.unwrap();
         assert_eq!(ts.as_second(), 1_562_093_121);
         assert_eq!(ts.subsec_microsecond(), 655_728);
+    }
+
+    // ==========================================================================
+    // Zeek Timestamp Deduplication Tests
+    //
+    // Acceptance Criteria: Identical timestamps result in incremental offset
+    // application during send.
+    //
+    // These tests verify the helper logic and exercise the real `send_zeek`
+    // path against an in-process QUIC server.
+    // ==========================================================================
+
+    /// Tests that offset resets when a different timestamp is encountered.
+    ///
+    /// Scenario: Events with timestamps [A, A, B, B, B]
+    /// Expected: [A+0, A+1, B+0, B+1, B+2]
+    #[test]
+    #[allow(clippy::similar_names)]
+    fn test_zeek_timestamp_deduplication_offset_resets() {
+        let timestamp_a = "1562093121.655728";
+        let timestamp_b = "1562093122.000000";
+
+        // Create records: 2 with timestamp A, 3 with timestamp B
+        let record_a1 = create_zeek_record(timestamp_a, "UID_A1");
+        let record_a2 = create_zeek_record(timestamp_a, "UID_A2");
+        let record_b1 = create_zeek_record(timestamp_b, "UID_B1");
+        let record_b2 = create_zeek_record(timestamp_b, "UID_B2");
+        let record_b3 = create_zeek_record(timestamp_b, "UID_B3");
+
+        let (_, ts_a1) = Conn::try_from_zeek_record(&record_a1).unwrap();
+        let (_, ts_a2) = Conn::try_from_zeek_record(&record_a2).unwrap();
+        let (_, ts_b1) = Conn::try_from_zeek_record(&record_b1).unwrap();
+        let (_, ts_b2) = Conn::try_from_zeek_record(&record_b2).unwrap();
+        let (_, ts_b3) = Conn::try_from_zeek_record(&record_b3).unwrap();
+
+        // Verify initial timestamps match expectations
+        assert_eq!(ts_a1, ts_a2, "A timestamps should be identical");
+        assert_eq!(ts_b1, ts_b2, "B timestamps should be identical");
+        assert_eq!(ts_b2, ts_b3, "B timestamps should be identical");
+        assert_ne!(ts_a1, ts_b1, "A and B timestamps should differ");
+
+        // Apply deduplication
+        let mut reference_timestamp: Option<i64> = None;
+        let mut timestamp_offset = 0_i64;
+        let final_timestamps = apply_timestamp_deduplication(
+            &[ts_a1, ts_a2, ts_b1, ts_b2, ts_b3],
+            &mut reference_timestamp,
+            &mut timestamp_offset,
+        );
+
+        // Verify: A timestamps get offsets 0, 1
+        assert_eq!(final_timestamps[0], ts_a1, "First A event: no offset");
+        assert_eq!(final_timestamps[1], ts_a1 + 1, "Second A event: offset +1");
+
+        // Verify: B timestamps get offsets 0, 1, 2 (offset resets for new timestamp)
+        assert_eq!(
+            final_timestamps[2], ts_b1,
+            "First B event: offset resets to 0"
+        );
+        assert_eq!(final_timestamps[3], ts_b1 + 1, "Second B event: offset +1");
+        assert_eq!(final_timestamps[4], ts_b1 + 2, "Third B event: offset +2");
+    }
+
+    #[tokio::test]
+    async fn test_send_zeek_timestamp_deduplication_end_to_end() {
+        let (server_addr, server_handle) = spawn_test_server(4);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "conn".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        let timestamp_a = "1562093121.655728";
+        let timestamp_b = "1562093122.000000";
+        let lines = vec![
+            zeek_conn_line(timestamp_a, "UID_A1"),
+            zeek_conn_line(timestamp_a, "UID_A2"),
+            zeek_conn_line(timestamp_b, "UID_B1"),
+            zeek_conn_line(timestamp_b, "UID_B2"),
+        ];
+
+        let log_path = write_temp_zeek_log(&lines);
+
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_zeek::<Conn>(
+                iter,
+                RawEventKind::Conn,
+                0,
+                0,
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_zeek");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Conn);
+        assert_eq!(events.len(), 4);
+
+        let (_, base_a) = Conn::try_from_zeek_record(&create_zeek_record(timestamp_a, "UID_A1"))
+            .expect("parse A");
+        let (_, base_b) = Conn::try_from_zeek_record(&create_zeek_record(timestamp_b, "UID_B1"))
+            .expect("parse B");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![base_a, base_a + 1, base_b, base_b + 1]);
+
+        let _ = fs::remove_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn test_send_zeek_timestamp_deduplication_across_batches() {
+        let expected_events = BATCH_SIZE + 1;
+        let (server_addr, server_handle) = spawn_test_server(expected_events);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "conn".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        let timestamp = "1562093121.655728";
+        let lines: Vec<String> = (0..expected_events)
+            .map(|i| zeek_conn_line(timestamp, &format!("UID_{i:04}")))
+            .collect();
+        let log_path = write_temp_zeek_log(&lines);
+
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_zeek::<Conn>(
+                iter,
+                RawEventKind::Conn,
+                0,
+                0,
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_zeek");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Conn);
+        assert_eq!(events.len(), expected_events);
+
+        let (_, base_ts) = Conn::try_from_zeek_record(&create_zeek_record(timestamp, "UID_0000"))
+            .expect("parse timestamp");
+        for (idx, (timestamp, _)) in events.iter().enumerate() {
+            let offset = i64::try_from(idx).expect("offset fits i64");
+            assert_eq!(*timestamp, base_ts + offset);
+        }
+
+        let _ = fs::remove_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn test_send_zeek_deduplication_skips_invalid_timestamps() {
+        let (server_addr, server_handle) = spawn_test_server(2);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "conn".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        let timestamp = "1562093121.655728";
+        let lines = vec![
+            zeek_conn_line(timestamp, "UID_A1"),
+            zeek_conn_line("invalid.123", "UID_BAD"),
+            zeek_conn_line(timestamp, "UID_A2"),
+        ];
+        let log_path = write_temp_zeek_log(&lines);
+
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_zeek::<Conn>(
+                iter,
+                RawEventKind::Conn,
+                0,
+                0,
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_zeek");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Conn);
+        assert_eq!(events.len(), 2);
+
+        let (_, base_ts) = Conn::try_from_zeek_record(&create_zeek_record(timestamp, "UID_A1"))
+            .expect("parse timestamp");
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![base_ts, base_ts + 1]);
+
+        let _ = fs::remove_file(&log_path);
     }
 }
