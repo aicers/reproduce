@@ -66,11 +66,12 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns an error if it fails to parse the configuration file correctly or it runs out of parameters.
+    /// Returns an error if:
+    /// - The configuration file cannot be read or parsed
+    /// - Required fields are missing
+    /// - The `kind` field is missing or empty
     pub(crate) fn new(path: &Path) -> Result<Self> {
         let config = config::Config::builder()
-            .set_default("kind", String::new())
-            .context("cannot set the default kind value")?
             .set_default("report", DEFAULT_REPORT_MODE)
             .context("cannot set the default report value")?
             .set_default("file.polling_mode", DEFAULT_POLLING_MODE)
@@ -82,7 +83,13 @@ impl Config {
             .add_source(config::File::from(path))
             .build()
             .context("cannot build the config")?;
-        Ok(config.try_deserialize()?)
+        let config: Self = config.try_deserialize()?;
+
+        if config.kind.trim().is_empty() {
+            anyhow::bail!("kind cannot be empty");
+        }
+
+        Ok(config)
     }
 }
 
@@ -98,4 +105,108 @@ where
     let addr = String::deserialize(deserializer)?;
     addr.parse()
         .map_err(|e| D::Error::custom(format!("invalid address \"{addr}\": {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+
+    use super::*;
+
+    fn create_temp_config(content: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::with_suffix(".toml").expect("Failed to create temp file");
+        file.write_all(content.as_bytes())
+            .expect("Failed to write config");
+        file.flush().expect("Failed to flush");
+        file
+    }
+
+    #[test]
+    fn config_new_missing_kind_returns_error() {
+        let config_content = r#"
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+ca_certs = ["tests/root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "aicers"
+input = "/path/to/file"
+"#;
+        let temp_file = create_temp_config(config_content);
+        let result = Config::new(temp_file.path());
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("kind"),
+            "Error message should mention 'kind': {err_msg}"
+        );
+    }
+
+    #[test]
+    fn config_new_empty_kind_returns_error() {
+        let config_content = r#"
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+ca_certs = ["tests/root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "aicers"
+kind = ""
+input = "/path/to/file"
+"#;
+        let temp_file = create_temp_config(config_content);
+        let result = Config::new(temp_file.path());
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("kind cannot be empty"),
+            "Error message should indicate empty kind: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn config_new_whitespace_only_kind_returns_error() {
+        let config_content = r#"
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+ca_certs = ["tests/root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "aicers"
+kind = "   "
+input = "/path/to/file"
+"#;
+        let temp_file = create_temp_config(config_content);
+        let result = Config::new(temp_file.path());
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("kind cannot be empty"),
+            "Error message should indicate empty kind: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn config_new_valid_log_kind_succeeds() {
+        let config_content = r#"
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+ca_certs = ["tests/root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "aicers"
+kind = "valid log"
+input = "/path/to/file"
+"#;
+        let temp_file = create_temp_config(config_content);
+        let result = Config::new(temp_file.path());
+
+        assert!(
+            result.is_ok(),
+            "Config with 'log' kind should load successfully: {result:?}"
+        );
+        let config = result.unwrap();
+        assert_eq!(config.kind, "valid log");
+    }
 }
