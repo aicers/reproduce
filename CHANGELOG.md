@@ -9,9 +9,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - Added sysmon file migration support.
+- Added `log` kind for explicitly sending unstructured log data.
 
 ### Changed
 
+- **BREAKING**: The `kind` configuration field is now required. Configs that
+  relied on the implicit empty default will now fail with a clear error message.
+  Set `kind` to a supported value (e.g., `http`, `dns`, `log`).
+- Unknown `kind` values now produce an error instead of silently being treated
+  as unstructured logs.
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.26.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
@@ -20,6 +26,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Switched reqwest TLS backend to `native-tls` to avoid rustls provider
   conflicts with the 0.13 defaults and prevent runtime panics.
+- Fixed unstructured logs being sent when `kind` is accidentally omitted from
+  the config. The `kind` field is now validated at startup.
 
 ## [0.23.0] - 2025-11-26
 
@@ -447,6 +455,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.23.0...main
 [0.23.0]: https://github.com/aicers/reproduce/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/aicers/reproduce/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/aicers/reproduce/compare/0.21.2...0.22.0
