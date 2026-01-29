@@ -259,7 +259,7 @@ impl Controller {
                         .to_str()
                         .expect("tostr")
                         .split_once('.')
-                        .expect("agent.log")
+                        .expect("filename must have an extension")
                         .0;
                     if !AGENTS_LIST.contains(&agent) {
                         bail!("invalid agent name `{agent}.log`");
@@ -448,6 +448,7 @@ async fn producer(config: &Config) -> Producer {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::path::Path;
 
     use tempfile::tempdir;
 
@@ -657,5 +658,118 @@ mod tests {
         assert!(result.contains(&dir_path.join("keep_b.csv")));
         assert!(result.contains(&dir_path.join("keep_c.csv")));
         assert!(!result.contains(&dir_path.join("keep_a.csv")));
+    }
+
+    /// Helper to extract agent name from filename, replicating the validation
+    /// logic in `run_single`.
+    fn validate_agent_filename(filename: &Path) -> Option<&str> {
+        let agent = filename
+            .file_name()
+            .expect("input file name")
+            .to_str()
+            .expect("tostr")
+            .split_once('.')
+            .expect("filename must have an extension")
+            .0;
+        if AGENTS_LIST.contains(&agent) {
+            Some(agent)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn valid_agent_filenames() {
+        let valid_filenames = [
+            "manager.log",
+            "data_store.txt",
+            "sensor.csv",
+            "semi_supervised.json",
+            "time_series_generator.log.1",
+            "unsupervised.dat",
+            "ti_container.out",
+        ];
+
+        for filename in valid_filenames {
+            let path = Path::new(filename);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_some(),
+                "Expected valid agent filename: {filename}"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_agent_filenames_with_directory() {
+        let valid_paths = [
+            "/var/log/manager.txt",
+            "/home/user/logs/data_store.csv",
+            "relative/path/sensor.json",
+            "./semi_supervised.dat",
+            "../time_series_generator.out",
+        ];
+
+        for path_str in valid_paths {
+            let path = Path::new(path_str);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_some(),
+                "Expected valid agent filename with path: {path_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_agent_name_returns_none() {
+        let invalid_agent_filenames = [
+            "unknown_agent.txt",
+            "invalid.csv",
+            "test.json",
+            "other_service.dat",
+            "agent.out",
+        ];
+
+        for filename in invalid_agent_filenames {
+            let path = Path::new(filename);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_none(),
+                "Expected invalid agent name to return None: {filename}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "filename must have an extension")]
+    fn panic_on_filename_without_dot() {
+        let path = Path::new("manager_no_extension");
+        let _ = validate_agent_filename(path);
+    }
+
+    #[test]
+    #[should_panic(expected = "input file name")]
+    fn panic_on_empty_path() {
+        let path = Path::new("/");
+        let _ = validate_agent_filename(path);
+    }
+
+    #[test]
+    fn valid_agent_with_different_extensions() {
+        let valid_with_other_ext = [
+            "manager.txt",
+            "sensor.csv",
+            "data_store.json",
+            "unsupervised.log.1",
+        ];
+
+        for filename in valid_with_other_ext {
+            let path = Path::new(filename);
+            let result = validate_agent_filename(path);
+            assert!(
+                result.is_some(),
+                "Expected valid agent name regardless of extension: {filename}"
+            );
+        }
     }
 }
