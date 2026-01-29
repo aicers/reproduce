@@ -83,7 +83,76 @@ impl ParseSecurityLog for Mf2 {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+    use crate::security_log::PROTO_TCP;
+
+    #[test]
+    fn parse_mf2_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "mf2".to_string(),
+            log_type: "ips".to_string(),
+            version: "4.0".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Mf2::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Mf2::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing IP/port fields should fail
+        // The regex requires: ]datetime,...,srcIp,srcPort,dstIp,dstPort,proto,
+        let truncated = "<190>1 2020-07-13T00:33:28.957810Z [ips_ddos_detect] \
+            [211.217.5.120]2020-07-13 09:33:23,KOFIH,#21965,192.168.20.79";
+        assert!(Mf2::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_mf2_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "mf2".to_string(),
+            log_type: "ips".to_string(),
+            version: "4.0".to_string(),
+        };
+
+        let log = "<190>1 2020-07-13T00:33:28.957810Z [ips_ddos_detect] \
+            [211.217.5.120]2020-07-13 09:33:23,KOFIH,\
+            #21965(HTTP Sensitive file Access Attempt(index.jsp)),#0(IPS),\
+            192.168.20.79,56889,211.42.85.240,80,TCP,don't frag/last frag,\
+            AP,24:f5:aa:e1:fc:a0,1,541,detect,0";
+
+        let (seculog, timestamp) = Mf2::parse_security_log(log, 0, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "mf2");
+        assert_eq!(seculog.log_type, "ips");
+        assert_eq!(seculog.version, "4.0");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 20, 79)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(211, 42, 85, 240)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(56889));
+        assert_eq!(seculog.resp_port, Some(80));
+
+        // Verify protocol is TCP
+        assert_eq!(seculog.proto, Some(PROTO_TCP));
+
+        // Verify timestamp is positive
+        assert!(timestamp > 0);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_mf2_timestamp_ns_returns_expected_nanos() {
