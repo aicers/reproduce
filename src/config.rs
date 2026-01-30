@@ -113,8 +113,9 @@ mod tests {
 
     use tempfile::NamedTempFile;
 
-    use super::*;
+    use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
 
+    /// Creates a temporary TOML config file with the given content.
     fn create_temp_config(content: &str) -> NamedTempFile {
         let mut file = NamedTempFile::with_suffix(".toml").expect("Failed to create temp file");
         file.write_all(content.as_bytes())
@@ -208,5 +209,149 @@ input = "/path/to/file"
         );
         let config = result.unwrap();
         assert_eq!(config.kind, "valid log");
+    }
+
+    #[test]
+    fn default_values_applied() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let file = create_temp_config(toml);
+
+        let config = Config::new(file.path()).expect("should parse minimal TOML");
+
+        // Assert default values are correctly applied
+        assert_eq!(config.report, DEFAULT_REPORT_MODE);
+    }
+
+    #[test]
+    fn default_file_polling_mode() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+
+[file]
+"#;
+        let file = create_temp_config(toml);
+
+        let config = Config::new(file.path()).expect("should parse TOML with file section");
+
+        let file_section = config.file.expect("file section should exist");
+        assert_eq!(file_section.polling_mode, DEFAULT_POLLING_MODE);
+        assert_eq!(
+            file_section.export_from_giganto,
+            Some(DEFAULT_EXPORT_FROM_GIGANTO)
+        );
+    }
+
+    #[test]
+    fn default_directory_polling_mode() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+
+[directory]
+"#;
+        let file = create_temp_config(toml);
+
+        let config = Config::new(file.path()).expect("should parse TOML with directory section");
+
+        let directory = config.directory.expect("directory section should exist");
+        assert_eq!(directory.polling_mode, DEFAULT_POLLING_MODE);
+    }
+
+    #[test]
+    fn socket_addr_ipv4_parses() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let file = create_temp_config(toml);
+
+        let config = Config::new(file.path()).expect("should parse IPv4 socket address");
+
+        assert_eq!(
+            config.giganto_ingest_srv_addr,
+            "127.0.0.1:8080".parse().expect("valid socket addr")
+        );
+    }
+
+    #[test]
+    fn socket_addr_ipv6_parses() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "[::1]:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let file = create_temp_config(toml);
+
+        let config = Config::new(file.path()).expect("should parse IPv6 socket address");
+
+        assert_eq!(
+            config.giganto_ingest_srv_addr,
+            "[::1]:8080".parse().expect("valid socket addr")
+        );
+    }
+
+    #[test]
+    fn socket_addr_missing_port_fails() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let file = create_temp_config(toml);
+
+        let result = Config::new(file.path());
+        assert!(result.is_err(), "missing port should fail to parse");
+    }
+
+    #[test]
+    fn socket_addr_hostname_fails() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "localhost:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+"#;
+        let file = create_temp_config(toml);
+
+        let result = Config::new(file.path());
+        assert!(
+            result.is_err(),
+            "hostname should fail to parse as socket address"
+        );
     }
 }
