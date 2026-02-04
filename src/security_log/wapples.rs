@@ -131,7 +131,7 @@ mod tests {
         );
 
         // Verify ports - wapples sets orig_port to DEFAULT_PORT (0)
-        assert_eq!(seculog.orig_port, Some(0));
+        assert_eq!(seculog.orig_port, Some(DEFAULT_PORT));
         assert_eq!(seculog.resp_port, Some(1443));
 
         // Verify protocol is TCP
