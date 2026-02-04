@@ -86,7 +86,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use super::*;
-    use crate::security_log::PROTO_TCP;
+    use crate::security_log::{PROTO_TCP, PROTO_UDP};
 
     #[test]
     fn parse_mf2_rejects_invalid_format() {
@@ -147,11 +147,37 @@ mod tests {
         // Verify protocol is TCP
         assert_eq!(seculog.proto, Some(PROTO_TCP));
 
-        // Verify timestamp is positive
-        assert!(timestamp > 0);
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "2020-07-13 09:33:23" +0900 = 2020-07-13 00:33:23 UTC
+        let expected_timestamp = parse_mf2_timestamp_ns("2020-07-13 09:33:23").unwrap();
+        assert_eq!(timestamp, expected_timestamp);
 
         // Verify contents matches input
         assert_eq!(seculog.contents, log);
+    }
+
+    #[test]
+    fn parse_mf2_maps_udp_protocol_correctly() {
+        let info = SecurityLogInfo {
+            kind: "mf2".to_string(),
+            log_type: "ips".to_string(),
+            version: "4.0".to_string(),
+        };
+
+        // Same log format but with UDP protocol instead of TCP
+        let log = "<190>1 2020-07-13T00:33:28.957810Z [ips_ddos_detect] \
+            [211.217.5.120]2020-07-13 09:33:23,KOFIH,\
+            #21965(UDP Flood Attack),#0(IPS),\
+            192.168.20.79,56889,211.42.85.240,53,UDP,don't frag/last frag,\
+            AP,24:f5:aa:e1:fc:a0,1,541,detect,0";
+
+        let (seculog, _) = Mf2::parse_security_log(log, 0, info).unwrap();
+
+        // Verify protocol is UDP
+        assert_eq!(seculog.proto, Some(PROTO_UDP));
+
+        // Verify port for typical UDP service (DNS)
+        assert_eq!(seculog.resp_port, Some(53));
     }
 
     #[test]
