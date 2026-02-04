@@ -53,13 +53,19 @@ impl Report {
             return;
         }
 
-        if bytes > self.max_bytes {
-            self.max_bytes = bytes;
-        } else if bytes < self.min_bytes || self.min_bytes == 0 {
+        self.process_cnt += 1;
+        if self.process_cnt == 1 {
             self.min_bytes = bytes;
+            self.max_bytes = bytes;
+        } else {
+            if bytes > self.max_bytes {
+                self.max_bytes = bytes;
+            }
+            if bytes < self.min_bytes {
+                self.min_bytes = bytes;
+            }
         }
         self.sum_bytes += bytes;
-        self.process_cnt += 1;
     }
 
     #[allow(dead_code)]
@@ -148,7 +154,7 @@ impl Report {
             "{:width$}{} ({})\n",
             "Skip Count:",
             self.skip_cnt,
-            ByteSize(self.skip_cnt as u64),
+            ByteSize(self.skip_bytes as u64),
             width = ARRANGE_VAR,
         ))?;
         let elapsed_ms = self.time_diff.as_millis();
@@ -171,5 +177,78 @@ impl Report {
             width = ARRANGE_VAR,
         ))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+
+    use super::*;
+
+    /// Creates a temporary TOML config file with report enabled.
+    fn create_test_config(report_enabled: bool) -> Config {
+        let config_content = format!(
+            r#"
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+ca_certs = ["tests/root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "aicers"
+kind = "test"
+input = "/path/to/file"
+report = {report_enabled}
+"#
+        );
+        let mut file = NamedTempFile::with_suffix(".toml").expect("Failed to create temp file");
+        file.write_all(config_content.as_bytes())
+            .expect("Failed to write config");
+        file.flush().expect("Failed to flush");
+        Config::new(file.path()).expect("Failed to create config")
+    }
+
+    #[test]
+    fn process_first_sample_sets_min_and_max() {
+        let config = create_test_config(true);
+        let mut report = Report::new(config);
+
+        report.process(10);
+
+        assert_eq!(report.min_bytes, 10);
+        assert_eq!(report.max_bytes, 10);
+    }
+
+    #[test]
+    fn process_updates_min_and_max_correctly() {
+        let config = create_test_config(true);
+        let mut report = Report::new(config);
+
+        report.process(10);
+        assert_eq!(report.min_bytes, 10);
+        assert_eq!(report.max_bytes, 10);
+
+        report.process(20);
+        assert_eq!(report.min_bytes, 10);
+        assert_eq!(report.max_bytes, 20);
+
+        report.process(5);
+        assert_eq!(report.min_bytes, 5);
+        assert_eq!(report.max_bytes, 20);
+    }
+
+    #[test]
+    fn skip_accumulates_bytes() {
+        let config = create_test_config(true);
+        let mut report = Report::new(config);
+
+        report.skip(100);
+        assert_eq!(report.skip_bytes, 100);
+        assert_eq!(report.skip_cnt, 1);
+
+        report.skip(200);
+        assert_eq!(report.skip_bytes, 300);
+        assert_eq!(report.skip_cnt, 2);
     }
 }
