@@ -23,6 +23,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed configuration so that the `kind` field is now mandatory; startup fails
   with an error if omitted or empty. This prevents unstructured logs from being
   unintentionally sent when `kind` was missing.
+- Fixed `min_bytes` calculation in report output where the first processed
+  sample would leave `min_bytes` at 0 instead of the actual value.
+- Fixed "Skip Count" byte display in report output to use accumulated
+  `skip_bytes` instead of `skip_cnt`.
 
 ## [0.23.0] - 2025-11-26
 
