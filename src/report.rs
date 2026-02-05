@@ -53,8 +53,7 @@ impl Report {
             return;
         }
 
-        self.process_cnt += 1;
-        if self.process_cnt == 1 {
+        if self.process_cnt == 0 {
             self.min_bytes = bytes;
             self.max_bytes = bytes;
         } else {
@@ -66,6 +65,7 @@ impl Report {
             }
         }
         self.sum_bytes += bytes;
+        self.process_cnt += 1;
     }
 
     #[allow(dead_code)]
