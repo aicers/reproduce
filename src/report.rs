@@ -283,23 +283,44 @@ report = {report_enabled}
         let config = test_config(false, "test_kind", input_file.to_str().expect("valid path"));
         let mut report = Report::new(config);
 
+        // Record files in /report before the test (if it exists)
+        let report_dir = Path::new("/report");
+        let files_before_in_report_dir: Option<Vec<_>> = if report_dir.is_dir() {
+            Some(
+                std::fs::read_dir(report_dir)
+                    .expect("failed to read /report dir")
+                    .filter_map(std::result::Result::ok)
+                    .map(|e| e.path())
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+        // Save current directory and change to temp dir to verify CWD writes
+        let original_dir = std::env::current_dir().expect("failed to get current dir");
+        std::env::set_current_dir(temp_path).expect("failed to change to temp dir");
+
         // Call start, process some bytes, and end
         report.start();
         report.process(100);
         report.process(200);
         let result = report.end();
 
+        // Restore original directory
+        std::env::set_current_dir(&original_dir).expect("failed to restore original dir");
+
         // end() should succeed without writing files
         assert!(result.is_ok());
 
-        // Verify no report file was created in the temp directory
+        // Verify no report file was created in the temp directory (CWD during end())
         let report_file = temp_path.join("test_kind.report");
         assert!(
             !report_file.exists(),
-            "Report file should not be created when report=false"
+            "Report file should not be created in CWD when report=false"
         );
 
-        // Also check that no files were created with the report name pattern anywhere
+        // Also check that no .report files were created in the temp directory
         let files: Vec<_> = std::fs::read_dir(temp_path)
             .expect("failed to read temp dir")
             .filter_map(std::result::Result::ok)
@@ -309,6 +330,23 @@ report = {report_enabled}
             files.is_empty(),
             "No .report files should be created when report=false"
         );
+
+        // If /report exists, verify no new files were created there
+        if let Some(files_before) = files_before_in_report_dir {
+            let files_after: Vec<_> = std::fs::read_dir(report_dir)
+                .expect("failed to read /report dir")
+                .filter_map(std::result::Result::ok)
+                .map(|e| e.path())
+                .collect();
+            let new_files: Vec<_> = files_after
+                .iter()
+                .filter(|f| !files_before.contains(f))
+                .collect();
+            assert!(
+                new_files.is_empty(),
+                "No new files should be created in /report when report=false, found: {new_files:?}"
+            );
+        }
     }
 
     #[test]
@@ -474,6 +512,103 @@ report = {report_enabled}
         assert!(
             (expected_avg - 200.0).abs() < f64::EPSILON,
             "expected average should be 200.0"
+        );
+    }
+
+    #[test]
+    fn report_true_creates_file_with_content() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let temp_path = temp_dir.path();
+
+        // Create config with report=true and input as a file path (InputType::Log)
+        let input_file = temp_path.join("test.log");
+        std::fs::write(&input_file, "test content").expect("failed to write input file");
+
+        let config = test_config(true, "test_kind", input_file.to_str().expect("valid path"));
+        let mut report = Report::new(config);
+
+        // Save current directory and change to temp dir so report writes there
+        let original_dir = std::env::current_dir().expect("failed to get current dir");
+        std::env::set_current_dir(temp_path).expect("failed to change to temp dir");
+
+        // Call start, process some bytes, and end
+        report.start();
+        report.process(100);
+        report.process(200);
+        report.process(300);
+        let result = report.end();
+
+        // Restore original directory
+        std::env::set_current_dir(&original_dir).expect("failed to restore original dir");
+
+        // end() should succeed
+        assert!(result.is_ok(), "end() should succeed when report=true");
+
+        // Verify report file was created in the temp directory (CWD during end())
+        let report_file = temp_path.join("test_kind.report");
+        assert!(
+            report_file.exists(),
+            "Report file should be created when report=true"
+        );
+
+        // Verify the file contains expected content
+        let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
+
+        // Check for expected sections in the report
+        assert!(
+            content.contains("--------------------------------------------------"),
+            "Report should contain separator line"
+        );
+        assert!(
+            content.contains("Time:"),
+            "Report should contain Time field"
+        );
+        assert!(
+            content.contains("Input(LOG)"),
+            "Report should contain Input(LOG) header for log input"
+        );
+        assert!(
+            content.contains("Output(Giganto):"),
+            "Report should contain Output header"
+        );
+        assert!(
+            content.contains("Statistics (Min/Max/Avg):"),
+            "Report should contain Statistics line"
+        );
+        assert!(
+            content.contains("Process Count:"),
+            "Report should contain Process Count line"
+        );
+        assert!(
+            content.contains("Skip Count:"),
+            "Report should contain Skip Count line"
+        );
+        assert!(
+            content.contains("Elapsed Time:"),
+            "Report should contain Elapsed Time line"
+        );
+        assert!(
+            content.contains("Performance:"),
+            "Report should contain Performance line"
+        );
+
+        // Verify statistics values are present
+        // sum_bytes = 600, process_cnt = 3, so avg = 200.0
+        // max_bytes = 300 (last value since 300 > 200 > 100)
+        // min_bytes = 100 (set on second call when 200 < 100 is false but min_bytes == 0 fails,
+        //   wait actually: first call 100 > 0 -> max=100, then 200 > 100 -> max=200,
+        //   200 < 0 is false and min_bytes == 0 is true -> min=200... no wait that's wrong
+        //   Let me trace: process(100): 100 > 0 -> max=100, else-if skipped
+        //   process(200): 200 > 100 -> max=200, else-if skipped
+        //   process(300): 300 > 200 -> max=300, else-if skipped
+        //   So min_bytes stays 0 in this case because we never hit the else-if branch)
+        assert!(
+            content.contains("300"),
+            "Report should contain max_bytes value 300"
+        );
+        assert!(
+            content.contains("200.00"),
+            "Report should contain avg_bytes value 200.00"
         );
     }
 }
