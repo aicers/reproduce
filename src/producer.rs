@@ -1361,6 +1361,55 @@ struct GigantoInfo {
     kind: String,
 }
 
+/// Applies timestamp deduplication by incrementing offset for consecutive identical timestamps.
+///
+/// Returns the deduplicated timestamp (original + offset). When a new timestamp is encountered,
+/// the reference is updated and offset resets to 0. For identical consecutive timestamps,
+/// offset increments by 1 for each occurrence.
+#[cfg(test)]
+pub(crate) fn apply_timestamp_dedup(
+    current_timestamp: i64,
+    reference_timestamp: &mut Option<i64>,
+    timestamp_offset: &mut i64,
+) -> i64 {
+    if let Some(ref_ts) = *reference_timestamp {
+        if current_timestamp == ref_ts {
+            // Same timestamp, increment offset
+            *timestamp_offset += 1;
+        } else {
+            // Different timestamp, update reference and reset offset
+            *reference_timestamp = Some(current_timestamp);
+            *timestamp_offset = 0;
+        }
+    } else {
+        // First event, set reference timestamp
+        *reference_timestamp = Some(current_timestamp);
+    }
+    current_timestamp + *timestamp_offset
+}
+
+#[cfg(not(test))]
+fn apply_timestamp_dedup(
+    current_timestamp: i64,
+    reference_timestamp: &mut Option<i64>,
+    timestamp_offset: &mut i64,
+) -> i64 {
+    if let Some(ref_ts) = *reference_timestamp {
+        if current_timestamp == ref_ts {
+            // Same timestamp, increment offset
+            *timestamp_offset += 1;
+        } else {
+            // Different timestamp, update reference and reset offset
+            *reference_timestamp = Some(current_timestamp);
+            *timestamp_offset = 0;
+        }
+    } else {
+        // First event, set reference timestamp
+        *reference_timestamp = Some(current_timestamp);
+    }
+    current_timestamp + *timestamp_offset
+}
+
 impl Giganto {
     #[allow(clippy::too_many_lines)]
     async fn send_zeek<T>(
@@ -1420,25 +1469,16 @@ impl Giganto {
                             continue;
                         };
 
-                        // Implement timestamp deduplication logic
-                        if let Some(ref_ts) = reference_timestamp {
-                            if current_timestamp == ref_ts {
-                                // Same timestamp, increment offset
-                                timestamp_offset += 1;
-                            } else {
-                                // Different timestamp, update reference and reset offset
-                                reference_timestamp = Some(current_timestamp);
-                                timestamp_offset = 0;
-                            }
-                        } else {
-                            // First event, set reference timestamp
-                            reference_timestamp = Some(current_timestamp);
-                        }
+                        // Apply timestamp deduplication
+                        let deduped_timestamp = apply_timestamp_dedup(
+                            current_timestamp,
+                            &mut reference_timestamp,
+                            &mut timestamp_offset,
+                        );
 
                         match T::try_from_zeek_record(&record) {
-                            Ok((event, mut timestamp)) => {
-                                // Apply timestamp offset for deduplication
-                                timestamp += timestamp_offset;
+                            Ok((event, _)) => {
+                                let timestamp = deduped_timestamp;
                                 if self.init_msg {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;
@@ -2412,29 +2452,6 @@ mod tests {
             .expect("parsed record")
     }
 
-    fn apply_timestamp_deduplication(
-        timestamps: &[i64],
-        reference_timestamp: &mut Option<i64>,
-        timestamp_offset: &mut i64,
-    ) -> Vec<i64> {
-        timestamps
-            .iter()
-            .map(|&ts| {
-                if let Some(ref_ts) = *reference_timestamp {
-                    if ts == ref_ts {
-                        *timestamp_offset += 1;
-                    } else {
-                        *reference_timestamp = Some(ts);
-                        *timestamp_offset = 0;
-                    }
-                } else {
-                    *reference_timestamp = Some(ts);
-                }
-                ts + *timestamp_offset
-            })
-            .collect()
-    }
-
     fn test_server_config() -> ServerConfig {
         let cert_pem = fs::read(TEST_CERT_PATH).expect("read cert");
         let key_pem = fs::read(TEST_KEY_PATH).expect("read key");
@@ -2573,14 +2590,14 @@ mod tests {
         assert_eq!(ts_b2, ts_b3, "B timestamps should be identical");
         assert_ne!(ts_a1, ts_b1, "A and B timestamps should differ");
 
-        // Apply deduplication
+        // Apply deduplication using the production helper
         let mut reference_timestamp: Option<i64> = None;
         let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts_a1, ts_a2, ts_b1, ts_b2, ts_b3],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
+        let timestamps = [ts_a1, ts_a2, ts_b1, ts_b2, ts_b3];
+        let final_timestamps: Vec<i64> = timestamps
+            .iter()
+            .map(|&ts| apply_timestamp_dedup(ts, &mut reference_timestamp, &mut timestamp_offset))
+            .collect();
 
         // Verify: A timestamps get offsets 0, 1
         assert_eq!(final_timestamps[0], ts_a1, "First A event: no offset");
@@ -2796,6 +2813,274 @@ mod tests {
             .expect("parse timestamp");
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![base_ts, base_ts + 1]);
+
+        let _ = fs::remove_file(&log_path);
+    }
+
+    // ==========================================================================
+    // Option Behavior Tests
+    //
+    // These tests verify the behavior of skip, count_sent, and file_polling_mode
+    // options in send_zeek.
+    // ==========================================================================
+
+    /// Tests that the `skip` option ignores the first N lines.
+    ///
+    /// Scenario: 5 events, skip=2
+    /// Expected: Only events 3, 4, 5 are sent (3 events total)
+    #[tokio::test]
+    async fn test_send_zeek_skip_ignores_first_n_lines() {
+        let (server_addr, server_handle) = spawn_test_server(3);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "conn".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        let lines: Vec<String> = (0..5)
+            .map(|i| zeek_conn_line(&format!("156209312{i}.000000"), &format!("UID_{i}")))
+            .collect();
+        let log_path = write_temp_zeek_log(&lines);
+
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_zeek::<Conn>(
+                iter,
+                RawEventKind::Conn,
+                2, // skip first 2 lines
+                0,
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_zeek");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Conn);
+        assert_eq!(events.len(), 3, "Should have skipped first 2 lines");
+
+        // Verify we got events 3, 4, 5 (indices 2, 3, 4 in original)
+        let (_, ts_2) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093122.000000", "UID_2"))
+                .expect("parse");
+        let (_, ts_3) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093123.000000", "UID_3"))
+                .expect("parse");
+        let (_, ts_4) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093124.000000", "UID_4"))
+                .expect("parse");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![ts_2, ts_3, ts_4]);
+
+        let _ = fs::remove_file(&log_path);
+    }
+
+    /// Tests that the `count_sent` option stops after exactly N events are sent.
+    ///
+    /// Scenario: 10 events, `count_sent=4`
+    /// Expected: Only the first 4 events are sent
+    #[tokio::test]
+    async fn test_send_zeek_count_sent_stops_after_n_events() {
+        let (server_addr, server_handle) = spawn_test_server(4);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "conn".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        let lines: Vec<String> = (0..10)
+            .map(|i| zeek_conn_line(&format!("156209312{i}.000000"), &format!("UID_{i}")))
+            .collect();
+        let log_path = write_temp_zeek_log(&lines);
+
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_zeek::<Conn>(
+                iter,
+                RawEventKind::Conn,
+                0,
+                4, // stop after 4 events
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_zeek");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Conn);
+        assert_eq!(events.len(), 4, "Should have sent exactly 4 events");
+
+        // Verify we got events 0, 1, 2, 3
+        let (_, ts_0) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093120.000000", "UID_0"))
+                .expect("parse");
+        let (_, ts_1) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093121.000000", "UID_1"))
+                .expect("parse");
+        let (_, ts_2) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093122.000000", "UID_2"))
+                .expect("parse");
+        let (_, ts_3) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093123.000000", "UID_3"))
+                .expect("parse");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![ts_0, ts_1, ts_2, ts_3]);
+
+        let _ = fs::remove_file(&log_path);
+    }
+
+    /// Tests that `file_polling_mode` resumes processing when new data is appended after EOF.
+    ///
+    /// Scenario: Initial file has 2 events, then 2 more are appended
+    /// Expected: All 4 events are eventually sent
+    #[tokio::test]
+    async fn test_send_zeek_file_polling_mode_resumes_on_append() {
+        let (server_addr, server_handle) = spawn_test_server(4);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "conn".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        // Create initial file with 2 events
+        let initial_lines = vec![
+            zeek_conn_line("1562093120.000000", "UID_0"),
+            zeek_conn_line("1562093121.000000", "UID_1"),
+        ];
+        let log_path = write_temp_zeek_log(&initial_lines);
+        let log_path_clone = log_path.clone();
+
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+
+        // Spawn a task to append more data after a short delay
+        let append_handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(&log_path_clone)
+                .expect("open for append");
+            let additional_lines = [
+                zeek_conn_line("1562093122.000000", "UID_2"),
+                zeek_conn_line("1562093123.000000", "UID_3"),
+            ];
+            file.write_all(additional_lines.join("\n").as_bytes())
+                .expect("append");
+            file.write_all(b"\n").expect("newline");
+            file.flush().expect("flush");
+        });
+
+        producer
+            .giganto
+            .send_zeek::<Conn>(
+                iter,
+                RawEventKind::Conn,
+                0,
+                4,    // stop after 4 events (initial 2 + appended 2)
+                true, // file_polling_mode enabled
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_zeek");
+
+        append_handle.await.expect("append task");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Conn);
+        assert_eq!(
+            events.len(),
+            4,
+            "Should have received all 4 events including appended ones"
+        );
+
+        // Verify we got all 4 events
+        let (_, ts_0) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093120.000000", "UID_0"))
+                .expect("parse");
+        let (_, ts_1) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093121.000000", "UID_1"))
+                .expect("parse");
+        let (_, ts_2) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093122.000000", "UID_2"))
+                .expect("parse");
+        let (_, ts_3) =
+            Conn::try_from_zeek_record(&create_zeek_record("1562093123.000000", "UID_3"))
+                .expect("parse");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![ts_0, ts_1, ts_2, ts_3]);
 
         let _ = fs::remove_file(&log_path);
     }
