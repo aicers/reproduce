@@ -1186,4 +1186,163 @@ mod tests {
         assert!(format!("{stats}").contains("Events = 1"));
         Ok(())
     }
+
+    #[test]
+    fn parse_netflow_datasets_v9_template_flowset_id_0() -> Result<()> {
+        // Test the Template FlowSet (ID=0) path in parse_netflow_datasets
+        let header = Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 1,
+            source_id: 1,
+        };
+
+        // Build a FlowSet with ID=0 (Template FlowSet) containing one template
+        // FlowSet header: flowset_id=0 (2B), flowset_length=16 (2B)
+        // Template: template_id=256 (2B), field_count=2 (2B), fields=(8,4), (12,4)
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u16.to_be_bytes()); // FlowSet ID = 0 (Template)
+        data.extend_from_slice(&16u16.to_be_bytes()); // FlowSet length
+        data.extend_from_slice(&256u16.to_be_bytes()); // template_id
+        data.extend_from_slice(&2u16.to_be_bytes()); // field_count
+        data.extend_from_slice(&8u16.to_be_bytes()); // field type: IPv4SrcAddr
+        data.extend_from_slice(&4u16.to_be_bytes()); // field length
+        data.extend_from_slice(&12u16.to_be_bytes()); // field type: IPv4DstAddr
+        data.extend_from_slice(&4u16.to_be_bytes()); // field length
+
+        let mut buf = pktbuf_from_bytes(data);
+        let mut stats = Stats::new();
+        let mut templates = TemplatesBox::new();
+        let mut nanos = 0u32;
+
+        let events = Netflow9::parse_netflow_datasets(
+            1,
+            &mut templates,
+            &NetflowHeader::V9(header),
+            &mut nanos,
+            &mut buf,
+            &mut stats,
+        )?;
+
+        // Template FlowSets don't produce events
+        assert!(events.is_empty());
+        // Template should be added to templates box
+        let key = (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1, 256);
+        let stored = templates.get(&key).expect("template should be stored");
+        assert_eq!(stored.template_id, 256);
+        assert_eq!(stored.field_count, 2);
+        assert!(!stored.options_template);
+        // Stats should show template was processed
+        assert!(format!("{stats}").contains("V9Templates = 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_netflow_datasets_v9_options_template_flowset_id_1() -> Result<()> {
+        // Test the Options Template FlowSet (ID=1) path in parse_netflow_datasets
+        let header = Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 1,
+            source_id: 1,
+        };
+
+        // Build a FlowSet with ID=1 (Options Template FlowSet)
+        // FlowSet header: flowset_id=1 (2B), flowset_length=18 (2B)
+        // Options Template: template_id=257 (2B), scope_length=4 (2B), option_length=4 (2B)
+        // Scope field: (1, 4) - System scope
+        // Option field: (1, 4) - InBytes
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_be_bytes()); // FlowSet ID = 1 (Options Template)
+        data.extend_from_slice(&18u16.to_be_bytes()); // FlowSet length
+        data.extend_from_slice(&257u16.to_be_bytes()); // template_id
+        data.extend_from_slice(&4u16.to_be_bytes()); // scope_length (one scope field: 4 bytes)
+        data.extend_from_slice(&4u16.to_be_bytes()); // option_length (one option field: 4 bytes)
+        data.extend_from_slice(&1u16.to_be_bytes()); // scope field type: System
+        data.extend_from_slice(&4u16.to_be_bytes()); // scope field length
+        data.extend_from_slice(&1u16.to_be_bytes()); // option field type: InBytes
+        data.extend_from_slice(&4u16.to_be_bytes()); // option field length
+
+        let mut buf = pktbuf_from_bytes(data);
+        let mut stats = Stats::new();
+        let mut templates = TemplatesBox::new();
+        let mut nanos = 0u32;
+
+        let events = Netflow9::parse_netflow_datasets(
+            1,
+            &mut templates,
+            &NetflowHeader::V9(header),
+            &mut nanos,
+            &mut buf,
+            &mut stats,
+        )?;
+
+        // Options Template FlowSets don't produce events
+        assert!(events.is_empty());
+        // Template should be added to templates box with options_template=true
+        let key = (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1, 257);
+        let stored = templates
+            .get(&key)
+            .expect("options template should be stored");
+        assert_eq!(stored.template_id, 257);
+        assert!(stored.options_template);
+        assert_eq!(stored.scope_field_count, 1);
+        assert_eq!(stored.field_count, 2); // 1 scope + 1 option
+        // Stats should show options template was processed
+        assert!(format!("{stats}").contains("V9OptionsTemplate = 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_netflow_v9_datasets_with_options_template() {
+        // Test the options_template branch in parse_netflow_v9_datasets (lines 476-498)
+        let header = Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 7,
+            source_id: 9,
+        };
+
+        // Create an options template with 1 scope field and 2 option fields
+        // Scope field: System (type=1), length=4
+        // Option fields: InBytes (type=1), length=4 and InPackets (type=2), length=4
+        let template = Template {
+            header: header.clone(),
+            template_id: 257,
+            field_count: 3,                       // 1 scope + 2 option
+            flow_length: 12,                      // 4 + 4 + 4
+            fields: vec![(1, 4), (1, 4), (2, 4)], // scope field + option fields
+            options_template: true,
+            scope_field_count: 1,
+        };
+
+        // Build data record: 4 bytes for scope + 4 bytes for option1 + 4 bytes for option2
+        let mut data = Vec::new();
+        data.extend_from_slice(&0x1234_5678_u32.to_be_bytes()); // Scope field value
+        data.extend_from_slice(&1000u32.to_be_bytes()); // InBytes value
+        data.extend_from_slice(&50u32.to_be_bytes()); // InPackets value
+
+        let mut buf = pktbuf_from_bytes(data);
+        let flows = buf.parse_netflow_v9_datasets(&template, &header, 257);
+
+        assert_eq!(flows.len(), 1);
+        let flow = &flows[0];
+        assert_eq!(flow.template_id, 257);
+        // For options template, IP addresses and ports remain unspecified
+        assert_eq!(flow.orig_addr, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(flow.resp_addr, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(flow.orig_port, 0);
+        assert_eq!(flow.resp_port, 0);
+        // Contents should include scope field with OptionsScopeFieldTypes format
+        assert!(flow.contents.contains("System:"));
+        // Contents should include option fields with FieldTypes format
+        assert!(flow.contents.contains("InBytes:"));
+        assert!(flow.contents.contains("InPackets:"));
+    }
 }
