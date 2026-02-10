@@ -185,3 +185,33 @@ pub(super) static TCP_FLAGS: [(u8, &str); 8] = [
     (0x40, "ECE"),
     (0x08, "CWR"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use num_enum::FromPrimitive;
+
+    use super::{DataTypes, FieldTypes, OptionsScopeFieldTypes};
+
+    #[test]
+    fn field_types_get_types_maps_expected_values() {
+        assert!(FieldTypes::TCPFlags.get_types() == DataTypes::TcpFlags);
+        assert!(FieldTypes::IPv4SrcAddr.get_types() == DataTypes::Ipv4);
+        assert!(FieldTypes::IPv6DstAddr.get_types() == DataTypes::Ipv6);
+        assert!(FieldTypes::ForwardingStatus.get_types() == DataTypes::ForwardingStatus);
+        assert!(FieldTypes::IfDesc.get_types() == DataTypes::Text);
+        assert!(FieldTypes::InBytes.get_types() == DataTypes::Integer);
+    }
+
+    #[test]
+    fn field_types_from_primitive_unknown() {
+        assert_eq!(FieldTypes::from_primitive(u16::MAX), FieldTypes::Unknown);
+    }
+
+    #[test]
+    fn options_scope_field_types_from_primitive_unknown() {
+        assert_eq!(
+            OptionsScopeFieldTypes::from_primitive(u16::MAX),
+            OptionsScopeFieldTypes::Unknown
+        );
+    }
+}

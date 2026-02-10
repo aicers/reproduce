@@ -51,3 +51,40 @@ impl std::fmt::Display for Stats {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ProcessStats, Stats};
+
+    #[test]
+    fn add_accumulates_counts() {
+        let mut stats = Stats::new();
+
+        stats.add(ProcessStats::Packets, 1);
+        stats.add(ProcessStats::Packets, 2);
+
+        assert_eq!(stats.stats.get(&ProcessStats::Packets), Some(&3));
+    }
+
+    #[test]
+    fn add_tracks_multiple_kinds() {
+        let mut stats = Stats::new();
+
+        stats.add(ProcessStats::Packets, 1);
+        stats.add(ProcessStats::Events, 2);
+
+        assert_eq!(stats.stats.len(), 2);
+        assert_eq!(stats.stats.get(&ProcessStats::Packets), Some(&1));
+        assert_eq!(stats.stats.get(&ProcessStats::Events), Some(&2));
+    }
+
+    #[test]
+    fn display_includes_kind_and_value() {
+        let mut stats = Stats::new();
+
+        stats.add(ProcessStats::Packets, 3);
+
+        let rendered = format!("{stats}");
+        assert!(rendered.contains("Packets = 3"));
+    }
+}
