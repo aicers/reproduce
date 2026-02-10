@@ -1366,29 +1366,6 @@ struct GigantoInfo {
 /// Returns the deduplicated timestamp (original + offset). When a new timestamp is encountered,
 /// the reference is updated and offset resets to 0. For identical consecutive timestamps,
 /// offset increments by 1 for each occurrence.
-#[cfg(test)]
-pub(crate) fn apply_timestamp_dedup(
-    current_timestamp: i64,
-    reference_timestamp: &mut Option<i64>,
-    timestamp_offset: &mut i64,
-) -> i64 {
-    if let Some(ref_ts) = *reference_timestamp {
-        if current_timestamp == ref_ts {
-            // Same timestamp, increment offset
-            *timestamp_offset += 1;
-        } else {
-            // Different timestamp, update reference and reset offset
-            *reference_timestamp = Some(current_timestamp);
-            *timestamp_offset = 0;
-        }
-    } else {
-        // First event, set reference timestamp
-        *reference_timestamp = Some(current_timestamp);
-    }
-    current_timestamp + *timestamp_offset
-}
-
-#[cfg(not(test))]
 fn apply_timestamp_dedup(
     current_timestamp: i64,
     reference_timestamp: &mut Option<i64>,
