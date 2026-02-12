@@ -147,19 +147,14 @@ mod tests {
         assert_eq!(netflow_timestamp(1, u32::MAX), 0);
     }
 
-    /// Tests that opening a PCAP file with a non-ETHERNET link type
-    /// is detected when the datalink check is performed.
-    /// This exercises the error branch in `send_netflow` that checks
-    /// for non-ETHERNET link types.
-    #[test]
-    fn non_ethernet_linktype_detected() {
+    fn create_non_ethernet_pcap_file() -> tempfile::NamedTempFile {
         use std::io::Write;
 
         use tempfile::NamedTempFile;
 
         // Create a PCAP file manually with a non-ETHERNET link type
         // PCAP global header format (24 bytes):
-        // - Magic number: 0xa1b2c3d4 (4 bytes) - little endian
+        // - Magic number: little-endian PCAP bytes d4 c3 b2 a1 (4 bytes)
         // - Major version: 2 (2 bytes)
         // - Minor version: 4 (2 bytes)
         // - Timezone offset: 0 (4 bytes)
@@ -170,7 +165,7 @@ mod tests {
         let mut pcap_data = Vec::new();
 
         // PCAP global header (little endian)
-        pcap_data.extend_from_slice(&0xa1b2_c3d4_u32.to_le_bytes()); // magic
+        pcap_data.extend_from_slice(&0xa1b2_c3d4_u32.to_le_bytes());
         pcap_data.extend_from_slice(&2_u16.to_le_bytes()); // major version
         pcap_data.extend_from_slice(&4_u16.to_le_bytes()); // minor version
         pcap_data.extend_from_slice(&0_i32.to_le_bytes()); // timezone
@@ -195,23 +190,99 @@ mod tests {
             .write_all(&pcap_data)
             .expect("Failed to write pcap data");
         temp_file.flush().expect("Failed to flush temp file");
+        temp_file
+    }
 
-        // Now open the file and verify the datalink type is not ETHERNET
-        let handle = pcap::Capture::from_file(temp_file.path()).expect("Failed to open pcap file");
+    fn create_test_server_config() -> quinn::ServerConfig {
+        let cert_pem = std::fs::read("tests/cert.pem").expect("Failed to read tests/cert.pem");
+        let key_pem = std::fs::read("tests/key.pem").expect("Failed to read tests/key.pem");
 
-        // Verify the datalink is NOT Ethernet (ETHERNET = 1)
-        assert_ne!(
-            handle.get_datalink(),
-            pcap::Linktype::ETHERNET,
-            "Expected non-ETHERNET link type, got ETHERNET"
+        let cert_chain = rustls_pemfile::certs(&mut &*cert_pem)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("Invalid PEM-encoded certificate");
+        let private_key = rustls_pemfile::private_key(&mut &*key_pem)
+            .expect("Malformed PKCS #8 private key")
+            .expect("No private key found in tests/key.pem");
+        quinn::ServerConfig::with_single_cert(cert_chain, private_key)
+            .expect("Failed to build quinn server config")
+    }
+
+    /// Tests that opening a PCAP file with a non-ETHERNET link type
+    /// is detected when the datalink check is performed.
+    /// This exercises the error branch in `send_netflow` that checks
+    /// for non-ETHERNET link types.
+    #[tokio::test]
+    async fn non_ethernet_linktype_detected() {
+        use std::{
+            net::{IpAddr, Ipv6Addr, SocketAddr},
+            sync::{Arc, atomic::AtomicBool},
+        };
+
+        use giganto_client::connection::server_handshake;
+        use quinn::Endpoint;
+
+        use crate::{config::Config, producer::Producer, report::Report};
+
+        let server_endpoint = Endpoint::server(
+            create_test_server_config(),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        )
+        .expect("Failed to create test quinn server endpoint");
+        let server_addr = server_endpoint
+            .local_addr()
+            .expect("Failed to read test server address");
+
+        let server_task = tokio::spawn(async move {
+            let connecting = server_endpoint
+                .accept()
+                .await
+                .expect("Server did not receive a connection");
+            let connection = connecting
+                .await
+                .expect("Failed to establish server connection");
+            server_handshake(&connection, ">=0.0.0")
+                .await
+                .expect("Server handshake failed");
+            connection
+                .accept_bi()
+                .await
+                .expect("Server failed to accept data stream");
+        });
+
+        let config = Config {
+            cert: String::from("tests/cert.pem"),
+            key: String::from("tests/key.pem"),
+            ca_certs: vec![String::from("tests/root.pem")],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: String::from("localhost"),
+            kind: String::from("netflow9"),
+            input: String::from("/tmp/unused"),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("Failed to create producer for test");
+        let temp_file = create_non_ethernet_pcap_file();
+        let running = Arc::new(AtomicBool::new(true));
+        let mut report = Report::new(config.clone());
+
+        let result = producer
+            .send_netflow_to_giganto(temp_file.path(), 0, 0, running, &mut report)
+            .await;
+
+        let err = result.expect_err("Expected non-ETHERNET datalink to return an error");
+        assert!(
+            err.to_string().contains("Error: unknown datalink"),
+            "Unexpected error message: {err}"
         );
 
-        // Verify that it matches the linktype we set (113 = DLT_LINUX_SLL)
-        assert_eq!(
-            handle.get_datalink(),
-            pcap::Linktype(113),
-            "Expected DLT_LINUX_SLL (113) link type"
-        );
+        server_task.abort();
+        let _ = server_task.await;
     }
 
     /// Tests that when a `NetFlow` v9 data flowset references a template ID
@@ -219,6 +290,8 @@ mod tests {
     /// statistic is incremented and no events are returned.
     #[test]
     fn netflow9_missing_template_increments_stat() {
+        use std::io::Write;
+
         use giganto_client::ingest::netflow::Netflow9;
         use tempfile::NamedTempFile;
 
@@ -229,15 +302,7 @@ mod tests {
 
         // Create a PCAP file with ETHERNET link type containing a NetFlow v9
         // packet that has a data flowset referencing a non-existent template
-        let linktype = pcap::Linktype::ETHERNET;
-        let dead_capture = pcap::Capture::dead(linktype).expect("Failed to create dead capture");
-
-        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        let temp_path = temp_file.path();
-
-        let mut savefile = dead_capture
-            .savefile(temp_path)
-            .expect("Failed to create savefile");
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
 
         // Build a packet with:
         // - Ethernet header (14 bytes)
@@ -293,24 +358,37 @@ mod tests {
         // Some dummy data
         packet_data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
 
+        let mut pcap_data = Vec::new();
+
+        // PCAP global header (little endian)
+        pcap_data.extend_from_slice(&0xa1b2_c3d4_u32.to_le_bytes()); // magic
+        pcap_data.extend_from_slice(&2_u16.to_le_bytes()); // major version
+        pcap_data.extend_from_slice(&4_u16.to_le_bytes()); // minor version
+        pcap_data.extend_from_slice(&0_i32.to_le_bytes()); // timezone
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // timestamp accuracy
+        pcap_data.extend_from_slice(&65535_u32.to_le_bytes()); // snapshot length
+        // Link type: 1 = DLT_EN10MB (ETHERNET)
+        pcap_data.extend_from_slice(&1_u32.to_le_bytes());
+
         #[allow(clippy::cast_possible_truncation)]
-        let header = pcap::PacketHeader {
-            ts: libc::timeval {
-                tv_sec: 0,
-                tv_usec: 0,
-            },
-            caplen: packet_data.len() as u32,
-            len: packet_data.len() as u32,
-        };
-        let packet = pcap::Packet {
-            header: &header,
-            data: &packet_data,
-        };
-        savefile.write(&packet);
-        drop(savefile);
+        let packet_len = packet_data.len() as u32;
+
+        // Packet header (16 bytes)
+        // ts_sec, ts_usec, caplen, len
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // ts_sec
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // ts_usec
+        pcap_data.extend_from_slice(&packet_len.to_le_bytes()); // caplen
+        pcap_data.extend_from_slice(&packet_len.to_le_bytes()); // len
+        pcap_data.extend_from_slice(&packet_data);
+
+        temp_file
+            .write_all(&pcap_data)
+            .expect("Failed to write pcap data");
+        temp_file.flush().expect("Failed to flush temp file");
 
         // Open the file and parse
-        let mut handle = pcap::Capture::from_file(temp_path).expect("Failed to open pcap file");
+        let mut handle =
+            pcap::Capture::from_file(temp_file.path()).expect("Failed to open pcap file");
 
         // Ensure it's ETHERNET
         assert_eq!(handle.get_datalink(), pcap::Linktype::ETHERNET);
