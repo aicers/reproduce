@@ -48,7 +48,3 @@ tempfile = "3"
 [lints.clippy]
 pedantic = "warn"
 unwrap_used = "warn"
-
-[dev-dependencies]
-libc = "0.2.180"
-tempfile = "3.24.0"
