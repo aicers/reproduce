@@ -123,7 +123,8 @@ mod tests {
             192.168.20.79,56889,211.42.85.240,80,TCP,don't frag/last frag,\
             AP,24:f5:aa:e1:fc:a0,1,541,detect,0";
 
-        let (seculog, timestamp) = Mf2::parse_security_log(log, 0, info).unwrap();
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Mf2::parse_security_log(log, serial, info).unwrap();
 
         // Verify kind, log_type, version from info
         assert_eq!(seculog.kind, "mf2");
@@ -149,8 +150,8 @@ mod tests {
 
         // Verify timestamp matches expected value (datetime + serial offset)
         // "2020-07-13 09:33:23" +0900 = 2020-07-13 00:33:23 UTC
-        let expected_timestamp = parse_mf2_timestamp_ns("2020-07-13 09:33:23").unwrap();
-        assert_eq!(timestamp, expected_timestamp);
+        let base_timestamp = parse_mf2_timestamp_ns("2020-07-13 09:33:23").unwrap();
+        assert_eq!(timestamp, base_timestamp + serial);
 
         // Verify contents matches input
         assert_eq!(seculog.contents, log);
