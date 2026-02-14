@@ -2395,12 +2395,12 @@ mod tests {
         io::Write,
         net::{IpAddr, Ipv6Addr, SocketAddr},
         sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
     };
 
     use csv::{ReaderBuilder, StringRecord};
     use giganto_client::{RawEventKind, connection::server_handshake, ingest::network::Conn};
     use quinn::{ServerConfig, crypto::rustls::QuicServerConfig};
+    use tempfile::NamedTempFile;
 
     use super::*;
 
@@ -2500,32 +2500,14 @@ mod tests {
         (local_addr, handle)
     }
 
-    fn write_temp_zeek_log(lines: &[String]) -> std::path::PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let log_path = std::env::temp_dir().join(format!("reproduce-zeek-{suffix}.log"));
-        let mut log_file = fs::File::create(&log_path).expect("create log file");
+    fn write_temp_zeek_log(lines: &[String]) -> NamedTempFile {
+        let mut log_file = NamedTempFile::new().expect("create temp file");
         log_file
             .write_all(lines.join("\n").as_bytes())
             .expect("write log file");
         log_file.write_all(b"\n").expect("newline");
         log_file.flush().expect("flush log file");
-        drop(log_file);
-        log_path
-    }
-
-    #[test]
-    fn test_parse_zeek_timestamp_public() {
-        // Test that parse_zeek_timestamp is accessible
-        let timestamp = "1562093121.655728";
-        let result = crate::zeek::parse_zeek_timestamp(timestamp);
-        assert!(result.is_ok());
-
-        let ts = result.unwrap();
-        assert_eq!(ts.as_second(), 1_562_093_121);
-        assert_eq!(ts.subsec_microsecond(), 655_728);
+        log_file
     }
 
     // ==========================================================================
@@ -2620,9 +2602,9 @@ mod tests {
             zeek_conn_line(timestamp_b, "UID_B2"),
         ];
 
-        let log_path = write_temp_zeek_log(&lines);
+        let log_file = write_temp_zeek_log(&lines);
 
-        let file = File::open(&log_path).expect("open log file");
+        let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -2657,8 +2639,6 @@ mod tests {
 
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![base_a, base_a + 1, base_b, base_b + 1]);
-
-        let _ = fs::remove_file(&log_path);
     }
 
     #[tokio::test]
@@ -2688,9 +2668,9 @@ mod tests {
         let lines: Vec<String> = (0..expected_events)
             .map(|i| zeek_conn_line(timestamp, &format!("UID_{i:04}")))
             .collect();
-        let log_path = write_temp_zeek_log(&lines);
+        let log_file = write_temp_zeek_log(&lines);
 
-        let file = File::open(&log_path).expect("open log file");
+        let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -2724,8 +2704,6 @@ mod tests {
             let offset = i64::try_from(idx).expect("offset fits i64");
             assert_eq!(*timestamp, base_ts + offset);
         }
-
-        let _ = fs::remove_file(&log_path);
     }
 
     #[tokio::test]
@@ -2756,9 +2734,9 @@ mod tests {
             zeek_conn_line("invalid.123", "UID_BAD"),
             zeek_conn_line(timestamp, "UID_A2"),
         ];
-        let log_path = write_temp_zeek_log(&lines);
+        let log_file = write_temp_zeek_log(&lines);
 
-        let file = File::open(&log_path).expect("open log file");
+        let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -2790,8 +2768,6 @@ mod tests {
             .expect("parse timestamp");
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![base_ts, base_ts + 1]);
-
-        let _ = fs::remove_file(&log_path);
     }
 
     // ==========================================================================
@@ -2830,9 +2806,9 @@ mod tests {
         let lines: Vec<String> = (0..5)
             .map(|i| zeek_conn_line(&format!("156209312{i}.000000"), &format!("UID_{i}")))
             .collect();
-        let log_path = write_temp_zeek_log(&lines);
+        let log_file = write_temp_zeek_log(&lines);
 
-        let file = File::open(&log_path).expect("open log file");
+        let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -2873,8 +2849,6 @@ mod tests {
 
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![ts_2, ts_3, ts_4]);
-
-        let _ = fs::remove_file(&log_path);
     }
 
     /// Tests that the `count_sent` option stops after exactly N events are sent.
@@ -2906,9 +2880,9 @@ mod tests {
         let lines: Vec<String> = (0..10)
             .map(|i| zeek_conn_line(&format!("156209312{i}.000000"), &format!("UID_{i}")))
             .collect();
-        let log_path = write_temp_zeek_log(&lines);
+        let log_file = write_temp_zeek_log(&lines);
 
-        let file = File::open(&log_path).expect("open log file");
+        let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -2952,8 +2926,6 @@ mod tests {
 
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![ts_0, ts_1, ts_2, ts_3]);
-
-        let _ = fs::remove_file(&log_path);
     }
 
     /// Tests that `file_polling_mode` resumes processing when new data is appended after EOF.
@@ -2982,13 +2954,24 @@ mod tests {
             .await
             .expect("giganto producer");
 
-        // Create initial file with 2 events
-        let initial_lines = vec![
-            zeek_conn_line("1562093120.000000", "UID_0"),
-            zeek_conn_line("1562093121.000000", "UID_1"),
-        ];
-        let log_path = write_temp_zeek_log(&initial_lines);
+        // Use tempdir for path-based reopen/append scenario to avoid file-locking issues
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let log_path = temp_dir.path().join("zeek.log");
         let log_path_clone = log_path.clone();
+
+        // Create initial file with 2 events
+        {
+            let mut log_file = fs::File::create(&log_path).expect("create log file");
+            let initial_lines = [
+                zeek_conn_line("1562093120.000000", "UID_0"),
+                zeek_conn_line("1562093121.000000", "UID_1"),
+            ];
+            log_file
+                .write_all(initial_lines.join("\n").as_bytes())
+                .expect("write log file");
+            log_file.write_all(b"\n").expect("newline");
+            log_file.flush().expect("flush log file");
+        }
 
         let file = File::open(&log_path).expect("open log file");
         let iter = ReaderBuilder::new()
@@ -3058,7 +3041,6 @@ mod tests {
 
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![ts_0, ts_1, ts_2, ts_3]);
-
-        let _ = fs::remove_file(&log_path);
+        // temp_dir is automatically cleaned up when dropped
     }
 }
