@@ -182,8 +182,10 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::Write;
     use std::net::SocketAddr;
+    use std::time::SystemTime;
 
     use tempfile::NamedTempFile;
 
@@ -226,6 +228,25 @@ report = {report_enabled}
             directory: None,
             elastic: None,
         }
+    }
+
+    /// Returns a snapshot of files in a directory as a map of path -> (size, modified time).
+    fn snapshot_with_metadata(dir: &Path) -> HashMap<PathBuf, (u64, SystemTime)> {
+        if !dir.is_dir() {
+            return HashMap::new();
+        }
+
+        std::fs::read_dir(dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(std::result::Result::ok)
+            .filter_map(|entry| {
+                let path = entry.path();
+                let meta = std::fs::metadata(&path).ok()?;
+                Some((path, (meta.len(), meta.modified().ok()?)))
+            })
+            .collect()
     }
 
     #[test]
@@ -283,19 +304,9 @@ report = {report_enabled}
         let config = test_config(false, "test_kind", input_file.to_str().expect("valid path"));
         let mut report = Report::new(config);
 
-        // Record files in /report before the test (if it exists)
-        let report_dir = Path::new("/report");
-        let files_before_in_report_dir: Option<Vec<_>> = if report_dir.is_dir() {
-            Some(
-                std::fs::read_dir(report_dir)
-                    .expect("failed to read /report dir")
-                    .filter_map(std::result::Result::ok)
-                    .map(|e| e.path())
-                    .collect(),
-            )
-        } else {
-            None
-        };
+        // Snapshot: capture file metadata (path, size, modified time) before the test
+        let cwd_before = snapshot_with_metadata(temp_path);
+        let report_dir_before = snapshot_with_metadata(Path::new("/report"));
 
         // Save current directory and change to temp dir to verify CWD writes
         let original_dir = std::env::current_dir().expect("failed to get current dir");
@@ -310,43 +321,24 @@ report = {report_enabled}
         // Restore original directory
         std::env::set_current_dir(&original_dir).expect("failed to restore original dir");
 
+        // Snapshot: capture file metadata after the test
+        let cwd_after = snapshot_with_metadata(temp_path);
+        let report_dir_after = snapshot_with_metadata(Path::new("/report"));
+
         // end() should succeed without writing files
         assert!(result.is_ok());
 
-        // Verify no report file was created in the temp directory (CWD during end())
-        let report_file = temp_path.join("test_kind.report");
-        assert!(
-            !report_file.exists(),
-            "Report file should not be created in CWD when report=false"
+        // Verify no files were created or modified in CWD
+        assert_eq!(
+            cwd_before, cwd_after,
+            "No files should be created or modified in CWD when report=false"
         );
 
-        // Also check that no .report files were created in the temp directory
-        let files: Vec<_> = std::fs::read_dir(temp_path)
-            .expect("failed to read temp dir")
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".report"))
-            .collect();
-        assert!(
-            files.is_empty(),
-            "No .report files should be created when report=false"
+        // Verify no files were created or modified in /report
+        assert_eq!(
+            report_dir_before, report_dir_after,
+            "No files should be created or modified in /report when report=false"
         );
-
-        // If /report exists, verify no new files were created there
-        if let Some(files_before) = files_before_in_report_dir {
-            let files_after: Vec<_> = std::fs::read_dir(report_dir)
-                .expect("failed to read /report dir")
-                .filter_map(std::result::Result::ok)
-                .map(|e| e.path())
-                .collect();
-            let new_files: Vec<_> = files_after
-                .iter()
-                .filter(|f| !files_before.contains(f))
-                .collect();
-            assert!(
-                new_files.is_empty(),
-                "No new files should be created in /report when report=false, found: {new_files:?}"
-            );
-        }
     }
 
     #[test]
