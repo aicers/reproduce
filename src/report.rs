@@ -183,34 +183,12 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::io::Write;
     use std::net::SocketAddr;
     use std::time::SystemTime;
 
-    use tempfile::NamedTempFile;
+    use serial_test::serial;
 
     use super::*;
-
-    /// Creates a temporary TOML config file with report enabled.
-    fn create_test_config(report_enabled: bool) -> Config {
-        let config_content = format!(
-            r#"
-cert = "tests/cert.pem"
-key = "tests/key.pem"
-ca_certs = ["tests/root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "aicers"
-kind = "test"
-input = "/path/to/file"
-report = {report_enabled}
-"#
-        );
-        let mut file = NamedTempFile::with_suffix(".toml").expect("Failed to create temp file");
-        file.write_all(config_content.as_bytes())
-            .expect("Failed to write config");
-        file.flush().expect("Failed to flush");
-        Config::new(file.path()).expect("Failed to create config")
-    }
 
     /// Creates a test `Config` with the given parameters.
     fn test_config(report: bool, kind: &str, input: &str) -> Config {
@@ -251,7 +229,7 @@ report = {report_enabled}
 
     #[test]
     fn process_first_sample_sets_min_and_max() {
-        let config = create_test_config(true);
+        let config = test_config(true, "test", "/path/to/file");
         let mut report = Report::new(config);
 
         report.process(10);
@@ -262,7 +240,7 @@ report = {report_enabled}
 
     #[test]
     fn process_updates_min_and_max_correctly() {
-        let config = create_test_config(true);
+        let config = test_config(true, "test", "/path/to/file");
         let mut report = Report::new(config);
 
         report.process(10);
@@ -280,7 +258,7 @@ report = {report_enabled}
 
     #[test]
     fn skip_accumulates_bytes() {
-        let config = create_test_config(true);
+        let config = test_config(true, "test", "/path/to/file");
         let mut report = Report::new(config);
 
         report.skip(100);
@@ -293,15 +271,13 @@ report = {report_enabled}
     }
 
     #[test]
+    #[serial]
     fn report_false_avoids_file_writes() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let temp_path = temp_dir.path();
 
         // Create config with report=false and input as a file path (InputType::Log)
-        let input_file = temp_path.join("test.log");
-        std::fs::write(&input_file, "test content").expect("failed to write input file");
-
-        let config = test_config(false, "test_kind", input_file.to_str().expect("valid path"));
+        let config = test_config(false, "test_kind", "test.log");
         let mut report = Report::new(config);
 
         // Snapshot: capture file metadata (path, size, modified time) before the test
@@ -386,221 +362,142 @@ report = {report_enabled}
         );
     }
 
-    #[test]
-    fn byte_accounting_for_log_input() {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let temp_path = temp_dir.path();
-
-        // Create a log file to ensure InputType::Log is used
-        let input_file = temp_path.join("test.log");
-        std::fs::write(&input_file, "test content").expect("failed to write input file");
-
-        let config = test_config(true, "test_kind", input_file.to_str().expect("valid path"));
+    /// Runs a complete report cycle (start/process/end) with the given byte values,
+    /// writing the output to `dir` as CWD. Returns the path of the generated report file.
+    fn run_report_to_dir(dir: &Path, input: &str, bytes_list: &[usize]) -> PathBuf {
+        let config = test_config(true, "test_kind", input);
         let mut report = Report::new(config);
 
-        report.start();
-
-        // Process known byte amounts
-        // Line 1: 50 bytes
-        // Line 2: 100 bytes
-        // Line 3: 150 bytes
-        report.process(50);
-        report.process(100);
-        report.process(150);
-
-        // Verify byte counters are correctly updated
-        assert_eq!(
-            report.sum_bytes, 300,
-            "sum_bytes should be 50 + 100 + 150 = 300"
-        );
-        assert_eq!(report.process_cnt, 3, "process_cnt should be 3");
-        // Note: max_bytes is updated on first call (50 > 0), then min_bytes is set
-        // on second call (100 < 50 is false but min_bytes == 0 is false after first
-        // value set it). Actually on first call: 50 > 0 so max_bytes = 50, else if
-        // not executed. On second call: 100 > 50 so max_bytes = 100, else if not
-        // executed. Third call: 150 > 100 so max_bytes = 150.
-        // min_bytes remains 0 because the condition is else-if and max is always
-        // updated when value > current max (which starts at 0).
-        // This is the existing production behavior.
-        assert_eq!(report.max_bytes, 150, "max_bytes should be 150");
-
-        // For InputType::Log, the processed_bytes calculation adds 1 byte per line
-        // for the newline character: sum_bytes + process_cnt = 300 + 3 = 303
-        let expected_processed_bytes = (report.sum_bytes + report.process_cnt) as u64;
-        assert_eq!(
-            expected_processed_bytes, 303,
-            "processed_bytes for Log should include 1 byte per line for newlines"
-        );
-    }
-
-    #[test]
-    fn byte_accounting_min_max_tracking() {
-        let config = test_config(true, "test_kind", "test.log");
-        let mut report = Report::new(config);
-
-        report.start();
-
-        // The production logic is:
-        //   if process_cnt == 0 { min_bytes = bytes; max_bytes = bytes }
-        //   else if bytes > max_bytes { max_bytes = bytes }
-        //   else if bytes < min_bytes { min_bytes = bytes }
-        //
-        // This means:
-        // - First call with 100: min/max both set to 100
-        // - Second call with 50: min updated to 50
-        // - Third call with 200: max updated to 200
-        // - Fourth call with 75: no update (between min/max)
-
-        report.process(100);
-        // First call: min/max set to 100
-        assert_eq!(
-            report.max_bytes, 100,
-            "max_bytes should be 100 after first call"
-        );
-        assert_eq!(
-            report.min_bytes, 100,
-            "min_bytes should be 100 after first call"
-        );
-
-        report.process(50);
-        // Second call: min updated to 50
-        assert_eq!(
-            report.min_bytes, 50,
-            "min_bytes should be 50 after second call"
-        );
-        assert_eq!(report.max_bytes, 100, "max_bytes should remain 100");
-
-        report.process(200);
-        // Third call: max updated to 200
-        assert_eq!(report.min_bytes, 50, "min_bytes should remain 50");
-        assert_eq!(report.max_bytes, 200, "max_bytes should be updated to 200");
-
-        report.process(75);
-        // Fourth call: no update
-        assert_eq!(report.min_bytes, 50, "min_bytes should remain 50");
-        assert_eq!(report.max_bytes, 200, "max_bytes should remain 200");
-    }
-
-    #[test]
-    fn byte_accounting_average_calculation() {
-        let config = test_config(true, "test_kind", "test.log");
-        let mut report = Report::new(config);
-
-        report.start();
-
-        // Process bytes: 100 + 200 + 300 = 600 total, 3 entries
-        report.process(100);
-        report.process(200);
-        report.process(300);
-
-        assert_eq!(report.sum_bytes, 600, "sum_bytes should be 600");
-        assert_eq!(report.process_cnt, 3, "process_cnt should be 3");
-
-        // avg_bytes is calculated in end(), verify the expected formula
-        // Note: avg_bytes is not updated until end() is called
-        // Here we verify the formula: sum_bytes / process_cnt = 600 / 3 = 200.0
-        #[allow(clippy::cast_precision_loss)]
-        let expected_avg = report.sum_bytes as f64 / report.process_cnt as f64;
-        assert!(
-            (expected_avg - 200.0).abs() < f64::EPSILON,
-            "expected average should be 200.0"
-        );
-    }
-
-    #[test]
-    fn report_true_creates_file_with_content() {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let temp_path = temp_dir.path();
-
-        // Create config with report=true and input as a file path (InputType::Log)
-        let input_file = temp_path.join("test.log");
-        std::fs::write(&input_file, "test content").expect("failed to write input file");
-
-        let config = test_config(true, "test_kind", input_file.to_str().expect("valid path"));
-        let mut report = Report::new(config);
-
-        // Save current directory and change to temp dir so report writes there
         let original_dir = std::env::current_dir().expect("failed to get current dir");
-        std::env::set_current_dir(temp_path).expect("failed to change to temp dir");
+        std::env::set_current_dir(dir).expect("failed to change dir");
 
-        // Call start, process some bytes, and end
+        report.start();
+        for &bytes in bytes_list {
+            report.process(bytes);
+        }
+        report.end().expect("report end() should succeed");
+
+        std::env::set_current_dir(original_dir).expect("failed to restore dir");
+
+        dir.join("test_kind.report")
+    }
+
+    #[test]
+    fn report_true_writes_to_report_dir_when_exists() {
+        let report_dir = Path::new("/report");
+        if !report_dir.is_dir() {
+            return; // /report does not exist in this environment; skip
+        }
+
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let input_file = temp_dir.path().join("test.log");
+        std::fs::write(&input_file, "test content").expect("failed to write input file");
+
+        let config = test_config(true, "test_kind", input_file.to_str().expect("valid path"));
+        let mut report = Report::new(config);
+
+        let before = snapshot_with_metadata(report_dir);
+
         report.start();
         report.process(100);
-        report.process(200);
-        report.process(300);
         let result = report.end();
 
-        // Restore original directory
-        std::env::set_current_dir(&original_dir).expect("failed to restore original dir");
+        let after = snapshot_with_metadata(report_dir);
 
-        // end() should succeed
-        assert!(result.is_ok(), "end() should succeed when report=true");
+        assert!(result.is_ok(), "end() should succeed");
+        assert_ne!(
+            before, after,
+            "Report file should be created or modified in /report"
+        );
+    }
 
-        // Verify report file was created in the temp directory (CWD during end())
-        let report_file = temp_path.join("test_kind.report");
+    #[test]
+    #[serial]
+    fn report_true_creates_file() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let report_file = run_report_to_dir(temp_dir.path(), "test.log", &[100, 200, 300]);
         assert!(
             report_file.exists(),
             "Report file should be created when report=true"
         );
+    }
 
-        // Verify the file contains expected content
+    #[test]
+    #[serial]
+    fn report_true_file_contains_all_sections() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let report_file = run_report_to_dir(temp_dir.path(), "test.log", &[100, 200, 300]);
         let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
 
-        // Check for expected sections in the report
-        assert!(
-            content.contains("--------------------------------------------------"),
-            "Report should contain separator line"
-        );
-        assert!(
-            content.contains("Time:"),
-            "Report should contain Time field"
-        );
-        assert!(
-            content.contains("Input(LOG)"),
-            "Report should contain Input(LOG) header for log input"
-        );
-        assert!(
-            content.contains("Output(Giganto):"),
-            "Report should contain Output header"
-        );
-        assert!(
-            content.contains("Statistics (Min/Max/Avg):"),
-            "Report should contain Statistics line"
-        );
-        assert!(
-            content.contains("Process Count:"),
-            "Report should contain Process Count line"
-        );
-        assert!(
-            content.contains("Skip Count:"),
-            "Report should contain Skip Count line"
-        );
-        assert!(
-            content.contains("Elapsed Time:"),
-            "Report should contain Elapsed Time line"
-        );
-        assert!(
-            content.contains("Performance:"),
-            "Report should contain Performance line"
-        );
+        assert!(content.contains("--------------------------------------------------"));
+        assert!(content.contains("Time:"));
+        assert!(content.contains("Input(LOG)"));
+        assert!(content.contains("Output(Giganto):"));
+        assert!(content.contains("Statistics (Min/Max/Avg):"));
+        assert!(content.contains("Process Count:"));
+        assert!(content.contains("Skip Count:"));
+        assert!(content.contains("Elapsed Time:"));
+        assert!(content.contains("Performance:"));
+    }
 
-        // Verify statistics values are present
-        // sum_bytes = 600, process_cnt = 3, so avg = 200.0
-        // max_bytes = 300 (last value since 300 > 200 > 100)
-        // min_bytes = 100 (set on second call when 200 < 100 is false but min_bytes == 0 fails,
-        //   wait actually: first call 100 > 0 -> max=100, then 200 > 100 -> max=200,
-        //   200 < 0 is false and min_bytes == 0 is true -> min=200... no wait that's wrong
-        //   Let me trace: process(100): 100 > 0 -> max=100, else-if skipped
-        //   process(200): 200 > 100 -> max=200, else-if skipped
-        //   process(300): 300 > 200 -> max=300, else-if skipped
-        //   So min_bytes stays 0 in this case because we never hit the else-if branch)
+    #[test]
+    #[serial]
+    fn report_true_file_statistics_are_accurate() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        // process(50, 150, 100): min=50, max=150, avg=100.0
+        // sum=300, cnt=3, processed_bytes=303 (Log: sum + cnt)
+        let report_file = run_report_to_dir(temp_dir.path(), "test.log", &[50, 150, 100]);
+        let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
+
         assert!(
-            content.contains("300"),
-            "Report should contain max_bytes value 300"
+            content.contains("50/150/100.00"),
+            "Statistics should show min=50, max=150, avg=100.00"
         );
         assert!(
-            content.contains("200.00"),
-            "Report should contain avg_bytes value 200.00"
+            content.contains("3 (303 B)"),
+            "Process Count should show 3 entries and 303 bytes (300 data + 3 newlines)"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn report_handles_dir_input_type() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let temp_path = temp_dir.path();
+
+        // Use temp_dir itself as input → InputType::Dir
+        let report_file =
+            run_report_to_dir(temp_path, temp_path.to_str().expect("valid path"), &[100]);
+        let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
+
+        // Dir input uses empty header and processed_bytes=0
+        assert!(
+            !content.contains("Input(LOG)"),
+            "Dir input should not show Input(LOG) header"
+        );
+        assert!(
+            content.contains("(0 B)"),
+            "Dir input should show 0 bytes for processed_bytes"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn report_handles_elastic_input_type() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+
+        // "elastic" string → InputType::Elastic
+        let report_file = run_report_to_dir(temp_dir.path(), "elastic", &[100]);
+        let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
+
+        // Elastic input uses empty header and processed_bytes=0
+        assert!(
+            !content.contains("Input(LOG)"),
+            "Elastic input should not show Input(LOG) header"
+        );
+        assert!(
+            content.contains("(0 B)"),
+            "Elastic input should show 0 bytes for processed_bytes"
         );
     }
 }
