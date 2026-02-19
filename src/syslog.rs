@@ -254,11 +254,8 @@ pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
         .from_path(path)?)
 }
 
-/// Trait for converting a Sysmon CSV record into a typed event.
-///
-/// Implementations must return a raw (unadjusted) timestamp parsed from the record.
-/// The timestamp offset for deduplication is applied by the producer layer (`send_sysmon`),
-/// following the same pattern used by `send_zeek`.
+/// Convert a Sysmon CSV record into a typed event.
+/// Return the parsed event and raw timestamp (dedup offset is applied by the caller).
 pub(crate) trait TryFromSysmonRecord: Sized {
     fn try_from_sysmon_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
