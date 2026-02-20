@@ -5,7 +5,7 @@ use serde::Serialize;
 use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_timestamp_ns};
 
 impl TryFromSysmonRecord for FileCreationTimeChanged {
-    fn try_from_sysmon_record(rec: &csv::StringRecord, serial: i64) -> Result<(Self, i64)> {
+    fn try_from_sysmon_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let agent_name = if let Some(agent_name) = rec.get(0) {
             agent_name.to_string()
         } else {
@@ -17,7 +17,7 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
             return Err(anyhow!("missing agent_id"));
         };
         let time = if let Some(utc_time) = rec.get(3) {
-            parse_sysmon_timestamp_ns(utc_time)? + serial
+            parse_sysmon_timestamp_ns(utc_time)?
         } else {
             return Err(anyhow!("missing time"));
         };

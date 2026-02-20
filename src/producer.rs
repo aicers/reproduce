@@ -1778,8 +1778,10 @@ impl Giganto {
                             reference_timestamp = Some(current_timestamp);
                         }
 
-                        match T::try_from_sysmon_record(&record, timestamp_offset) {
-                            Ok((event, timestamp)) => {
+                        match T::try_from_sysmon_record(&record) {
+                            Ok((event, mut timestamp)) => {
+                                // Apply timestamp offset for deduplication
+                                timestamp += timestamp_offset;
                                 if self.init_msg {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;

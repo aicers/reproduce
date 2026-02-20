@@ -254,8 +254,10 @@ pub(crate) fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
         .from_path(path)?)
 }
 
+/// Convert a Sysmon CSV record into a typed event.
+/// Return the parsed event and raw timestamp (dedup offset is applied by the caller).
 pub(crate) trait TryFromSysmonRecord: Sized {
-    fn try_from_sysmon_record(rec: &StringRecord, serial: i64) -> Result<(Self, i64)>;
+    fn try_from_sysmon_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
 trait EventToCsv: Sized {
