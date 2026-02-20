@@ -2480,4 +2480,140 @@ mod tests {
         assert_eq!(ts.as_second(), 1_562_093_121);
         assert_eq!(ts.subsec_microsecond(), 655_728);
     }
+
+    fn create_non_ethernet_pcap_file() -> tempfile::NamedTempFile {
+        use std::io::Write;
+
+        use tempfile::NamedTempFile;
+
+        // Create a PCAP file manually with a non-ETHERNET link type
+        // PCAP global header format (24 bytes):
+        // - Magic number (little-endian): bytes d4 c3 b2 a1 (4 bytes)
+        // - Major version: 2 (2 bytes)
+        // - Minor version: 4 (2 bytes)
+        // - Timezone offset: 0 (4 bytes)
+        // - Timestamp accuracy: 0 (4 bytes)
+        // - Snapshot length: 65535 (4 bytes)
+        // - Link type: 113 = DLT_LINUX_SLL (Linux cooked capture, non-ETHERNET)
+        let mut pcap_data = Vec::new();
+
+        // PCAP global header (little endian)
+        pcap_data.extend_from_slice(&0xa1b2_c3d4_u32.to_le_bytes());
+        pcap_data.extend_from_slice(&2_u16.to_le_bytes()); // major version
+        pcap_data.extend_from_slice(&4_u16.to_le_bytes()); // minor version
+        pcap_data.extend_from_slice(&0_i32.to_le_bytes()); // timezone
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // timestamp accuracy
+        pcap_data.extend_from_slice(&65535_u32.to_le_bytes()); // snapshot length
+        // Link type: 113 = DLT_LINUX_SLL (Linux cooked capture)
+        pcap_data.extend_from_slice(&113_u32.to_le_bytes());
+
+        // Packet header (16 bytes) + minimal data
+        // ts_sec, ts_usec, caplen, len
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // ts_sec
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // ts_usec
+        pcap_data.extend_from_slice(&20_u32.to_le_bytes()); // caplen
+        pcap_data.extend_from_slice(&20_u32.to_le_bytes()); // len
+
+        // Dummy packet data (20 bytes)
+        pcap_data.extend_from_slice(&[0u8; 20]);
+
+        // Write to temp file
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        temp_file
+            .write_all(&pcap_data)
+            .expect("Failed to write pcap data");
+        temp_file.flush().expect("Failed to flush temp file");
+        temp_file
+    }
+
+    fn create_test_server_config() -> quinn::ServerConfig {
+        let cert_pem = std::fs::read("tests/cert.pem").expect("Failed to read tests/cert.pem");
+        let key_pem = std::fs::read("tests/key.pem").expect("Failed to read tests/key.pem");
+
+        let cert_chain = rustls_pemfile::certs(&mut &*cert_pem)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("Invalid PEM-encoded certificate");
+        let private_key = rustls_pemfile::private_key(&mut &*key_pem)
+            .expect("Malformed PKCS #8 private key")
+            .expect("No private key found in tests/key.pem");
+        quinn::ServerConfig::with_single_cert(cert_chain, private_key)
+            .expect("Failed to build quinn server config")
+    }
+
+    /// Tests that opening a PCAP file with a non-ETHERNET link type
+    /// returns an error from `send_netflow`. This exercises the error
+    /// branch in `send_netflow` that validates the datalink type.
+    #[tokio::test]
+    async fn send_netflow_rejects_non_ethernet_linktype() {
+        use std::{
+            net::{IpAddr, Ipv6Addr, SocketAddr},
+            sync::{Arc, atomic::AtomicBool},
+        };
+
+        use giganto_client::connection::server_handshake;
+        use quinn::Endpoint;
+
+        use crate::{config::Config, report::Report};
+
+        let server_endpoint = Endpoint::server(
+            create_test_server_config(),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        )
+        .expect("Failed to create test quinn server endpoint");
+        let server_addr = server_endpoint
+            .local_addr()
+            .expect("Failed to read test server address");
+
+        let server_task = tokio::spawn(async move {
+            let connecting = server_endpoint
+                .accept()
+                .await
+                .expect("Server did not receive a connection");
+            let connection = connecting
+                .await
+                .expect("Failed to establish server connection");
+            server_handshake(&connection, ">=0.0.0")
+                .await
+                .expect("Server handshake failed");
+            connection
+                .accept_bi()
+                .await
+                .expect("Server failed to accept data stream");
+        });
+
+        let config = Config {
+            cert: String::from("tests/cert.pem"),
+            key: String::from("tests/key.pem"),
+            ca_certs: vec![String::from("tests/root.pem")],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: String::from("localhost"),
+            kind: String::from("netflow9"),
+            input: String::from("/tmp/unused"),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("Failed to create producer for test");
+        let temp_file = create_non_ethernet_pcap_file();
+        let running = Arc::new(AtomicBool::new(true));
+        let mut report = Report::new(config.clone());
+
+        let result = producer
+            .send_netflow_to_giganto(temp_file.path(), 0, 0, running, &mut report)
+            .await;
+
+        let err = result.expect_err("Expected non-ETHERNET datalink to return an error");
+        assert!(
+            err.to_string().contains("Error: unknown datalink"),
+            "Unexpected error message: {err}"
+        );
+
+        server_task.abort();
+        let _ = server_task.await;
+    }
 }
