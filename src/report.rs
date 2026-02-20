@@ -364,6 +364,9 @@ mod tests {
 
     /// Runs a complete report cycle (start/process/end) with the given byte values,
     /// writing the output to `dir` as CWD. Returns the path of the generated report file.
+    ///
+    /// Note: When `/report` directory exists, `Report::end()` writes to `/report/test_kind.report`
+    /// instead of the CWD. This function returns the actual path where the report was written.
     fn run_report_to_dir(dir: &Path, input: &str, bytes_list: &[usize]) -> PathBuf {
         let config = test_config(true, "test_kind", input);
         let mut report = Report::new(config);
@@ -379,10 +382,17 @@ mod tests {
 
         std::env::set_current_dir(original_dir).expect("failed to restore dir");
 
-        dir.join("test_kind.report")
+        // Return the actual path where the report was written
+        let report_dir = Path::new("/report");
+        if report_dir.is_dir() {
+            report_dir.join("test_kind.report")
+        } else {
+            dir.join("test_kind.report")
+        }
     }
 
     #[test]
+    #[serial]
     fn report_true_writes_to_report_dir_when_exists() {
         let report_dir = Path::new("/report");
         if !report_dir.is_dir() {
