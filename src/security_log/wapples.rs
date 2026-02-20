@@ -50,7 +50,7 @@ impl ParseSecurityLog for Wapples {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -113,7 +113,8 @@ mod tests {
             Extension Filtering WAPPLES (client 119.75.88.90 WAPPLES) -> \
             (server 210.99.177.16:1443)";
 
-        let (seculog, timestamp) = Wapples::parse_security_log(log, 0, info).unwrap();
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Wapples::parse_security_log(log, serial, info).unwrap();
 
         // Verify kind, log_type, version from info
         assert_eq!(seculog.kind, "wapples");
@@ -137,8 +138,9 @@ mod tests {
         // Verify protocol is TCP
         assert_eq!(seculog.proto, Some(PROTO_TCP));
 
-        // Verify timestamp is positive
-        assert!(timestamp > 0);
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "2020-01-09 09:26:09 +0900" = 2020-01-09 00:26:09 UTC = 1578529569 seconds since epoch
+        assert_eq!(timestamp, 1_578_529_569_000_000_000 + serial);
 
         // Verify contents matches input
         assert_eq!(seculog.contents, log);

@@ -43,7 +43,7 @@ impl ParseSecurityLog for Tg {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -53,7 +53,7 @@ impl ParseSecurityLog for Tg {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -83,7 +83,71 @@ impl ParseSecurityLog for Tg {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+
+    #[test]
+    fn parse_tg_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "tg".to_string(),
+            log_type: "ips".to_string(),
+            version: "2.7".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Tg::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Tg::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing required fields should fail
+        let truncated = "3`0`2`1`6cfe35`1100`20200713`09:20:08`2`6";
+        assert!(Tg::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_tg_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "tg".to_string(),
+            log_type: "ips".to_string(),
+            version: "2.7".to_string(),
+        };
+
+        let log = "3`0`2`1`6cfe35`1100`20200713`09:20:08`2`6`101.79.244.171`80`14.39.192.214`51548`3003``IPS`2009`eth0`0800`40:7C:7D:33:FD:42`840020401`-1`http_ms_adodb.stream-3``eth2```06848753127936347939`default`IDS_HTTP`1`0`";
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Tg::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "tg");
+        assert_eq!(seculog.log_type, "ips");
+        assert_eq!(seculog.version, "2.7");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(101, 79, 244, 171)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(14, 39, 192, 214)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(80));
+        assert_eq!(seculog.resp_port, Some(51548));
+
+        // Verify protocol is TCP (6)
+        assert_eq!(seculog.proto, Some(PROTO_TCP));
+
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "20200713`09:20:08" +0900 = 2020-07-13 00:20:08 UTC = 1594599608 seconds since epoch
+        assert_eq!(timestamp, 1_594_599_608_000_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_tg_timestamp_ns_returns_expected_nanos() {

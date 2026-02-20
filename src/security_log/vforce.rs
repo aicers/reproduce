@@ -47,7 +47,7 @@ impl ParseSecurityLog for Vforce {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -57,7 +57,7 @@ impl ParseSecurityLog for Vforce {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -87,9 +87,74 @@ impl ParseSecurityLog for Vforce {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use chrono::{Datelike, FixedOffset, TimeZone, Utc};
 
     use super::*;
+    use crate::security_log::PROTO_UDP;
+
+    #[test]
+    fn parse_vforce_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "vforce".to_string(),
+            log_type: "ips".to_string(),
+            version: "4.6".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Vforce::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Vforce::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing required fields should fail
+        let truncated = "<134>Jul 13 09:41:04 ips: Src:129.129.101.107";
+        assert!(Vforce::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_vforce_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "vforce".to_string(),
+            log_type: "ips".to_string(),
+            version: "4.6".to_string(),
+        };
+
+        let log = "<134>Jul 13 09:41:04 ips: Src:129.129.101.107, Dst:168.126.63.1, Proto:17, Spt_c:60491, Dpt_t:53, Policy:alert, Sid:2000014, Count:1, Severity:high, Group:ANOMALY, Class:TRAFFIC ANOMALY, Msg:DNS Cache Poisoning Attack Detection";
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Vforce::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "vforce");
+        assert_eq!(seculog.log_type, "ips");
+        assert_eq!(seculog.version, "4.6");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(129, 129, 101, 107)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(168, 126, 63, 1)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(60491));
+        assert_eq!(seculog.resp_port, Some(53));
+
+        // Verify protocol is UDP (17)
+        assert_eq!(seculog.proto, Some(PROTO_UDP));
+
+        // Note: timestamp validation uses current year, so we verify it's positive
+        // and within reasonable bounds rather than an exact value
+        assert!(timestamp > 0);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_vforce_timestamp_ns_returns_expected_nanos() {

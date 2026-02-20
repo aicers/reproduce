@@ -43,7 +43,7 @@ impl ParseSecurityLog for Mf2 {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -53,7 +53,7 @@ impl ParseSecurityLog for Mf2 {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -149,9 +149,8 @@ mod tests {
         assert_eq!(seculog.proto, Some(PROTO_TCP));
 
         // Verify timestamp matches expected value (datetime + serial offset)
-        // "2020-07-13 09:33:23" +0900 = 2020-07-13 00:33:23 UTC
-        let base_timestamp = parse_mf2_timestamp_ns("2020-07-13 09:33:23").unwrap();
-        assert_eq!(timestamp, base_timestamp + serial);
+        // "2020-07-13 09:33:23" +0900 = 2020-07-13 00:33:23 UTC = 1594600403 seconds since epoch
+        assert_eq!(timestamp, 1_594_600_403_000_000_000 + serial);
 
         // Verify contents matches input
         assert_eq!(seculog.contents, log);

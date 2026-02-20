@@ -65,7 +65,66 @@ impl ParseSecurityLog for Nginx {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+
+    #[test]
+    fn parse_nginx_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "nginx".to_string(),
+            log_type: "accesslog".to_string(),
+            version: "1.25.2".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Nginx::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Nginx::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing datetime should fail
+        let truncated = r#"172.30.1.150 - - "GET /favicon.ico HTTP/1.1""#;
+        assert!(Nginx::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_nginx_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "nginx".to_string(),
+            log_type: "accesslog".to_string(),
+            version: "1.25.2".to_string(),
+        };
+
+        let log = r#"172.30.1.150 - - [28/Jul/2023:00:00:24 +0900] "GET /favicon.ico HTTP/1.1" 404 1427 "http://www.moneta.co.kr/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 Edg/115.0.1901.183""#;
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Nginx::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "nginx");
+        assert_eq!(seculog.log_type, "accesslog");
+        assert_eq!(seculog.version, "1.25.2");
+
+        // Verify parsed IP address (nginx only extracts source IP)
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(172, 30, 1, 150)))
+        );
+
+        // Nginx doesn't extract ports or destination
+        assert_eq!(seculog.orig_port, None);
+        assert_eq!(seculog.resp_addr, None);
+        assert_eq!(seculog.resp_port, None);
+        assert_eq!(seculog.proto, None);
+
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "28/Jul/2023:00:00:24 +0900" = 2023-07-27 15:00:24 UTC = 1690470024 seconds since epoch
+        assert_eq!(timestamp, 1_690_470_024_000_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_nginx_timestamp_ns_returns_expected_nanos() {

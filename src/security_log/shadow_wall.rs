@@ -38,7 +38,7 @@ impl ParseSecurityLog for ShadowWall {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -48,7 +48,7 @@ impl ParseSecurityLog for ShadowWall {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -76,5 +76,74 @@ impl ParseSecurityLog for ShadowWall {
             },
             timestamp,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    #[test]
+    fn parse_shadow_wall_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "shadowwall".to_string(),
+            log_type: "ips".to_string(),
+            version: "5.0".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(ShadowWall::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(ShadowWall::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing IP/port fields should fail
+        let truncated = "<142>Oct 31 13:45:51 ShadowWall sm[22143]: ipslog	111363	1698727507";
+        assert!(ShadowWall::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_shadow_wall_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "shadowwall".to_string(),
+            log_type: "ips".to_string(),
+            version: "5.0".to_string(),
+        };
+
+        let log = "<142>Oct 31 13:45:51 ShadowWall sm[22143]: ipslog	111363	1698727507	387133	0	1	DURUAN	3	1	2012937	3	ET SCAN Internal Dummy Connection User-Agent Inbound	21	1	6	159.223.48.151	44814	112.175.234.93	80";
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = ShadowWall::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "shadowwall");
+        assert_eq!(seculog.log_type, "ips");
+        assert_eq!(seculog.version, "5.0");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(159, 223, 48, 151)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(112, 175, 234, 93)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(44814));
+        assert_eq!(seculog.resp_port, Some(80));
+
+        // Verify protocol is TCP (6)
+        assert_eq!(seculog.proto, Some(PROTO_TCP));
+
+        // Verify timestamp matches expected value (unix timestamp + serial offset)
+        // 1698727507 seconds since epoch (in nanoseconds)
+        assert_eq!(timestamp, 1_698_727_507_000_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
     }
 }
