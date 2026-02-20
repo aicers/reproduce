@@ -47,7 +47,7 @@ impl ParseSecurityLog for SonicWall {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -57,7 +57,7 @@ impl ParseSecurityLog for SonicWall {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -87,7 +87,72 @@ impl ParseSecurityLog for SonicWall {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+    use crate::security_log::PROTO_TCP;
+
+    #[test]
+    fn parse_sonic_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "sonicwall".to_string(),
+            log_type: "fw".to_string(),
+            version: "6.5".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(SonicWall::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(SonicWall::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing required fields should fail
+        let truncated = r#"<185> id=firewall sn=C0EAE4F562EE time="2020-03-16 15:59:52 UTC""#;
+        assert!(SonicWall::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_sonic_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "sonicwall".to_string(),
+            log_type: "fw".to_string(),
+            version: "6.5".to_string(),
+        };
+
+        let log = r#"<185> id=firewall sn=C0EAE4F562EE time="2020-03-16 15:59:52 UTC" fw=220.83.254.2 pri=1 c=32 m=82 msg="Possible port scan detected" app=49201 appName='General TCP' n=42 src=139.199.19.227:50432:X1 dst=220.83.254.2:9200:X1 srcMac=a4:7b:2c:44:cf:62 dstMac=c0:ea:e4:f5:62:ef proto=tcp/9200 note="TCP scanned port list, 7002, 8080, 8088, 7001, 6380" fw_action="NA""#;
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = SonicWall::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "sonicwall");
+        assert_eq!(seculog.log_type, "fw");
+        assert_eq!(seculog.version, "6.5");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(139, 199, 19, 227)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(220, 83, 254, 2)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(50432));
+        assert_eq!(seculog.resp_port, Some(9200));
+
+        // Verify protocol is TCP
+        assert_eq!(seculog.proto, Some(PROTO_TCP));
+
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "2020-03-16 15:59:52" +0900 = 2020-03-16 06:59:52 UTC = 1584341992 seconds since epoch
+        assert_eq!(timestamp, 1_584_341_992_000_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_sonic_timestamp_ns_returns_expected_nanos() {
