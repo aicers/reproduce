@@ -1,6 +1,5 @@
 use std::fs::OpenOptions;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 
 use bytesize::ByteSize;
 use jiff::{SignedDuration, Timestamp, tz::TimeZone};
@@ -88,13 +87,14 @@ impl Report {
             return Ok(());
         }
 
-        let report_dir = Path::new("/report");
+        let report_dir = self
+            .config
+            .report_dir
+            .as_deref()
+            .expect("report_dir must be set when report is true");
+        std::fs::create_dir_all(report_dir)?;
         let topic = format!("{}.report", &self.config.kind);
-        let report_path = if report_dir.is_dir() {
-            report_dir.join(topic)
-        } else {
-            PathBuf::from(topic)
-        };
+        let report_path = report_dir.join(topic);
         let mut report_file = OpenOptions::new()
             .append(true)
             .create(true)
@@ -182,16 +182,13 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::net::SocketAddr;
-    use std::time::SystemTime;
-
-    use serial_test::serial;
+    use std::path::PathBuf;
 
     use super::*;
 
     /// Creates a test `Config` with the given parameters.
-    fn test_config(report: bool, kind: &str, input: &str) -> Config {
+    fn test_config(report: bool, kind: &str, input: &str, report_dir: Option<PathBuf>) -> Config {
         Config {
             cert: String::new(),
             key: String::new(),
@@ -201,6 +198,7 @@ mod tests {
             kind: String::from(kind),
             input: String::from(input),
             report,
+            report_dir,
             log_path: None,
             file: None,
             directory: None,
@@ -208,28 +206,9 @@ mod tests {
         }
     }
 
-    /// Returns a snapshot of files in a directory as a map of path -> (size, modified time).
-    fn snapshot_with_metadata(dir: &Path) -> HashMap<PathBuf, (u64, SystemTime)> {
-        if !dir.is_dir() {
-            return HashMap::new();
-        }
-
-        std::fs::read_dir(dir)
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(std::result::Result::ok)
-            .filter_map(|entry| {
-                let path = entry.path();
-                let meta = std::fs::metadata(&path).ok()?;
-                Some((path, (meta.len(), meta.modified().ok()?)))
-            })
-            .collect()
-    }
-
     #[test]
     fn process_first_sample_sets_min_and_max() {
-        let config = test_config(true, "test", "/path/to/file");
+        let config = test_config(true, "test", "/path/to/file", None);
         let mut report = Report::new(config);
 
         report.process(10);
@@ -240,7 +219,7 @@ mod tests {
 
     #[test]
     fn process_updates_min_and_max_correctly() {
-        let config = test_config(true, "test", "/path/to/file");
+        let config = test_config(true, "test", "/path/to/file", None);
         let mut report = Report::new(config);
 
         report.process(10);
@@ -258,7 +237,7 @@ mod tests {
 
     #[test]
     fn skip_accumulates_bytes() {
-        let config = test_config(true, "test", "/path/to/file");
+        let config = test_config(true, "test", "/path/to/file", None);
         let mut report = Report::new(config);
 
         report.skip(100);
@@ -271,55 +250,28 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn report_false_avoids_file_writes() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let temp_path = temp_dir.path();
+        let report_out = temp_dir.path().join("report_output");
 
-        // Create config with report=false and input as a file path (InputType::Log)
-        let config = test_config(false, "test_kind", "test.log");
+        let config = test_config(false, "test_kind", "test.log", None);
         let mut report = Report::new(config);
 
-        // Snapshot: capture file metadata (path, size, modified time) before the test
-        let cwd_before = snapshot_with_metadata(temp_path);
-        let report_dir_before = snapshot_with_metadata(Path::new("/report"));
-
-        // Save current directory and change to temp dir to verify CWD writes
-        let original_dir = std::env::current_dir().expect("failed to get current dir");
-        std::env::set_current_dir(temp_path).expect("failed to change to temp dir");
-
-        // Call start, process some bytes, and end
         report.start();
         report.process(100);
         report.process(200);
         let result = report.end();
 
-        // Restore original directory
-        std::env::set_current_dir(&original_dir).expect("failed to restore original dir");
-
-        // Snapshot: capture file metadata after the test
-        let cwd_after = snapshot_with_metadata(temp_path);
-        let report_dir_after = snapshot_with_metadata(Path::new("/report"));
-
-        // end() should succeed without writing files
         assert!(result.is_ok());
-
-        // Verify no files were created or modified in CWD
-        assert_eq!(
-            cwd_before, cwd_after,
-            "No files should be created or modified in CWD when report=false"
-        );
-
-        // Verify no files were created or modified in /report
-        assert_eq!(
-            report_dir_before, report_dir_after,
-            "No files should be created or modified in /report when report=false"
+        assert!(
+            !report_out.exists(),
+            "No directory should be created when report=false"
         );
     }
 
     #[test]
     fn report_false_does_not_update_time_start() {
-        let config = test_config(false, "test_kind", "test.log");
+        let config = test_config(false, "test_kind", "test.log", None);
         let mut report = Report::new(config);
 
         let initial_time = report.time_start;
@@ -327,7 +279,6 @@ mod tests {
 
         report.start();
 
-        // When report=false, start() returns early without updating time_start
         assert_eq!(
             report.time_start, initial_time,
             "time_start should not be updated when report=false"
@@ -336,14 +287,12 @@ mod tests {
 
     #[test]
     fn report_false_does_not_update_counters() {
-        let config = test_config(false, "test_kind", "test.log");
+        let config = test_config(false, "test_kind", "test.log", None);
         let mut report = Report::new(config);
 
-        // Call process with some bytes
         report.process(100);
         report.process(200);
 
-        // When report=false, counters should remain at initial values
         assert_eq!(
             report.sum_bytes, 0,
             "sum_bytes should not be updated when report=false"
@@ -362,17 +311,11 @@ mod tests {
         );
     }
 
-    /// Runs a complete report cycle (start/process/end) with the given byte values,
-    /// writing the output to `dir` as CWD. Returns the path of the generated report file.
-    ///
-    /// Note: When `/report` directory exists, `Report::end()` writes to `/report/test_kind.report`
-    /// instead of the CWD. This function returns the actual path where the report was written.
-    fn run_report_to_dir(dir: &Path, input: &str, bytes_list: &[usize]) -> PathBuf {
-        let config = test_config(true, "test_kind", input);
+    /// Runs a complete report cycle (start/process/end) with the given byte
+    /// values, writing to `report_dir`. Returns the report file path.
+    fn run_report(report_dir: &std::path::Path, input: &str, bytes_list: &[usize]) -> PathBuf {
+        let config = test_config(true, "test_kind", input, Some(report_dir.to_path_buf()));
         let mut report = Report::new(config);
-
-        let original_dir = std::env::current_dir().expect("failed to get current dir");
-        std::env::set_current_dir(dir).expect("failed to change dir");
 
         report.start();
         for &bytes in bytes_list {
@@ -380,52 +323,34 @@ mod tests {
         }
         report.end().expect("report end() should succeed");
 
-        std::env::set_current_dir(original_dir).expect("failed to restore dir");
-
-        // Return the actual path where the report was written
-        let report_dir = Path::new("/report");
-        if report_dir.is_dir() {
-            report_dir.join("test_kind.report")
-        } else {
-            dir.join("test_kind.report")
-        }
+        report_dir.join("test_kind.report")
     }
 
     #[test]
-    #[serial]
-    fn report_true_writes_to_report_dir_when_exists() {
-        let report_dir = Path::new("/report");
-        if !report_dir.is_dir() {
-            return; // /report does not exist in this environment; skip
-        }
-
+    fn report_true_writes_to_report_dir() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let input_file = temp_dir.path().join("test.log");
-        std::fs::write(&input_file, "test content").expect("failed to write input file");
+        let report_dir = temp_dir.path().join("reports");
 
-        let config = test_config(true, "test_kind", input_file.to_str().expect("valid path"));
+        let config = test_config(true, "test_kind", "test.log", Some(report_dir.clone()));
         let mut report = Report::new(config);
-
-        let before = snapshot_with_metadata(report_dir);
 
         report.start();
         report.process(100);
         let result = report.end();
 
-        let after = snapshot_with_metadata(report_dir);
-
         assert!(result.is_ok(), "end() should succeed");
-        assert_ne!(
-            before, after,
-            "Report file should be created or modified in /report"
+        let report_file = report_dir.join("test_kind.report");
+        assert!(
+            report_file.exists(),
+            "Report file should be created in report_dir"
         );
     }
 
     #[test]
-    #[serial]
     fn report_true_creates_file() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let report_file = run_report_to_dir(temp_dir.path(), "test.log", &[100, 200, 300]);
+        let report_dir = temp_dir.path().join("reports");
+        let report_file = run_report(&report_dir, "test.log", &[100, 200, 300]);
         assert!(
             report_file.exists(),
             "Report file should be created when report=true"
@@ -433,10 +358,46 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    fn report_true_creates_missing_directory() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let report_dir = temp_dir.path().join("nested").join("reports");
+
+        assert!(
+            !report_dir.exists(),
+            "report_dir should not exist before test"
+        );
+
+        let report_file = run_report(&report_dir, "test.log", &[100]);
+
+        assert!(
+            report_dir.is_dir(),
+            "report_dir should be created automatically"
+        );
+        assert!(
+            report_file.exists(),
+            "Report file should exist in newly created directory"
+        );
+    }
+
+    #[test]
+    fn report_true_uses_existing_directory() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let report_dir = temp_dir.path().join("existing_reports");
+        std::fs::create_dir_all(&report_dir).expect("failed to create report dir");
+
+        let report_file = run_report(&report_dir, "test.log", &[100]);
+
+        assert!(
+            report_file.exists(),
+            "Report file should be written into existing directory"
+        );
+    }
+
+    #[test]
     fn report_true_file_contains_all_sections() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let report_file = run_report_to_dir(temp_dir.path(), "test.log", &[100, 200, 300]);
+        let report_dir = temp_dir.path().join("reports");
+        let report_file = run_report(&report_dir, "test.log", &[100, 200, 300]);
         let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
 
         assert!(content.contains("--------------------------------------------------"));
@@ -451,12 +412,12 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn report_true_file_statistics_are_accurate() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let report_dir = temp_dir.path().join("reports");
         // process(50, 150, 100): min=50, max=150, avg=100.0
         // sum=300, cnt=3, processed_bytes=303 (Log: sum + cnt)
-        let report_file = run_report_to_dir(temp_dir.path(), "test.log", &[50, 150, 100]);
+        let report_file = run_report(&report_dir, "test.log", &[50, 150, 100]);
         let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
 
         assert!(
@@ -465,22 +426,24 @@ mod tests {
         );
         assert!(
             content.contains("3 (303 B)"),
-            "Process Count should show 3 entries and 303 bytes (300 data + 3 newlines)"
+            "Process Count should show 3 entries and 303 bytes \
+             (300 data + 3 newlines)"
         );
     }
 
     #[test]
-    #[serial]
     fn report_handles_dir_input_type() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let temp_path = temp_dir.path();
+        let report_dir = temp_dir.path().join("reports");
 
-        // Use temp_dir itself as input → InputType::Dir
-        let report_file =
-            run_report_to_dir(temp_path, temp_path.to_str().expect("valid path"), &[100]);
+        // Use temp_dir itself as input -> InputType::Dir
+        let report_file = run_report(
+            &report_dir,
+            temp_dir.path().to_str().expect("valid path"),
+            &[100],
+        );
         let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
 
-        // Dir input uses empty header and processed_bytes=0
         assert!(
             !content.contains("Input(LOG)"),
             "Dir input should not show Input(LOG) header"
@@ -492,15 +455,14 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn report_handles_elastic_input_type() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let report_dir = temp_dir.path().join("reports");
 
-        // "elastic" string → InputType::Elastic
-        let report_file = run_report_to_dir(temp_dir.path(), "elastic", &[100]);
+        // "elastic" string -> InputType::Elastic
+        let report_file = run_report(&report_dir, "elastic", &[100]);
         let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
 
-        // Elastic input uses empty header and processed_bytes=0
         assert!(
             !content.contains("Input(LOG)"),
             "Elastic input should not show Input(LOG) header"

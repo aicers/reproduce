@@ -9,12 +9,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - Added sysmon file migration support.
+- Added `report_dir` configuration field to specify the directory where
+  report files are written. When `report = true`, `report_dir` must be
+  set; if missing, a clear configuration error is returned.
 
 ### Changed
 
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.26.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
+
+### Removed
+
+- Removed implicit `/report` directory detection and current-working-directory
+  fallback for report output. The report path is now determined solely by the
+  `report_dir` configuration field.
 
 ### Fixed
 
