@@ -1345,4 +1345,382 @@ mod tests {
         assert!(flow.contents.contains("InBytes:"));
         assert!(flow.contents.contains("InPackets:"));
     }
+
+    #[test]
+    fn is_netflow_handles_vlan_tagged_packet() {
+        // Build a VLAN (802.1Q) tagged packet: EtherType 0x8100 triggers VLAN branch
+        // VLAN header adds 4 bytes: 2 bytes TCI + 2 bytes inner EtherType
+        let mut bytes = Vec::new();
+        // Ethernet: 6B dst MAC + 6B src MAC + 2B EtherType (VLAN)
+        bytes.extend_from_slice(&[0u8; 6]); // dst MAC
+        bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6]); // src MAC
+        bytes.extend_from_slice(&ETHERTYPE_VLAN.to_be_bytes()); // 0x8100
+        // VLAN TCI (2 bytes) + inner EtherType (IPv4)
+        bytes.extend_from_slice(&[0x00, 0x64]); // VLAN TCI: priority=0, VLAN ID=100
+        bytes.extend_from_slice(&ETHERTYPE_IPV4.to_be_bytes()); // inner EtherType: IPv4
+
+        // IPv4 header (20 bytes, IHL=5)
+        let payload_len = 8u16; // UDP header only
+        let total_len = 20u16 + payload_len;
+        bytes.push(0x45); // Version=4, IHL=5
+        bytes.push(0); // ToS
+        bytes.extend_from_slice(&total_len.to_be_bytes());
+        bytes.extend_from_slice(&0x1234u16.to_be_bytes()); // ID
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // Flags + Offset
+        bytes.push(64); // TTL
+        bytes.push(PROTO_UDP); // Protocol
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // Checksum
+        bytes.extend_from_slice(&[10, 0, 0, 1]); // src IP
+        bytes.extend_from_slice(&[10, 0, 0, 2]); // dst IP
+
+        // UDP header (8 bytes)
+        bytes.extend_from_slice(&1000u16.to_be_bytes()); // src port
+        bytes.extend_from_slice(&2055u16.to_be_bytes()); // dst port (NetFlow)
+        bytes.extend_from_slice(&8u16.to_be_bytes()); // length
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // checksum
+
+        let mut buf = pktbuf_from_bytes(bytes);
+        assert_eq!(buf.is_netflow(), ProcessStats::YesNetflowPackets);
+    }
+
+    #[test]
+    fn is_netflow_handles_dce_encapsulated_packet() {
+        // Build a DCE (0x8903) encapsulated packet
+        // DCE adds 12 extra bytes (2x MAC address) before inner EtherType
+        let mut bytes = Vec::new();
+        // Outer Ethernet: 6B dst MAC + 6B src MAC + 2B EtherType (DCE)
+        bytes.extend_from_slice(&[0u8; 6]); // dst MAC
+        bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6]); // src MAC
+        bytes.extend_from_slice(&ETHERTYPE_DCE.to_be_bytes()); // 0x8903
+        // DCE: 6B + 6B (additional MAC pair) + 2B inner EtherType
+        bytes.extend_from_slice(&[0u8; 6]); // DCE dst MAC
+        bytes.extend_from_slice(&[7, 8, 9, 10, 11, 12]); // DCE src MAC
+        bytes.extend_from_slice(&ETHERTYPE_IPV4.to_be_bytes()); // inner EtherType: IPv4
+
+        // IPv4 header (20 bytes, IHL=5)
+        let payload_len = 8u16; // UDP header only
+        let total_len = 20u16 + payload_len;
+        bytes.push(0x45); // Version=4, IHL=5
+        bytes.push(0); // ToS
+        bytes.extend_from_slice(&total_len.to_be_bytes());
+        bytes.extend_from_slice(&0x1234u16.to_be_bytes()); // ID
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // Flags + Offset
+        bytes.push(64); // TTL
+        bytes.push(PROTO_UDP); // Protocol
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // Checksum
+        bytes.extend_from_slice(&[10, 0, 0, 1]); // src IP
+        bytes.extend_from_slice(&[10, 0, 0, 2]); // dst IP
+
+        // UDP header (8 bytes)
+        bytes.extend_from_slice(&1000u16.to_be_bytes()); // src port
+        bytes.extend_from_slice(&2055u16.to_be_bytes()); // dst port (NetFlow)
+        bytes.extend_from_slice(&8u16.to_be_bytes()); // length
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // checksum
+
+        let mut buf = pktbuf_from_bytes(bytes);
+        assert_eq!(buf.is_netflow(), ProcessStats::YesNetflowPackets);
+    }
+
+    #[test]
+    fn is_netflow_handles_minimum_ihl() {
+        // Build an IPv4 packet with minimum IHL (5, standard 20-byte header)
+        // This tests the boundary condition in parse_ipv4 where (ihl & 0x0F) * 4 == 20
+        let mut bytes = Vec::new();
+        // Ethernet header
+        bytes.extend_from_slice(&[0u8; 6]); // dst MAC
+        bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6]); // src MAC
+        bytes.extend_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
+
+        // IPv4 header with IHL=5 (minimum, 20 bytes, no options)
+        let payload_len = 8u16; // UDP header only
+        let total_len = 20u16 + payload_len;
+        bytes.push(0x45); // Version=4, IHL=5 (20 bytes)
+        bytes.push(0); // ToS
+        bytes.extend_from_slice(&total_len.to_be_bytes());
+        bytes.extend_from_slice(&0x1234u16.to_be_bytes()); // ID
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // Flags + Offset
+        bytes.push(64); // TTL
+        bytes.push(PROTO_UDP); // Protocol
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // Checksum
+        bytes.extend_from_slice(&[10, 0, 0, 1]); // src IP
+        bytes.extend_from_slice(&[10, 0, 0, 2]); // dst IP
+
+        // UDP header (8 bytes)
+        bytes.extend_from_slice(&1000u16.to_be_bytes()); // src port
+        bytes.extend_from_slice(&2055u16.to_be_bytes()); // dst port (NetFlow)
+        bytes.extend_from_slice(&8u16.to_be_bytes()); // length
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // checksum
+
+        let mut buf = pktbuf_from_bytes(bytes);
+        assert_eq!(buf.is_netflow(), ProcessStats::YesNetflowPackets);
+    }
+
+    #[test]
+    fn is_netflow_returns_no_for_wrong_udp_port() {
+        // Test that UDP packets on non-NetFlow ports are rejected
+        let bytes = build_ipv4_udp_packet(&[], 8080, PROTO_UDP);
+        let mut buf = pktbuf_from_bytes(bytes);
+        assert_eq!(buf.is_netflow(), ProcessStats::NoNetflowPackets);
+    }
+
+    #[test]
+    fn parse_data_handles_tcp_flags_none() {
+        // Test that TCP flags byte 0x00 returns "None"
+        let mut buf = pktbuf_from_bytes(vec![0x00]);
+        let flags = buf.parse_data(&DataTypes::TcpFlags, 1).unwrap();
+        assert_eq!(flags, "None");
+    }
+
+    #[test]
+    fn parse_data_handles_unknown_forwarding_status() {
+        // Test forwarding status value not in lookup table returns raw byte value
+        // 0xFF is not a valid forwarding status code
+        let mut buf = pktbuf_from_bytes(vec![0xFF]);
+        let status = buf.parse_data(&DataTypes::ForwardingStatus, 1).unwrap();
+        assert_eq!(status, "255");
+    }
+
+    #[test]
+    fn parse_data_handles_odd_sized_integer_field() {
+        // Test integer field with length not in [1, 2, 4, 8] returns "0"
+        let mut buf = pktbuf_from_bytes(vec![0x01, 0x02, 0x03]);
+        let value = buf.parse_data(&DataTypes::Integer, 3).unwrap();
+        assert_eq!(value, "0");
+    }
+
+    #[test]
+    fn parse_data_handles_odd_sized_ascii_field() {
+        // Test ascii field with length not in [1, 2, 4, 8] returns "0"
+        let mut buf = pktbuf_from_bytes(vec![0x01, 0x02, 0x03]);
+        let value = buf.parse_data(&DataTypes::Ascii, 3).unwrap();
+        assert_eq!(value, "0");
+    }
+
+    #[test]
+    fn parse_data_handles_text_all_valid_ascii() {
+        // Test text field with all valid ASCII but no terminator
+        // The function looks for invalid chars (< 0x20 or > 0x7e)
+        // If none found, returns "-"
+        let mut buf = pktbuf_from_bytes(vec![b'H', b'e', b'l', b'l', b'o']);
+        let text = buf.parse_data(&DataTypes::Text, 5).unwrap();
+        assert_eq!(text, "-");
+    }
+
+    #[test]
+    fn parse_data_handles_text_with_terminator_at_start() {
+        // Test text field with invalid char at start returns empty string
+        // When position 0 is found, buf.get(..0) returns empty slice
+        let mut buf = pktbuf_from_bytes(vec![0x00, b'a', b'b', b'c']);
+        let text = buf.parse_data(&DataTypes::Text, 4).unwrap();
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn parse_netflow_datasets_v9_reserved_flowset_id() -> Result<()> {
+        // Test the reserved FlowSet ID range (2-255) branch
+        let header = Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 1,
+            source_id: 1,
+        };
+
+        // Build a FlowSet with reserved ID (e.g., 100)
+        let mut data = Vec::new();
+        data.extend_from_slice(&100u16.to_be_bytes()); // Reserved FlowSet ID
+        data.extend_from_slice(&8u16.to_be_bytes()); // FlowSet length
+        data.extend_from_slice(&[0u8; 4]); // Padding/data
+
+        let mut buf = pktbuf_from_bytes(data);
+        let mut stats = Stats::new();
+        let mut templates = TemplatesBox::new();
+        let mut nanos = 0u32;
+
+        let events = Netflow9::parse_netflow_datasets(
+            1,
+            &mut templates,
+            &NetflowHeader::V9(header),
+            &mut nanos,
+            &mut buf,
+            &mut stats,
+        )?;
+
+        // Reserved FlowSet IDs don't produce events
+        assert!(events.is_empty());
+        // Stats should show reserved flowset ID was encountered
+        assert!(format!("{stats}").contains("ReservedFlowsetIDUsed = 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_netflow_datasets_v9_rejects_wrong_header() {
+        // Test that V9 parse_netflow_datasets rejects a V5 header
+        let header = Netflow5Header {
+            version: 5,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            unix_nanos: 0,
+            flow_sequence: 1,
+            engine_type: 2,
+            engine_id: 3,
+            sampling_interval: 0x4001,
+        };
+        let mut buf = pktbuf_from_bytes(Vec::new());
+        let mut stats = Stats::new();
+        let mut templates = TemplatesBox::new();
+        let mut nanos = 0u32;
+
+        let err = Netflow9::parse_netflow_datasets(
+            1,
+            &mut templates,
+            &NetflowHeader::V5(header),
+            &mut nanos,
+            &mut buf,
+            &mut stats,
+        )
+        .err()
+        .unwrap();
+
+        assert!(err.to_string().contains("invalid netflow v9 header"));
+    }
+
+    #[test]
+    fn parse_netflow_datasets_v5_with_insufficient_data_returns_empty() -> Result<()> {
+        // Test that V5 parsing with insufficient data returns empty events
+        // (but doesn't fail - the defensive check skips incomplete records)
+        let header = Netflow5Header {
+            version: 5,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            unix_nanos: 0,
+            flow_sequence: 1,
+            engine_type: 2,
+            engine_id: 3,
+            sampling_interval: 0x4001,
+        };
+
+        // Provide less than 48 bytes - the loop won't process any records
+        let incomplete_record = vec![0u8; 10];
+
+        let mut buf = pktbuf_from_bytes(incomplete_record);
+        let mut stats = Stats::new();
+        let mut templates = TemplatesBox::new();
+        let mut nanos = 0u32;
+
+        let events = Netflow5::parse_netflow_datasets(
+            1,
+            &mut templates,
+            &NetflowHeader::V5(header),
+            &mut nanos,
+            &mut buf,
+            &mut stats,
+        )?;
+
+        // No records parsed due to insufficient data
+        assert!(events.is_empty());
+        // Stats still show Events = 1 because of header.count
+        assert!(format!("{stats}").contains("Events = 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_netflow_datasets_v9_invalid_flowset_header() {
+        // Test that invalid V9 flowset header increments InvalidNetflowPackets
+        let header = Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 1,
+            source_id: 1,
+        };
+
+        // Provide incomplete flowset header (less than 4 bytes required)
+        let incomplete_header = vec![0u8; 2]; // Only 2 bytes, need 4
+
+        let mut buf = pktbuf_from_bytes(incomplete_header);
+        let mut stats = Stats::new();
+        let mut templates = TemplatesBox::new();
+        let mut nanos = 0u32;
+
+        let err = Netflow9::parse_netflow_datasets(
+            1,
+            &mut templates,
+            &NetflowHeader::V9(header),
+            &mut nanos,
+            &mut buf,
+            &mut stats,
+        )
+        .err()
+        .unwrap();
+
+        assert!(err.to_string().contains("invalid netflow v9 pcap"));
+        assert!(format!("{stats}").contains("InvalidNetflowPackets = 1"));
+    }
+
+    #[test]
+    fn parse_netflow_options_template_with_empty_scope_fields() -> Result<()> {
+        // Test options template with zero scope length
+        let header = Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 1,
+            source_id: 1,
+        };
+
+        // Options template with scope_length=0 and option_length=4
+        let mut data = Vec::new();
+        data.extend_from_slice(&258u16.to_be_bytes()); // template_id
+        data.extend_from_slice(&0u16.to_be_bytes()); // scope_length = 0
+        data.extend_from_slice(&4u16.to_be_bytes()); // option_length = 4
+        data.extend_from_slice(&1u16.to_be_bytes()); // option field type: InBytes
+        data.extend_from_slice(&4u16.to_be_bytes()); // option field length
+
+        let mut buf = pktbuf_from_bytes(data);
+        let templates = buf.parse_netflow_options_template(14, &header)?;
+
+        assert_eq!(templates.len(), 1);
+        let t = &templates[0];
+        assert!(t.options_template);
+        assert_eq!(t.scope_field_count, 0); // No scope fields
+        assert_eq!(t.field_count, 1); // Only option field
+        Ok(())
+    }
+
+    #[test]
+    fn parse_netflow_options_template_with_empty_option_fields() -> Result<()> {
+        // Test options template with zero option length
+        let header = Netflow9Header {
+            version: 9,
+            count: 1,
+            sys_uptime: 0,
+            unix_secs: 0,
+            flow_sequence: 1,
+            source_id: 1,
+        };
+
+        // Options template with scope_length=4 and option_length=0
+        let mut data = Vec::new();
+        data.extend_from_slice(&259u16.to_be_bytes()); // template_id
+        data.extend_from_slice(&4u16.to_be_bytes()); // scope_length = 4
+        data.extend_from_slice(&0u16.to_be_bytes()); // option_length = 0
+        data.extend_from_slice(&1u16.to_be_bytes()); // scope field type: System
+        data.extend_from_slice(&4u16.to_be_bytes()); // scope field length
+
+        let mut buf = pktbuf_from_bytes(data);
+        let templates = buf.parse_netflow_options_template(14, &header)?;
+
+        assert_eq!(templates.len(), 1);
+        let t = &templates[0];
+        assert!(t.options_template);
+        assert_eq!(t.scope_field_count, 1); // Only scope field
+        assert_eq!(t.field_count, 1); // Total fields
+        Ok(())
+    }
 }
