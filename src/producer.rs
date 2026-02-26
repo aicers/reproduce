@@ -2402,9 +2402,9 @@ mod tests {
     use super::*;
     use crate::syslog::TryFromSysmonRecord;
 
-    const TEST_CERT_PATH: &str = "tests/cert.pem";
-    const TEST_KEY_PATH: &str = "tests/key.pem";
-    const TEST_ROOT_PATH: &str = "tests/root.pem";
+    const TEST_CERT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/cert.pem");
+    const TEST_KEY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/key.pem");
+    const TEST_ROOT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/root.pem");
     const TEST_SERVER_NAME: &str = "localhost";
     type TestServerHandle = tokio::task::JoinHandle<(RawEventKind, Vec<(i64, Vec<u8>)>)>;
     type TestServer = (SocketAddr, TestServerHandle);
