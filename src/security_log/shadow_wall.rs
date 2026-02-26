@@ -59,7 +59,7 @@ impl ParseSecurityLog for ShadowWall {
 
         let timestamp = format!("{timestamp}000000000")
             .parse::<i64>()
-            .unwrap_or_default()
+            .context("invalid timestamp")?
             + serial;
 
         Ok((
