@@ -1780,25 +1780,16 @@ impl Giganto {
                             continue;
                         };
 
-                        // Implement timestamp deduplication logic
-                        if let Some(ref_ts) = reference_timestamp {
-                            if current_timestamp == ref_ts {
-                                // Same timestamp, increment offset
-                                timestamp_offset += 1;
-                            } else {
-                                // Different timestamp, update reference and reset offset
-                                reference_timestamp = Some(current_timestamp);
-                                timestamp_offset = 0;
-                            }
-                        } else {
-                            // First event, set reference timestamp
-                            reference_timestamp = Some(current_timestamp);
-                        }
+                        // Apply timestamp deduplication
+                        let deduped_timestamp = apply_timestamp_dedup(
+                            current_timestamp,
+                            &mut reference_timestamp,
+                            &mut timestamp_offset,
+                        );
 
                         match T::try_from_sysmon_record(&record) {
-                            Ok((event, mut timestamp)) => {
-                                // Apply timestamp offset for deduplication
-                                timestamp += timestamp_offset;
+                            Ok((event, _)) => {
+                                let timestamp = deduped_timestamp;
                                 if self.init_msg {
                                     send_record_header(&mut self.giganto_sender, protocol).await?;
                                     self.init_msg = false;
@@ -2397,7 +2388,6 @@ mod tests {
         io::Write,
         net::{IpAddr, Ipv6Addr, SocketAddr},
         sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
     };
 
     use csv::{ReaderBuilder, StringRecord};
@@ -2412,9 +2402,9 @@ mod tests {
     use super::*;
     use crate::syslog::TryFromSysmonRecord;
 
-    const TEST_CERT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/cert.pem");
-    const TEST_KEY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/key.pem");
-    const TEST_ROOT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/root.pem");
+    const TEST_CERT_PATH: &str = "tests/cert.pem";
+    const TEST_KEY_PATH: &str = "tests/key.pem";
+    const TEST_ROOT_PATH: &str = "tests/root.pem";
     const TEST_SERVER_NAME: &str = "localhost";
     type TestServerHandle = tokio::task::JoinHandle<(RawEventKind, Vec<(i64, Vec<u8>)>)>;
     type TestServer = (SocketAddr, TestServerHandle);
@@ -2508,7 +2498,7 @@ mod tests {
         (local_addr, handle)
     }
 
-    fn write_temp_zeek_log(lines: &[String]) -> NamedTempFile {
+    fn write_temp_log(lines: &[String]) -> NamedTempFile {
         let mut log_file = NamedTempFile::new().expect("create temp file");
         log_file
             .write_all(lines.join("\n").as_bytes())
@@ -2579,28 +2569,6 @@ mod tests {
         assert_eq!(final_timestamps[4], ts_b1 + 2, "Third B event: offset +2");
     }
 
-    #[test]
-    fn test_zeek_timestamp_deduplication() {
-        // Test that duplicate timestamps get incremented by 1 nanosecond
-        let timestamp = "1562093121.655728";
-
-        let record1 = create_zeek_record(timestamp, "UID_1");
-        let record2 = create_zeek_record(timestamp, "UID_2");
-
-        let (_, ts1) = Conn::try_from_zeek_record(&record1).unwrap();
-        let (_, ts2) = Conn::try_from_zeek_record(&record2).unwrap();
-
-        assert_eq!(ts1, ts2, "Base timestamps should be identical");
-
-        let mut reference_timestamp: Option<i64> = None;
-        let mut timestamp_offset = 0_i64;
-        let ts1_dedup = apply_timestamp_dedup(ts1, &mut reference_timestamp, &mut timestamp_offset);
-        let ts2_dedup = apply_timestamp_dedup(ts2, &mut reference_timestamp, &mut timestamp_offset);
-
-        assert_eq!(ts1_dedup, ts1, "First event should have no offset");
-        assert_eq!(ts2_dedup, ts1 + 1, "Second event should have +1 offset");
-    }
-
     #[tokio::test]
     async fn test_send_zeek_timestamp_deduplication_end_to_end() {
         let (server_addr, server_handle) = spawn_test_server(4);
@@ -2632,7 +2600,7 @@ mod tests {
             zeek_conn_line(timestamp_b, "UID_B2"),
         ];
 
-        let log_file = write_temp_zeek_log(&lines);
+        let log_file = write_temp_log(&lines);
 
         let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
@@ -2698,7 +2666,7 @@ mod tests {
         let lines: Vec<String> = (0..expected_events)
             .map(|i| zeek_conn_line(timestamp, &format!("UID_{i:04}")))
             .collect();
-        let log_file = write_temp_zeek_log(&lines);
+        let log_file = write_temp_log(&lines);
 
         let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
@@ -2764,7 +2732,7 @@ mod tests {
             zeek_conn_line("invalid.123", "UID_BAD"),
             zeek_conn_line(timestamp, "UID_A2"),
         ];
-        let log_file = write_temp_zeek_log(&lines);
+        let log_file = write_temp_log(&lines);
 
         let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
@@ -2836,7 +2804,7 @@ mod tests {
         let lines: Vec<String> = (0..5)
             .map(|i| zeek_conn_line(&format!("156209312{i}.000000"), &format!("UID_{i}")))
             .collect();
-        let log_file = write_temp_zeek_log(&lines);
+        let log_file = write_temp_log(&lines);
 
         let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
@@ -2910,7 +2878,7 @@ mod tests {
         let lines: Vec<String> = (0..10)
             .map(|i| zeek_conn_line(&format!("156209312{i}.000000"), &format!("UID_{i}")))
             .collect();
-        let log_file = write_temp_zeek_log(&lines);
+        let log_file = write_temp_log(&lines);
 
         let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
@@ -3074,17 +3042,6 @@ mod tests {
         // temp_dir is automatically cleaned up when dropped
     }
 
-    fn apply_timestamp_deduplication(
-        timestamps: &[i64],
-        reference_timestamp: &mut Option<i64>,
-        timestamp_offset: &mut i64,
-    ) -> Vec<i64> {
-        timestamps
-            .iter()
-            .map(|&ts| apply_timestamp_dedup(ts, reference_timestamp, timestamp_offset))
-            .collect()
-    }
-
     fn sysmon_process_create_line(timestamp: &str, process_guid: &str) -> String {
         format!(
             "test-agent\tagent-001\t1\t{timestamp}\t{process_guid}\t1234\t\
@@ -3149,38 +3106,26 @@ mod tests {
         assert_eq!(ts_b2, ts_b3, "B timestamps should be identical");
         assert_ne!(ts_a1, ts_b1, "A and B timestamps should differ");
 
+        // Apply deduplication using the production helper
         let mut reference_timestamp: Option<i64> = None;
         let mut timestamp_offset = 0_i64;
-        let final_timestamps = apply_timestamp_deduplication(
-            &[ts_a1, ts_a2, ts_b1, ts_b2, ts_b3],
-            &mut reference_timestamp,
-            &mut timestamp_offset,
-        );
+        let timestamps = [ts_a1, ts_a2, ts_b1, ts_b2, ts_b3];
+        let final_timestamps: Vec<i64> = timestamps
+            .iter()
+            .map(|&ts| apply_timestamp_dedup(ts, &mut reference_timestamp, &mut timestamp_offset))
+            .collect();
 
+        // Verify: A timestamps get offsets 0, 1
         assert_eq!(final_timestamps[0], ts_a1, "First A event: no offset");
         assert_eq!(final_timestamps[1], ts_a1 + 1, "Second A event: offset +1");
+
+        // Verify: B timestamps get offsets 0, 1, 2 (offset resets for new timestamp)
         assert_eq!(
             final_timestamps[2], ts_b1,
             "First B event: offset resets to 0"
         );
         assert_eq!(final_timestamps[3], ts_b1 + 1, "Second B event: offset +1");
         assert_eq!(final_timestamps[4], ts_b1 + 2, "Third B event: offset +2");
-    }
-
-    fn write_temp_sysmon_log(lines: &[String]) -> std::path::PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let log_path = std::env::temp_dir().join(format!("reproduce-sysmon-{suffix}.log"));
-        let mut log_file = fs::File::create(&log_path).expect("create log file");
-        log_file
-            .write_all(lines.join("\n").as_bytes())
-            .expect("write log file");
-        log_file.write_all(b"\n").expect("newline");
-        log_file.flush().expect("flush log file");
-        drop(log_file);
-        log_path
     }
 
     #[tokio::test]
@@ -3212,9 +3157,9 @@ mod tests {
             sysmon_process_create_line(timestamp, "{00000000-0000-0000-0000-000000000002}"),
             sysmon_process_create_line(timestamp, "{00000000-0000-0000-0000-000000000003}"),
         ];
-        let log_path = write_temp_sysmon_log(&lines);
+        let log_file = write_temp_log(&lines);
 
-        let file = File::open(&log_path).expect("open log file");
+        let file = File::open(log_file.path()).expect("open log file");
         let iter = ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -3251,7 +3196,5 @@ mod tests {
 
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![base_ts, base_ts + 1, base_ts + 2]);
-
-        let _ = fs::remove_file(&log_path);
     }
 }
