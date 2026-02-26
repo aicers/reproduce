@@ -3197,4 +3197,334 @@ mod tests {
         let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
         assert_eq!(timestamps, vec![base_ts, base_ts + 1, base_ts + 2]);
     }
+
+    // ==========================================================================
+    // Sysmon Option Behavior Tests
+    //
+    // These tests verify the behavior of skip, count_sent, and file_polling_mode
+    // options in send_sysmon, mirroring the existing Zeek tests.
+    // ==========================================================================
+
+    /// Tests that the `skip` option ignores the first N lines.
+    ///
+    /// Scenario: 5 events, skip=2
+    /// Expected: Only events 3, 4, 5 are sent (3 events total)
+    #[tokio::test]
+    async fn test_send_sysmon_skip_ignores_first_n_lines() {
+        let (server_addr, server_handle) = spawn_test_server(3);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "process_create".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        let lines: Vec<String> = (0..5)
+            .map(|i| {
+                sysmon_process_create_line(
+                    &format!("2023-01-15 14:30:4{i}.000000"),
+                    &format!("{{0000000{i}-0000-0000-0000-000000000000}}"),
+                )
+            })
+            .collect();
+        let log_file = write_temp_log(&lines);
+
+        let file = File::open(log_file.path()).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_sysmon::<ProcessCreate>(
+                iter,
+                RawEventKind::ProcessCreate,
+                2, // skip first 2 lines
+                0,
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_sysmon");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::ProcessCreate);
+        assert_eq!(events.len(), 3, "Should have skipped first 2 lines");
+
+        // Verify we got events 3, 4, 5 (indices 2, 3, 4 in original)
+        let (_, ts_2) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:42.000000",
+                "{00000002-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_3) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:43.000000",
+                "{00000003-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_4) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:44.000000",
+                "{00000004-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![ts_2, ts_3, ts_4]);
+    }
+
+    /// Tests that the `count_sent` option stops after exactly N events are sent.
+    ///
+    /// Scenario: 10 events, `count_sent=4`
+    /// Expected: Only the first 4 events are sent
+    #[tokio::test]
+    async fn test_send_sysmon_count_sent_stops_after_n_events() {
+        let (server_addr, server_handle) = spawn_test_server(4);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "process_create".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        let lines: Vec<String> = (0..10)
+            .map(|i| {
+                sysmon_process_create_line(
+                    &format!("2023-01-15 14:30:4{i}.000000"),
+                    &format!("{{0000000{i}-0000-0000-0000-000000000000}}"),
+                )
+            })
+            .collect();
+        let log_file = write_temp_log(&lines);
+
+        let file = File::open(log_file.path()).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+        producer
+            .giganto
+            .send_sysmon::<ProcessCreate>(
+                iter,
+                RawEventKind::ProcessCreate,
+                0,
+                4, // stop after 4 events
+                false,
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_sysmon");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::ProcessCreate);
+        assert_eq!(events.len(), 4, "Should have sent exactly 4 events");
+
+        // Verify we got events 0, 1, 2, 3
+        let (_, ts_0) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:40.000000",
+                "{00000000-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_1) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:41.000000",
+                "{00000001-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_2) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:42.000000",
+                "{00000002-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_3) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:43.000000",
+                "{00000003-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![ts_0, ts_1, ts_2, ts_3]);
+    }
+
+    /// Tests that `file_polling_mode` resumes processing when new data is appended after EOF.
+    ///
+    /// Scenario: Initial file has 2 events, then 2 more are appended
+    /// Expected: All 4 events are eventually sent
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn test_send_sysmon_file_polling_mode_resumes_on_append() {
+        let (server_addr, server_handle) = spawn_test_server(4);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "process_create".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("giganto producer");
+
+        // Use tempdir for path-based reopen/append scenario to avoid file-locking issues
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let log_path = temp_dir.path().join("sysmon.log");
+        let log_path_clone = log_path.clone();
+
+        // Create initial file with 2 events
+        {
+            let mut log_file = fs::File::create(&log_path).expect("create log file");
+            let initial_lines = [
+                sysmon_process_create_line(
+                    "2023-01-15 14:30:40.000000",
+                    "{00000000-0000-0000-0000-000000000000}",
+                ),
+                sysmon_process_create_line(
+                    "2023-01-15 14:30:41.000000",
+                    "{00000001-0000-0000-0000-000000000000}",
+                ),
+            ];
+            log_file
+                .write_all(initial_lines.join("\n").as_bytes())
+                .expect("write log file");
+            log_file.write_all(b"\n").expect("newline");
+            log_file.flush().expect("flush log file");
+        }
+
+        let file = File::open(&log_path).expect("open log file");
+        let iter = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(file)
+            .into_records();
+
+        let mut report = Report::new(config.clone());
+        let running = Arc::new(AtomicBool::new(true));
+
+        // Spawn a task to append more data after a short delay
+        let append_handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(&log_path_clone)
+                .expect("open for append");
+            let additional_lines = [
+                sysmon_process_create_line(
+                    "2023-01-15 14:30:42.000000",
+                    "{00000002-0000-0000-0000-000000000000}",
+                ),
+                sysmon_process_create_line(
+                    "2023-01-15 14:30:43.000000",
+                    "{00000003-0000-0000-0000-000000000000}",
+                ),
+            ];
+            file.write_all(additional_lines.join("\n").as_bytes())
+                .expect("append");
+            file.write_all(b"\n").expect("newline");
+            file.flush().expect("flush");
+        });
+
+        producer
+            .giganto
+            .send_sysmon::<ProcessCreate>(
+                iter,
+                RawEventKind::ProcessCreate,
+                0,
+                4,    // stop after 4 events (initial 2 + appended 2)
+                true, // file_polling_mode enabled
+                false,
+                running,
+                &mut report,
+            )
+            .await
+            .expect("send_sysmon");
+
+        append_handle.await.expect("append task");
+
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::ProcessCreate);
+        assert_eq!(
+            events.len(),
+            4,
+            "Should have received all 4 events including appended ones"
+        );
+
+        // Verify we got all 4 events
+        let (_, ts_0) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:40.000000",
+                "{00000000-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_1) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:41.000000",
+                "{00000001-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_2) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:42.000000",
+                "{00000002-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+        let (_, ts_3) =
+            ProcessCreate::try_from_sysmon_record(&create_sysmon_process_create_record(
+                "2023-01-15 14:30:43.000000",
+                "{00000003-0000-0000-0000-000000000000}",
+            ))
+            .expect("parse");
+
+        let timestamps: Vec<i64> = events.into_iter().map(|(ts, _)| ts).collect();
+        assert_eq!(timestamps, vec![ts_0, ts_1, ts_2, ts_3]);
+        // temp_dir is automatically cleaned up when dropped
+    }
 }
