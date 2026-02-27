@@ -108,42 +108,52 @@ mod tests {
             version: "5.0.12".to_string(),
         };
 
-        let log = "<182>Jan 9 09:26:09 penta wplogd: WAPPLES INTRUSION WAPPLES \
+        let logs = [
+            "<182>Jan 9 09:26:09 penta wplogd: WAPPLES INTRUSION WAPPLES \
             DETECTION TIME : 2020-01-09 09:26:09 +0900 WAPPLES RULE NAME : \
             Extension Filtering WAPPLES (client 119.75.88.90 WAPPLES) -> \
-            (server 210.99.177.16:1443)";
+            (server 210.99.177.16:1443)",
+            "<182>Jan 9 09:26:09 penta wplogd: [WAPPLES] INTRUSION [WAPPLES] \
+            DETECTION TIME : 2020-01-09 09:26:09 +0900 [WAPPLES] RULE NAME : \
+            Extension Filtering [WAPPLES] (client 119.75.88.90 [WAPPLES]) -> \
+            (server 210.99.177.16:1443)",
+        ];
 
         let serial: i64 = 42;
-        let (seculog, timestamp) = Wapples::parse_security_log(log, serial, info).unwrap();
 
-        // Verify kind, log_type, version from info
-        assert_eq!(seculog.kind, "wapples");
-        assert_eq!(seculog.log_type, "fw");
-        assert_eq!(seculog.version, "5.0.12");
+        for log in logs {
+            let (seculog, timestamp) =
+                Wapples::parse_security_log(log, serial, info.clone()).unwrap();
 
-        // Verify parsed IP addresses
-        assert_eq!(
-            seculog.orig_addr,
-            Some(IpAddr::V4(Ipv4Addr::new(119, 75, 88, 90)))
-        );
-        assert_eq!(
-            seculog.resp_addr,
-            Some(IpAddr::V4(Ipv4Addr::new(210, 99, 177, 16)))
-        );
+            // Verify kind, log_type, version from info
+            assert_eq!(seculog.kind, "wapples");
+            assert_eq!(seculog.log_type, "fw");
+            assert_eq!(seculog.version, "5.0.12");
 
-        // Verify ports - wapples sets orig_port to DEFAULT_PORT (0)
-        assert_eq!(seculog.orig_port, Some(DEFAULT_PORT));
-        assert_eq!(seculog.resp_port, Some(1443));
+            // Verify parsed IP addresses
+            assert_eq!(
+                seculog.orig_addr,
+                Some(IpAddr::V4(Ipv4Addr::new(119, 75, 88, 90)))
+            );
+            assert_eq!(
+                seculog.resp_addr,
+                Some(IpAddr::V4(Ipv4Addr::new(210, 99, 177, 16)))
+            );
 
-        // Verify protocol is TCP
-        assert_eq!(seculog.proto, Some(PROTO_TCP));
+            // Verify ports - wapples sets orig_port to DEFAULT_PORT (0)
+            assert_eq!(seculog.orig_port, Some(DEFAULT_PORT));
+            assert_eq!(seculog.resp_port, Some(1443));
 
-        // Verify timestamp matches expected value (datetime + serial offset)
-        // "2020-01-09 09:26:09 +0900" = 2020-01-09 00:26:09 UTC = 1578529569 seconds since epoch
-        assert_eq!(timestamp, 1_578_529_569_000_000_000 + serial);
+            // Verify protocol is TCP
+            assert_eq!(seculog.proto, Some(PROTO_TCP));
 
-        // Verify contents matches input
-        assert_eq!(seculog.contents, log);
+            // Verify timestamp matches expected value (datetime + serial offset)
+            // "2020-01-09 09:26:09 +0900" = 2020-01-09 00:26:09 UTC = 1578529569 seconds since epoch
+            assert_eq!(timestamp, 1_578_529_569_000_000_000 + serial);
+
+            // Verify contents matches input
+            assert_eq!(seculog.contents, log);
+        }
     }
 
     #[test]
