@@ -51,7 +51,7 @@ impl ParseSecurityLog for Fgt {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -61,7 +61,7 @@ impl ParseSecurityLog for Fgt {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -91,7 +91,71 @@ impl ParseSecurityLog for Fgt {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+
+    #[test]
+    fn parse_fgt_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "fgt".to_string(),
+            log_type: "ips".to_string(),
+            version: "5.2".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Fgt::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Fgt::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing required fields should fail
+        let truncated = r#"<185>date=2020-07-13 time=09:37:44 devname="Chamhosp_201E""#;
+        assert!(Fgt::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_fgt_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "fgt".to_string(),
+            log_type: "ips".to_string(),
+            version: "5.2".to_string(),
+        };
+
+        let log = r#"<185>date=2020-07-13 time=09:37:44 devname="Chamhosp_201E" devid="FG201ETK19907629" logid="0419016384" type="utm" subtype="ips" eventtype="signature" level="alert" vd="root" eventtime=1594600665469973652 tz="+0900" severity="medium" srcip=10.10.40.132 srccountry="Reserved" dstip=10.10.40.245 srcintf="port13" srcintfrole="undefined" dstintf="port13" dstintfrole="undefined" sessionid=78411987 action="dropped" proto=6 service="NBSS" policyid=1 attack="MS.SMB.Server.Trans.Peeking.Data.Information.Disclosure" srcport=62227 dstport=445 direction="outgoing" attackid=43799 profile="sniffer-profile" ref="http://www.fortinet.com/ids/VID43799" incidentserialno=1038270373 msg="applications3: MS.SMB.Server.Trans.Peeking.Data.Information.Disclosure," crscore=10 craction=16384 crlevel="medium""#;
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Fgt::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "fgt");
+        assert_eq!(seculog.log_type, "ips");
+        assert_eq!(seculog.version, "5.2");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(10, 10, 40, 132)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(10, 10, 40, 245)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(62227));
+        assert_eq!(seculog.resp_port, Some(445));
+
+        // Verify protocol is TCP (6)
+        assert_eq!(seculog.proto, Some(PROTO_TCP));
+
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "2020-07-13 09:37:44" +0900 = 2020-07-13 00:37:44 UTC = 1594600664 seconds since epoch
+        assert_eq!(timestamp, 1_594_600_664_000_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_fgt_timestamp_ns_returns_expected_nanos() {

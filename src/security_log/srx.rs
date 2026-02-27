@@ -43,7 +43,7 @@ impl ParseSecurityLog for Srx {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -53,7 +53,7 @@ impl ParseSecurityLog for Srx {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -83,7 +83,72 @@ impl ParseSecurityLog for Srx {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+    use crate::security_log::PROTO_TCP;
+
+    #[test]
+    fn parse_srx_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "srx".to_string(),
+            log_type: "ips".to_string(),
+            version: "15.1".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Srx::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Srx::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing required fields should fail
+        let truncated = r"<14>1 2019-05-10T17:31:09.856+09:00 Saeki_PNC_SRX340 RT_IDP";
+        assert!(Srx::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_srx_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "srx".to_string(),
+            log_type: "ips".to_string(),
+            version: "15.1".to_string(),
+        };
+
+        let log = r#"<14>1 2019-05-10T17:31:09.856+09:00 Saeki_PNC_SRX340 RT_IDP - IDP_ATTACK_LOG_EVENT [junos@2636.1.1.1.2.135 epoch-time="1557477065" message-type="ANOMALY" source-address="211.192.8.240" source-port="8071" destination-address="13.124.252.139" destination-port="80" protocol-name="TCP" service-name="HTTP" application-name="HTTP" rule-name="1" rulebase-name="IPS" policy-name="UTM" export-id="1716" repeat-count="3" action="NONE" threat-severity="HIGH" attack-name="HTTP:OVERFLOW:URL-OVERFLOW" nat-source-address="0.0.0.0" nat-source-port="0" nat-destination-address="0.0.0.0" nat-destination-port="0" elapsed-time="0" inbound-bytes="0" outbound-bytes="0" inbound-packets="0" outbound-packets="0" source-zone-name="trust" source-interface-name="ge-0/0/1.0" destination-zone-name="untrust" destination-interface-name="ge-0/0/0.0" packet-log-id="0" alert="no" username="N/A" roles="N/A" message="-"]"#;
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Srx::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "srx");
+        assert_eq!(seculog.log_type, "ips");
+        assert_eq!(seculog.version, "15.1");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(211, 192, 8, 240)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(13, 124, 252, 139)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(8071));
+        assert_eq!(seculog.resp_port, Some(80));
+
+        // Verify protocol is TCP
+        assert_eq!(seculog.proto, Some(PROTO_TCP));
+
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "2019-05-10T17:31:09.856+09:00" = 2019-05-10 08:31:09.856 UTC = 1557477069.856 seconds since epoch
+        assert_eq!(timestamp, 1_557_477_069_856_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_srx_timestamp_ns_returns_expected_nanos() {

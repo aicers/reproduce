@@ -45,7 +45,7 @@ impl ParseSecurityLog for Axgate {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -55,7 +55,7 @@ impl ParseSecurityLog for Axgate {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -85,7 +85,73 @@ impl ParseSecurityLog for Axgate {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+    use crate::security_log::PROTO_UDP;
+
+    #[test]
+    fn parse_axgate_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "axgate".to_string(),
+            log_type: "fw".to_string(),
+            version: "2.0".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Axgate::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Axgate::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing required fields should fail
+        let truncated =
+            "Aug 11 13:07:17 106.243.158.126 time:2021-08-11 13:07:18,src:192.168.0.234";
+        assert!(Axgate::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_axgate_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "axgate".to_string(),
+            log_type: "fw".to_string(),
+            version: "2.0".to_string(),
+        };
+
+        let log = "Aug 11 13:07:17 106.243.158.126 Aug 11 13:07:18 amnet kernel: ver:3,time:2021-08-11 13:07:18,src:192.168.0.234,nat_src:106.243.158.126,dst:208.91.112.52,nat_dst:0.0.0.0,priority:medium,sport:57879,nat_sport:57879,dport:53,nat_dport:0,proto:17,sid:1551,category:application,action:pass,count:1,sessid:63760071,npdump:0,id:404,prof_id:1,nat_type:s,snat_id:500,dnat_id:0,uid:-,stime:2021-08-11 13:02:35,etime:- -,s_pkts:54,s_bytes:4122,r_pkts:53,r_bytes:8953,rule_ver:4,f_zone:trust,t_zone:untrust,vd_id:0,rule_pri:25,rule_id:27,pdir:to-src,message:APPLICATION DNS Spoof query response with TTL of 1 min. and no authority";
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Axgate::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "axgate");
+        assert_eq!(seculog.log_type, "fw");
+        assert_eq!(seculog.version, "2.0");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 234)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(208, 91, 112, 52)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(57879));
+        assert_eq!(seculog.resp_port, Some(53));
+
+        // Verify protocol is UDP (17)
+        assert_eq!(seculog.proto, Some(PROTO_UDP));
+
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "2021-08-11 13:07:18" +0900 = 2021-08-11 04:07:18 UTC = 1628654838 seconds since epoch
+        assert_eq!(timestamp, 1_628_654_838_000_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_axgate_timestamp_ns_returns_expected_nanos() {

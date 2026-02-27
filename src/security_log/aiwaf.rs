@@ -45,7 +45,7 @@ impl ParseSecurityLog for Aiwaf {
         };
 
         let orig_port = match caps.name("srcPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -55,7 +55,7 @@ impl ParseSecurityLog for Aiwaf {
         };
 
         let resp_port = match caps.name("dstPort") {
-            Some(d) => d.as_str().parse::<u16>().unwrap_or_default(),
+            Some(d) => d.as_str().parse::<u16>().unwrap_or(DEFAULT_PORT),
             None => DEFAULT_PORT,
         };
 
@@ -80,7 +80,71 @@ impl ParseSecurityLog for Aiwaf {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+
+    #[test]
+    fn parse_aiwaf_rejects_invalid_format() {
+        let info = SecurityLogInfo {
+            kind: "aiwaf".to_string(),
+            log_type: "waf".to_string(),
+            version: "4.1".to_string(),
+        };
+
+        // Empty string should fail
+        assert!(Aiwaf::parse_security_log("", 0, info.clone()).is_err());
+
+        // Random garbage should fail
+        assert!(Aiwaf::parse_security_log("random garbage", 0, info.clone()).is_err());
+
+        // Truncated log missing IP/port fields should fail
+        let truncated = "DETECT|2019-07-19 11:47:15|1.1.1.2|v4.1|192.168.70.254|52677";
+        assert!(Aiwaf::parse_security_log(truncated, 0, info).is_err());
+    }
+
+    #[test]
+    fn parse_aiwaf_maps_fields_correctly() {
+        let info = SecurityLogInfo {
+            kind: "aiwaf".to_string(),
+            log_type: "waf".to_string(),
+            version: "4.1".to_string(),
+        };
+
+        let log = "DETECT|2019-07-19 11:47:15|1.1.1.2|v4.1|192.168.70.254|52677|192.168.200.44|80|Personal Information Leakage|중간|탐지|POST /ekp/rss.do";
+
+        let serial: i64 = 42;
+        let (seculog, timestamp) = Aiwaf::parse_security_log(log, serial, info).unwrap();
+
+        // Verify kind, log_type, version from info
+        assert_eq!(seculog.kind, "aiwaf");
+        assert_eq!(seculog.log_type, "waf");
+        assert_eq!(seculog.version, "4.1");
+
+        // Verify parsed IP addresses
+        assert_eq!(
+            seculog.orig_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 70, 254)))
+        );
+        assert_eq!(
+            seculog.resp_addr,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 200, 44)))
+        );
+
+        // Verify ports
+        assert_eq!(seculog.orig_port, Some(52677));
+        assert_eq!(seculog.resp_port, Some(80));
+
+        // Verify protocol is TCP
+        assert_eq!(seculog.proto, Some(PROTO_TCP));
+
+        // Verify timestamp matches expected value (datetime + serial offset)
+        // "2019-07-19 11:47:15" +0900 = 2019-07-19 02:47:15 UTC = 1563504435 seconds since epoch
+        assert_eq!(timestamp, 1_563_504_435_000_000_000 + serial);
+
+        // Verify contents matches input
+        assert_eq!(seculog.contents, log);
+    }
 
     #[test]
     fn parse_aiwaf_timestamp_ns_returns_expected_nanos() {
