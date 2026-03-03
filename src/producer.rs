@@ -3813,6 +3813,10 @@ mod tests {
     /// Provides a packet that is valid Ethernet/IPv4 but uses TCP (not UDP),
     /// so `is_netflow()` returns `NoNetflowPackets`.  The function should
     /// continue without error and not attempt `NetFlow` parsing or sending.
+    ///
+    /// Verifies that no record header or event data is sent to the server
+    /// by asserting that the server receives nothing after the producer
+    /// finishes.
     #[tokio::test]
     async fn send_netflow_skips_non_netflow_packets() {
         let tcp_frame = build_ethernet_tcp_frame();
@@ -3849,25 +3853,46 @@ mod tests {
         let pkt_cnt = result.expect("send_netflow should succeed for non-NetFlow packets");
         assert_eq!(pkt_cnt, 1, "one packet should have been counted");
 
-        server_handle.abort();
-        let _ = server_handle.await;
+        // Prove that no record header or event was sent: the producer has
+        // finished, so any data it might have written is already in-flight.
+        // The server blocks on reading a record header; a short timeout
+        // expiring confirms that nothing was sent.
+        let no_send = tokio::time::timeout(Duration::from_millis(200), server_handle).await;
+        assert!(
+            no_send.is_err(),
+            "server should not have received any data (no record header sent)"
+        );
     }
 
     /// Tests the `NetFlow` header parse failure path in `send_netflow`.
     ///
-    /// Provides a packet that passes `is_netflow()` detection (Ethernet +
-    /// IPv4 + UDP on port 2055) but has a truncated payload so that
-    /// `parse_netflow_header()` fails.  The function should increment
-    /// `InvalidNetflowPackets` and continue safely without panic.
+    /// Provides two packets: the first passes `is_netflow()` detection
+    /// (Ethernet + IPv4 + UDP on port 2055) but has a truncated payload so
+    /// that `parse_netflow_header()` fails — exercising the
+    /// `InvalidNetflowPackets` path.  The second packet is a valid V5
+    /// flow to prove that processing continued past the failure.
+    ///
+    /// Verifies that:
+    /// - Both packets are processed (`pkt_cnt == 2`).
+    /// - Exactly one event is received by the server (from the valid
+    ///   packet), proving the truncated packet produced no send and was
+    ///   skipped via the `InvalidNetflowPackets` branch.
     #[tokio::test]
     async fn send_netflow_handles_header_parse_failure() {
-        // A truncated NetFlow payload (only 2 bytes instead of the required
-        // 24 bytes for a V5 header or 20 bytes for a V9 header).
+        // Packet 1: truncated NetFlow payload (only 2 bytes instead of the
+        // required 24 bytes for a V5 header). Passes is_netflow() but fails
+        // parse_netflow_header(), exercising the InvalidNetflowPackets path.
         let truncated_payload = vec![0x00, 0x05]; // version=5 but nothing else
-        let frame = build_ethernet_udp_frame(&truncated_payload, 2055);
-        let temp_file = create_ethernet_pcap(&[frame]);
+        let bad_frame = build_ethernet_udp_frame(&truncated_payload, 2055);
 
-        let (server_addr, server_handle) = spawn_test_server(0);
+        // Packet 2: valid V5 flow that should be processed normally.
+        let mut valid_payload = netflow_v5_header(1);
+        valid_payload.extend_from_slice(&netflow_v5_record());
+        let good_frame = build_ethernet_udp_frame(&valid_payload, 2055);
+
+        let temp_file = create_ethernet_pcap(&[bad_frame, good_frame]);
+
+        let (server_addr, server_handle) = spawn_test_server(1);
         let config = Config {
             cert: TEST_CERT_PATH.to_string(),
             key: TEST_KEY_PATH.to_string(),
@@ -3893,13 +3918,22 @@ mod tests {
             .send_netflow_to_giganto(temp_file.path(), 0, 0, running, &mut report)
             .await;
 
-        // The function should succeed; the bad packet is skipped via the
-        // `let Ok(header) = ... else { continue }` branch.
+        // Both packets should be processed: the truncated one is skipped
+        // via the `let Ok(header) = ... else { continue }` branch
+        // (incrementing InvalidNetflowPackets), and the valid one is sent.
         let pkt_cnt = result.expect("send_netflow should handle parse failure gracefully");
-        assert_eq!(pkt_cnt, 1, "one packet should have been counted");
+        assert_eq!(pkt_cnt, 2, "both packets should have been counted");
 
-        server_handle.abort();
-        let _ = server_handle.await;
+        // The server should receive exactly one event — from the valid V5
+        // packet.  This proves the truncated packet triggered the
+        // InvalidNetflowPackets skip path and produced no send.
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Netflow5);
+        assert_eq!(
+            events.len(),
+            1,
+            "only the valid packet should produce an event"
+        );
     }
 
     /// Tests the happy path in `send_netflow` with a valid `NetFlow` V5 packet.
