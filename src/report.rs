@@ -87,11 +87,12 @@ impl Report {
             return Ok(());
         }
 
-        let report_dir = self
-            .config
-            .report_dir
-            .as_deref()
-            .expect("report_dir must be set when report is true");
+        let report_dir = self.config.report_dir.as_deref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "report_dir must be set when report is true",
+            )
+        })?;
         std::fs::create_dir_all(report_dir)?;
         let topic = format!("{}.report", &self.config.kind);
         let report_path = report_dir.join(topic);
@@ -208,7 +209,12 @@ mod tests {
 
     #[test]
     fn process_first_sample_sets_min_and_max() {
-        let config = test_config(true, "test", "/path/to/file", None);
+        let config = test_config(
+            true,
+            "test",
+            "/path/to/file",
+            Some(PathBuf::from("/tmp/reports")),
+        );
         let mut report = Report::new(config);
 
         report.process(10);
@@ -219,7 +225,12 @@ mod tests {
 
     #[test]
     fn process_updates_min_and_max_correctly() {
-        let config = test_config(true, "test", "/path/to/file", None);
+        let config = test_config(
+            true,
+            "test",
+            "/path/to/file",
+            Some(PathBuf::from("/tmp/reports")),
+        );
         let mut report = Report::new(config);
 
         report.process(10);
@@ -237,7 +248,12 @@ mod tests {
 
     #[test]
     fn skip_accumulates_bytes() {
-        let config = test_config(true, "test", "/path/to/file", None);
+        let config = test_config(
+            true,
+            "test",
+            "/path/to/file",
+            Some(PathBuf::from("/tmp/reports")),
+        );
         let mut report = Report::new(config);
 
         report.skip(100);
@@ -254,7 +270,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let report_out = temp_dir.path().join("report_output");
 
-        let config = test_config(false, "test_kind", "test.log", None);
+        let config = test_config(false, "test_kind", "test.log", Some(report_out.clone()));
         let mut report = Report::new(config);
 
         report.start();
@@ -327,33 +343,13 @@ mod tests {
     }
 
     #[test]
-    fn report_true_writes_to_report_dir() {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let report_dir = temp_dir.path().join("reports");
-
-        let config = test_config(true, "test_kind", "test.log", Some(report_dir.clone()));
-        let mut report = Report::new(config);
-
-        report.start();
-        report.process(100);
-        let result = report.end();
-
-        assert!(result.is_ok(), "end() should succeed");
-        let report_file = report_dir.join("test_kind.report");
-        assert!(
-            report_file.exists(),
-            "Report file should be created in report_dir"
-        );
-    }
-
-    #[test]
     fn report_true_creates_file() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let report_dir = temp_dir.path().join("reports");
         let report_file = run_report(&report_dir, "test.log", &[100, 200, 300]);
         assert!(
             report_file.exists(),
-            "Report file should be created when report=true"
+            "Report file should be created in report_dir when report=true"
         );
     }
 
@@ -451,6 +447,33 @@ mod tests {
         assert!(
             content.contains("(0 B)"),
             "Dir input should show 0 bytes for processed_bytes"
+        );
+    }
+
+    #[test]
+    fn report_appends_to_existing_file() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let report_dir = temp_dir.path().join("reports");
+        std::fs::create_dir_all(&report_dir).expect("failed to create report dir");
+
+        let report_file_path = report_dir.join("test_kind.report");
+        let existing_content = "existing report content\n";
+        std::fs::write(&report_file_path, existing_content).expect("failed to write existing file");
+
+        let report_file = run_report(&report_dir, "test.log", &[100, 200]);
+        let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
+
+        assert!(
+            content.starts_with(existing_content),
+            "Existing content should be preserved at the start of the file"
+        );
+        assert!(
+            content.len() > existing_content.len(),
+            "New report content should be appended after existing content"
+        );
+        assert!(
+            content.contains("--------------------------------------------------"),
+            "Appended content should contain the report separator"
         );
     }
 

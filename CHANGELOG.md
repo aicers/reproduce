@@ -10,8 +10,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Added sysmon file migration support.
 - Added `report_dir` configuration field to specify the directory where
-  report files are written. When `report = true`, `report_dir` must be
-  set; if missing, a clear configuration error is returned.
+  report files are written. When `report = true`, `report_dir` is required.
 
 ### Changed
 
