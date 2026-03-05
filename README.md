@@ -91,6 +91,26 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 <!-- markdownlint-enable MD013 -->
 
+### Report Configuration
+
+When `report = true`, REproduce writes transfer statistics to a file named
+`{kind}.report` inside the directory specified by `report_dir`. If the
+directory does not exist, it is created automatically.
+
+- `report_dir` **must be set** when `report = true`. If omitted, REproduce
+  exits with a configuration error.
+- `report_dir` is ignored when `report = false` (the default).
+- Both absolute and relative paths are accepted. Relative paths are resolved
+  relative to the process working directory. Using absolute paths is
+  recommended to avoid ambiguity.
+
+Example configuration with reporting enabled:
+
+```toml
+report = true
+report_dir = "/var/lib/reproduce/reports"
+```
+
 ## Examples
 
 ### Convert a Zeek log file and send it to a Giganto server

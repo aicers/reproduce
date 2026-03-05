@@ -87,12 +87,11 @@ impl Report {
             return Ok(());
         }
 
-        let report_dir = self.config.report_dir.as_deref().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "report_dir must be set when report is true",
-            )
-        })?;
+        let report_dir = self
+            .config
+            .report_dir
+            .as_deref()
+            .ok_or_else(|| io::Error::other("report_dir must be set when report is true"))?;
         std::fs::create_dir_all(report_dir)?;
         let topic = format!("{}.report", &self.config.kind);
         let report_path = report_dir.join(topic);
