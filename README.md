@@ -28,17 +28,18 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 <!-- markdownlint-disable MD013 -->
 
-| Field                     | Description                                                                | Required | Default    |
-| ------------------------- | -------------------------------------------------------------------------- | -------- | ---------- |
-| `cert`                    | Path to the private key file                                               | Yes      | -          |
-| `key`                     | Path to the certificate file                                               | Yes      | -          |
-| `ca_certs`                | List of paths to CA certificate files                                      | Yes      | -          |
-| `giganto_ingest_srv_addr` | IP address and port of the Giganto ingest server                           | Yes      | -          |
-| `giganto_name`            | Name of Giganto server                                                     | Yes      | -          |
-| `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | Yes      | -          |
-| `input`                   | Specifies the input source: file, directory, or elastic                    | Yes      | -          |
-| `report`                  | Enables or disables reporting of transfer statistics                       | No       | false      |
-| `log_path`                | Path to the log file. If not specified, logs are sent to stdout.           | No       | -          |
+| Field                     | Description                                                                | Required    | Default |
+| ------------------------- | -------------------------------------------------------------------------- | ----------- | ------- |
+| `cert`                    | Path to the private key file                                               | Yes         | -       |
+| `key`                     | Path to the certificate file                                               | Yes         | -       |
+| `ca_certs`                | List of paths to CA certificate files                                      | Yes         | -       |
+| `giganto_ingest_srv_addr` | IP address and port of the Giganto ingest server                           | Yes         | -       |
+| `giganto_name`            | Name of Giganto server                                                     | Yes         | -       |
+| `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | Yes         | -       |
+| `input`                   | Specifies the input source: file, directory, or elastic                    | Yes         | -       |
+| `report`                  | Enables or disables reporting of transfer statistics                       | No          | false   |
+| `report_dir`              | Directory where report files are written (required when `report = true`)   | Conditional | -       |
+| `log_path`                | Path to the log file. If not specified, logs are sent to stdout.           | No          | -       |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -89,6 +90,26 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | `elastic_auth` | Elasticsearch authentication credentials (username:password) | Yes      | -       |
 
 <!-- markdownlint-enable MD013 -->
+
+### Report Configuration
+
+When `report = true`, REproduce writes transfer statistics to a file named
+`{kind}.report` inside the directory specified by `report_dir`. If the
+directory does not exist, it is created automatically.
+
+- `report_dir` **must be set** when `report = true`. If omitted, REproduce
+  exits with a configuration error.
+- `report_dir` is ignored when `report = false` (the default).
+- Both absolute and relative paths are accepted. Relative paths are resolved
+  relative to the process working directory. Using absolute paths is
+  recommended to avoid ambiguity.
+
+Example configuration with reporting enabled:
+
+```toml
+report = true
+report_dir = "/var/lib/reproduce/reports"
+```
 
 ## Examples
 

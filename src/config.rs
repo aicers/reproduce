@@ -54,6 +54,7 @@ pub(crate) struct Config {
     pub(crate) kind: String,
     pub(crate) input: String,
     pub(crate) report: bool,
+    pub(crate) report_dir: Option<PathBuf>,
     pub(crate) log_path: Option<PathBuf>,
 
     pub(crate) file: Option<File>,
@@ -87,6 +88,16 @@ impl Config {
 
         if config.kind.trim().is_empty() {
             anyhow::bail!("kind cannot be empty");
+        }
+
+        if config.report && config.report_dir.is_none() {
+            anyhow::bail!(
+                "Configuration error: 'report' is set to true but \
+                 'report_dir' is not configured. Add 'report_dir' \
+                 pointing to the directory where report files should \
+                 be written (absolute or relative path). Example: \
+                 report_dir = \"/var/lib/reproduce/reports\""
+            );
         }
 
         Ok(config)
@@ -352,6 +363,95 @@ input = "/path/to/input"
         assert!(
             result.is_err(),
             "hostname should fail to parse as socket address"
+        );
+    }
+
+    #[test]
+    fn report_true_without_report_dir_fails() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+report = true
+"#;
+        let file = create_temp_config(toml);
+
+        let result = Config::new(file.path());
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("report_dir"),
+            "Error should mention 'report_dir': {err_msg}"
+        );
+    }
+
+    #[test]
+    fn report_true_with_report_dir_succeeds() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+report = true
+report_dir = "/tmp/reports"
+"#;
+        let file = create_temp_config(toml);
+
+        let config = Config::new(file.path()).expect("report=true with report_dir should succeed");
+        assert!(config.report);
+        assert_eq!(
+            config.report_dir,
+            Some(std::path::PathBuf::from("/tmp/reports"))
+        );
+    }
+
+    #[test]
+    fn report_false_without_report_dir_succeeds() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+report = false
+"#;
+        let file = create_temp_config(toml);
+
+        let config =
+            Config::new(file.path()).expect("report=false without report_dir should succeed");
+        assert!(!config.report);
+        assert!(config.report_dir.is_none());
+    }
+
+    #[test]
+    fn report_false_with_report_dir_succeeds() {
+        let toml = r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+report = false
+report_dir = "/tmp/reports"
+"#;
+        let file = create_temp_config(toml);
+
+        let config = Config::new(file.path()).expect("report=false with report_dir should succeed");
+        assert!(!config.report);
+        assert_eq!(
+            config.report_dir,
+            Some(std::path::PathBuf::from("/tmp/reports"))
         );
     }
 }
