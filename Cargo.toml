@@ -3,7 +3,16 @@ name = "reproduce"
 version = "0.23.0"
 edition = "2024"
 
+[lib]
+name = "reproduce"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reproduce"
+path = "src/bin/reproduce/main.rs"
+
 [dependencies]
+async-trait = "0.1"
 anyhow = "1"
 base64 = "0.22"
 bincode = "1"

@@ -4,8 +4,8 @@ use std::io::{self, Write};
 use bytesize::ByteSize;
 use jiff::{SignedDuration, Timestamp, tz::TimeZone};
 
+use crate::config::{Config, InputType};
 use crate::controller::input_type;
-use crate::{Config, InputType};
 
 pub(crate) struct Report {
     config: Config,

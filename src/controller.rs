@@ -11,9 +11,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
-use crate::syslog::open_sysmon_csv_file;
-use crate::zeek::open_raw_event_log_file;
-use crate::{Config, InputType, Producer, Report};
+use crate::config::{Config, InputType};
+use crate::parser::sysmon_csv::open_sysmon_csv_file;
+use crate::parser::zeek::open_raw_event_log_file;
+use crate::producer::Producer;
+use crate::report::Report;
 
 const GIGANTO_ZEEK_KINDS: [&str; 19] = [
     "conn",
@@ -79,13 +81,13 @@ const SUPPORTED_SECURITY_KIND: [&str; 13] = [
     "nginx_accesslog_1.25.2",
 ];
 
-pub(crate) struct Controller {
+pub struct Controller {
     config: Config,
 }
 
 impl Controller {
     #[must_use]
-    pub(crate) fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> Self {
         Self { config }
     }
 
@@ -96,7 +98,7 @@ impl Controller {
     /// # Panics
     ///
     /// Stream finish / Connection close error
-    pub(crate) async fn run(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
         let input_type = input_type(&self.config.input);
 
         if input_type == InputType::Elastic {
@@ -174,7 +176,7 @@ impl Controller {
         let Some(ref elastic) = self.config.elastic else {
             bail!("elastic parameters is required");
         };
-        let dir = crate::syslog::fetch_elastic_search(elastic).await?;
+        let dir = crate::parser::sysmon_csv::fetch_elastic_search(elastic).await?;
 
         let mut files = files_in_dir(&dir, None, &[]);
         if files.is_empty() {

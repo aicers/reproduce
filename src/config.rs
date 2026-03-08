@@ -44,7 +44,7 @@ pub(crate) struct ElasticSearch {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub(crate) struct Config {
+pub struct Config {
     pub(crate) cert: String,
     pub(crate) key: String,
     pub(crate) ca_certs: Vec<String>,
@@ -54,8 +54,9 @@ pub(crate) struct Config {
     pub(crate) kind: String,
     pub(crate) input: String,
     pub(crate) report: bool,
-    pub(crate) report_dir: Option<PathBuf>,
-    pub(crate) log_path: Option<PathBuf>,
+    pub report_dir: Option<PathBuf>,
+    /// Path to the log file. `None` means stdout.
+    pub log_path: Option<PathBuf>,
 
     pub(crate) file: Option<File>,
     pub(crate) directory: Option<Directory>,
@@ -71,7 +72,7 @@ impl Config {
     /// - The configuration file cannot be read or parsed
     /// - Required fields are missing
     /// - The `kind` field is missing or empty
-    pub(crate) fn new(path: &Path) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         let config = config::Config::builder()
             .set_default("report", DEFAULT_REPORT_MODE)
             .context("cannot set the default report value")?
