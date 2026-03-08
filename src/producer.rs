@@ -3537,4 +3537,409 @@ mod tests {
         assert_eq!(timestamps, vec![ts_0, ts_1, ts_2, ts_3]);
         // temp_dir is automatically cleaned up when dropped
     }
+
+    fn create_non_ethernet_pcap_file() -> NamedTempFile {
+        use std::io::Write;
+
+        // Create a PCAP file manually with a non-ETHERNET link type
+        // PCAP global header format (24 bytes):
+        // - Magic number (little-endian): bytes d4 c3 b2 a1 (4 bytes)
+        // - Major version: 2 (2 bytes)
+        // - Minor version: 4 (2 bytes)
+        // - Timezone offset: 0 (4 bytes)
+        // - Timestamp accuracy: 0 (4 bytes)
+        // - Snapshot length: 65535 (4 bytes)
+        // - Link type: 113 = DLT_LINUX_SLL (Linux cooked capture, non-ETHERNET)
+        let mut pcap_data = Vec::new();
+
+        // PCAP global header (little endian)
+        pcap_data.extend_from_slice(&0xa1b2_c3d4_u32.to_le_bytes());
+        pcap_data.extend_from_slice(&2_u16.to_le_bytes()); // major version
+        pcap_data.extend_from_slice(&4_u16.to_le_bytes()); // minor version
+        pcap_data.extend_from_slice(&0_i32.to_le_bytes()); // timezone
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // timestamp accuracy
+        pcap_data.extend_from_slice(&65535_u32.to_le_bytes()); // snapshot length
+        // Link type: 113 = DLT_LINUX_SLL (Linux cooked capture)
+        pcap_data.extend_from_slice(&113_u32.to_le_bytes());
+
+        // Packet header (16 bytes) + minimal data
+        // ts_sec, ts_usec, caplen, len
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // ts_sec
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // ts_usec
+        pcap_data.extend_from_slice(&20_u32.to_le_bytes()); // caplen
+        pcap_data.extend_from_slice(&20_u32.to_le_bytes()); // len
+
+        // Dummy packet data (20 bytes)
+        pcap_data.extend_from_slice(&[0u8; 20]);
+
+        // Write to temp file
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        temp_file
+            .write_all(&pcap_data)
+            .expect("Failed to write pcap data");
+        temp_file.flush().expect("Failed to flush temp file");
+        temp_file
+    }
+
+    /// Tests that opening a PCAP file with a non-ETHERNET link type
+    /// returns an error from `send_netflow`. This exercises the error
+    /// branch in `send_netflow` that validates the datalink type.
+    #[tokio::test]
+    async fn send_netflow_rejects_non_ethernet_linktype() {
+        let (server_addr, server_handle) = spawn_test_server(0);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "netflow9".to_string(),
+            input: "/tmp/unused".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("create test producer");
+        let temp_file = create_non_ethernet_pcap_file();
+        let running = Arc::new(AtomicBool::new(true));
+        let mut report = Report::new(config);
+
+        let result = producer
+            .send_netflow_to_giganto(temp_file.path(), 0, 0, running, &mut report)
+            .await;
+
+        let err = result.expect_err("Expected non-ETHERNET datalink to return an error");
+        assert!(
+            err.to_string().contains("Error: unknown datalink"),
+            "Unexpected error message: {err}"
+        );
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    // ==========================================================================
+    // NetFlow send_netflow Branch Coverage Tests
+    //
+    // These tests exercise the remaining untested branches inside
+    // `send_netflow` in `src/producer.rs`:
+    //   1. Non-NetFlow skip path (is_netflow != YesNetflowPackets)
+    //   2. NetFlow header parse failure path
+    //   3. Normal parse/send flow (V5 happy path)
+    // ==========================================================================
+
+    /// Build a minimal PCAP file (link type = ETHERNET) containing the
+    /// given raw Ethernet frames.  Each entry in `packets` is a complete
+    /// Ethernet frame (starting from the destination MAC).
+    fn create_ethernet_pcap(packets: &[Vec<u8>]) -> tempfile::NamedTempFile {
+        use std::io::Write;
+
+        let mut pcap_data = Vec::new();
+
+        // PCAP global header (24 bytes, little-endian)
+        pcap_data.extend_from_slice(&0xa1b2_c3d4_u32.to_le_bytes()); // magic
+        pcap_data.extend_from_slice(&2_u16.to_le_bytes()); // major version
+        pcap_data.extend_from_slice(&4_u16.to_le_bytes()); // minor version
+        pcap_data.extend_from_slice(&0_i32.to_le_bytes()); // timezone
+        pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // timestamp accuracy
+        pcap_data.extend_from_slice(&65535_u32.to_le_bytes()); // snapshot length
+        pcap_data.extend_from_slice(&1_u32.to_le_bytes()); // link type = ETHERNET
+
+        for pkt in packets {
+            let cap_len = u32::try_from(pkt.len()).expect("packet too large");
+            pcap_data.extend_from_slice(&1_u32.to_le_bytes()); // ts_sec
+            pcap_data.extend_from_slice(&0_u32.to_le_bytes()); // ts_usec
+            pcap_data.extend_from_slice(&cap_len.to_le_bytes()); // caplen
+            pcap_data.extend_from_slice(&cap_len.to_le_bytes()); // len
+            pcap_data.extend_from_slice(pkt);
+        }
+
+        let mut temp_file = NamedTempFile::new().expect("create temp pcap file");
+        temp_file.write_all(&pcap_data).expect("write pcap data");
+        temp_file.flush().expect("flush pcap file");
+        temp_file
+    }
+
+    /// Build a complete Ethernet + IPv4 + UDP frame with the given payload
+    /// and UDP destination port.
+    fn build_ethernet_udp_frame(payload: &[u8], dst_port: u16) -> Vec<u8> {
+        let mut frame = Vec::new();
+
+        // Ethernet header (14 bytes)
+        frame.extend_from_slice(&[0u8; 6]); // dst MAC
+        frame.extend_from_slice(&[1, 2, 3, 4, 5, 6]); // src MAC
+        frame.extend_from_slice(&0x0800_u16.to_be_bytes()); // EtherType = IPv4
+
+        // IPv4 header (20 bytes)
+        let total_len = 20_u16 + 8 + u16::try_from(payload.len()).unwrap_or(0);
+        frame.push(0x45); // version=4, IHL=5
+        frame.push(0); // DSCP/ECN
+        frame.extend_from_slice(&total_len.to_be_bytes());
+        frame.extend_from_slice(&0x1234_u16.to_be_bytes()); // identification
+        frame.extend_from_slice(&0_u16.to_be_bytes()); // flags/fragment
+        frame.push(64); // TTL
+        frame.push(0x11); // protocol = UDP
+        frame.extend_from_slice(&0_u16.to_be_bytes()); // checksum
+        frame.extend_from_slice(&[10, 0, 0, 1]); // src IP
+        frame.extend_from_slice(&[10, 0, 0, 2]); // dst IP
+
+        // UDP header (8 bytes)
+        let udp_len = 8_u16 + u16::try_from(payload.len()).unwrap_or(0);
+        frame.extend_from_slice(&1000_u16.to_be_bytes()); // src port
+        frame.extend_from_slice(&dst_port.to_be_bytes()); // dst port
+        frame.extend_from_slice(&udp_len.to_be_bytes()); // length
+        frame.extend_from_slice(&0_u16.to_be_bytes()); // checksum
+
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    /// Build a complete Ethernet + IPv4 frame with a non-UDP protocol
+    /// (TCP, proto 0x06). No transport-layer payload is included.
+    fn build_ethernet_tcp_frame() -> Vec<u8> {
+        let mut frame = Vec::new();
+
+        // Ethernet header
+        frame.extend_from_slice(&[0u8; 6]); // dst MAC
+        frame.extend_from_slice(&[1, 2, 3, 4, 5, 6]); // src MAC
+        frame.extend_from_slice(&0x0800_u16.to_be_bytes()); // EtherType = IPv4
+
+        // IPv4 header (20 bytes) with protocol = TCP (0x06)
+        let total_len = 20_u16;
+        frame.push(0x45);
+        frame.push(0);
+        frame.extend_from_slice(&total_len.to_be_bytes());
+        frame.extend_from_slice(&0x1234_u16.to_be_bytes());
+        frame.extend_from_slice(&0_u16.to_be_bytes());
+        frame.push(64);
+        frame.push(0x06); // TCP
+        frame.extend_from_slice(&0_u16.to_be_bytes());
+        frame.extend_from_slice(&[10, 0, 0, 1]);
+        frame.extend_from_slice(&[10, 0, 0, 2]);
+
+        frame
+    }
+
+    /// Build a `NetFlow` V5 header (24 bytes) with the given record count.
+    fn netflow_v5_header(count: u16) -> Vec<u8> {
+        let mut hdr = Vec::new();
+        hdr.extend_from_slice(&5_u16.to_be_bytes()); // version
+        hdr.extend_from_slice(&count.to_be_bytes()); // count
+        hdr.extend_from_slice(&1000_u32.to_be_bytes()); // sys_uptime
+        hdr.extend_from_slice(&1_000_000_u32.to_be_bytes()); // unix_secs
+        hdr.extend_from_slice(&0_u32.to_be_bytes()); // unix_nanos
+        hdr.extend_from_slice(&1_u32.to_be_bytes()); // flow_sequence
+        hdr.push(0); // engine_type
+        hdr.push(0); // engine_id
+        hdr.extend_from_slice(&0_u16.to_be_bytes()); // sampling_interval
+        hdr
+    }
+
+    /// Build a single `NetFlow` V5 flow record (48 bytes).
+    fn netflow_v5_record() -> Vec<u8> {
+        let mut rec = Vec::new();
+        rec.extend_from_slice(&[192, 168, 1, 1]); // src_addr
+        rec.extend_from_slice(&[10, 0, 0, 1]); // dst_addr
+        rec.extend_from_slice(&[0, 0, 0, 0]); // next_hop
+        rec.extend_from_slice(&1_u16.to_be_bytes()); // input
+        rec.extend_from_slice(&2_u16.to_be_bytes()); // output
+        rec.extend_from_slice(&100_u32.to_be_bytes()); // d_pkts
+        rec.extend_from_slice(&5000_u32.to_be_bytes()); // d_octets
+        rec.extend_from_slice(&500_u32.to_be_bytes()); // first
+        rec.extend_from_slice(&600_u32.to_be_bytes()); // last
+        rec.extend_from_slice(&80_u16.to_be_bytes()); // src_port
+        rec.extend_from_slice(&443_u16.to_be_bytes()); // dst_port
+        rec.push(0); // pad1
+        rec.push(0x02); // tcp_flags
+        rec.push(6); // prot (TCP)
+        rec.push(0); // tos
+        rec.extend_from_slice(&100_u16.to_be_bytes()); // src_as
+        rec.extend_from_slice(&200_u16.to_be_bytes()); // dst_as
+        rec.push(24); // src_mask
+        rec.push(24); // dst_mask
+        rec.extend_from_slice(&0_u16.to_be_bytes()); // pad2
+        assert_eq!(rec.len(), 48);
+        rec
+    }
+
+    /// Tests the non-NetFlow skip path in `send_netflow`.
+    ///
+    /// Provides a packet that is valid Ethernet/IPv4 but uses TCP (not UDP),
+    /// so `is_netflow()` returns `NoNetflowPackets`.  The function should
+    /// continue without error and not attempt `NetFlow` parsing or sending.
+    ///
+    /// Verifies that no record header or event data is sent to the server
+    /// by asserting that the server receives nothing after the producer
+    /// finishes.
+    #[tokio::test]
+    async fn send_netflow_skips_non_netflow_packets() {
+        let tcp_frame = build_ethernet_tcp_frame();
+        let temp_file = create_ethernet_pcap(&[tcp_frame]);
+
+        let (server_addr, server_handle) = spawn_test_server(0);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "netflow5".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("create test producer");
+        let mut report = Report::new(config);
+        let running = Arc::new(AtomicBool::new(true));
+
+        let result = producer
+            .send_netflow_to_giganto(temp_file.path(), 0, 0, running, &mut report)
+            .await;
+
+        // The function should succeed (no error) and report that 1 packet
+        // was processed (even though it was skipped as non-NetFlow).
+        let pkt_cnt = result.expect("send_netflow should succeed for non-NetFlow packets");
+        assert_eq!(pkt_cnt, 1, "one packet should have been counted");
+
+        // Prove that no record header or event was sent: the producer has
+        // finished, so any data it might have written is already in-flight.
+        // The server blocks on reading a record header; a short timeout
+        // expiring confirms that nothing was sent.
+        let no_send = tokio::time::timeout(Duration::from_millis(200), server_handle).await;
+        assert!(
+            no_send.is_err(),
+            "server should not have received any data (no record header sent)"
+        );
+    }
+
+    /// Tests the `NetFlow` header parse failure path in `send_netflow`.
+    ///
+    /// Provides two packets: the first passes `is_netflow()` detection
+    /// (Ethernet + IPv4 + UDP on port 2055) but has a truncated payload so
+    /// that `parse_netflow_header()` fails — exercising the
+    /// `InvalidNetflowPackets` path.  The second packet is a valid V5
+    /// flow to prove that processing continued past the failure.
+    ///
+    /// Verifies that:
+    /// - Both packets are processed (`pkt_cnt == 2`).
+    /// - Exactly one event is received by the server (from the valid
+    ///   packet), proving the truncated packet produced no send and was
+    ///   skipped via the `InvalidNetflowPackets` branch.
+    #[tokio::test]
+    async fn send_netflow_handles_header_parse_failure() {
+        // Packet 1: truncated NetFlow payload (only 2 bytes instead of the
+        // required 24 bytes for a V5 header). Passes is_netflow() but fails
+        // parse_netflow_header(), exercising the InvalidNetflowPackets path.
+        let truncated_payload = vec![0x00, 0x05]; // version=5 but nothing else
+        let bad_frame = build_ethernet_udp_frame(&truncated_payload, 2055);
+
+        // Packet 2: valid V5 flow that should be processed normally.
+        let mut valid_payload = netflow_v5_header(1);
+        valid_payload.extend_from_slice(&netflow_v5_record());
+        let good_frame = build_ethernet_udp_frame(&valid_payload, 2055);
+
+        let temp_file = create_ethernet_pcap(&[bad_frame, good_frame]);
+
+        let (server_addr, server_handle) = spawn_test_server(1);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "netflow5".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("create test producer");
+        let mut report = Report::new(config);
+        let running = Arc::new(AtomicBool::new(true));
+
+        let result = producer
+            .send_netflow_to_giganto(temp_file.path(), 0, 0, running, &mut report)
+            .await;
+
+        // Both packets should be processed: the truncated one is skipped
+        // via the `let Ok(header) = ... else { continue }` branch
+        // (incrementing InvalidNetflowPackets), and the valid one is sent.
+        let pkt_cnt = result.expect("send_netflow should handle parse failure gracefully");
+        assert_eq!(pkt_cnt, 2, "both packets should have been counted");
+
+        // The server should receive exactly one event — from the valid V5
+        // packet.  This proves the truncated packet triggered the
+        // InvalidNetflowPackets skip path and produced no send.
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Netflow5);
+        assert_eq!(
+            events.len(),
+            1,
+            "only the valid packet should produce an event"
+        );
+    }
+
+    /// Tests the happy path in `send_netflow` with a valid `NetFlow` V5 packet.
+    ///
+    /// Provides a complete, well-formed `NetFlow` V5 packet containing one
+    /// flow record.  Verifies that the parse succeeds and the event is
+    /// transmitted to the test server.
+    #[tokio::test]
+    async fn send_netflow_v5_happy_path() {
+        // Build a valid V5 payload: header (24 bytes) + one record (48 bytes)
+        let mut payload = netflow_v5_header(1);
+        payload.extend_from_slice(&netflow_v5_record());
+        let frame = build_ethernet_udp_frame(&payload, 2055);
+        let temp_file = create_ethernet_pcap(&[frame]);
+
+        let (server_addr, server_handle) = spawn_test_server(1);
+        let config = Config {
+            cert: TEST_CERT_PATH.to_string(),
+            key: TEST_KEY_PATH.to_string(),
+            ca_certs: vec![TEST_ROOT_PATH.to_string()],
+            giganto_ingest_srv_addr: server_addr,
+            giganto_name: TEST_SERVER_NAME.to_string(),
+            kind: "netflow5".to_string(),
+            input: "test".to_string(),
+            report: false,
+            log_path: None,
+            file: None,
+            directory: None,
+            elastic: None,
+        };
+
+        let mut producer = Producer::new_giganto(&config)
+            .await
+            .expect("create test producer");
+        let mut report = Report::new(config);
+        let running = Arc::new(AtomicBool::new(true));
+
+        let result = producer
+            .send_netflow_to_giganto(temp_file.path(), 0, 0, running, &mut report)
+            .await;
+
+        let pkt_cnt = result.expect("send_netflow should succeed for valid V5 packet");
+        assert_eq!(pkt_cnt, 1, "one packet should have been processed");
+
+        // Verify the server received exactly one event with the correct kind.
+        let (kind, events) = server_handle.await.expect("server task");
+        assert_eq!(kind, RawEventKind::Netflow5);
+        assert_eq!(events.len(), 1, "server should receive exactly one event");
+    }
 }
