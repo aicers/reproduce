@@ -5,8 +5,13 @@ use std::{
     process::exit,
 };
 
+mod controller;
+mod producer;
+mod report;
+
 use anyhow::{Context, Result};
-use reproduce::{Config, Controller};
+use controller::Controller;
+use reproduce::config::Config;
 use tokio::task;
 use tracing::{error, info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;

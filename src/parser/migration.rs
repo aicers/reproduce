@@ -10,6 +10,11 @@ use csv::StringRecord;
 use jiff::Timestamp;
 
 pub trait TryFromGigantoRecord: Sized {
+    /// Converts a Giganto CSV record into the implementing type with a timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record cannot be parsed.
     fn try_from_giganto_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 

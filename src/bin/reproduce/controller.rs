@@ -11,9 +11,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
-use crate::config::{Config, InputType};
-use crate::parser::sysmon_csv::open_sysmon_csv_file;
-use crate::parser::zeek::open_raw_event_log_file;
+use reproduce::config::{Config, InputType};
+use reproduce::parser::sysmon_csv::open_sysmon_csv_file;
+use reproduce::parser::zeek::open_raw_event_log_file;
+
 use crate::producer::Producer;
 use crate::report::Report;
 
@@ -176,7 +177,7 @@ impl Controller {
         let Some(ref elastic) = self.config.elastic else {
             bail!("elastic parameters is required");
         };
-        let dir = crate::parser::sysmon_csv::fetch_elastic_search(elastic).await?;
+        let dir = reproduce::parser::sysmon_csv::fetch_elastic_search(elastic).await?;
 
         let mut files = files_in_dir(&dir, None, &[]);
         if files.is_empty() {

@@ -27,6 +27,11 @@ fn parse_log_level(level: &str) -> Result<OpLogLevel> {
     }
 }
 
+/// Parses a log line using regex and returns an `OpLog` with its timestamp.
+///
+/// # Errors
+///
+/// Returns an error if the line does not match the expected log format.
 pub fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
     let caps = get_log_regex().captures(line).context("invalid log line")?;
 

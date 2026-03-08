@@ -28,7 +28,14 @@ pub struct Stats {
     stats: HashMap<ProcessStats, usize>,
 }
 
+impl Default for Stats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Stats {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             stats: HashMap::new(),

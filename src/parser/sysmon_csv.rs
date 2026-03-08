@@ -45,6 +45,11 @@ use self::{
 };
 use crate::config::ElasticSearch;
 
+/// Fetches sysmon event data from Elasticsearch and writes CSV files to a dump directory.
+///
+/// # Errors
+///
+/// Returns an error if the Elasticsearch query or file I/O fails.
 #[allow(clippy::unused_async)]
 pub async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {
     let now = Timestamp::now().to_zoned(TimeZone::UTC);
@@ -233,6 +238,11 @@ fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) ->
     Ok(())
 }
 
+/// Parses a Sysmon time string (`YYYY-MM-DD HH:MM:SS.fff`) into a UTC `Timestamp`.
+///
+/// # Errors
+///
+/// Returns an error if the time string is malformed.
 pub fn parse_sysmon_time(time: &str) -> Result<Timestamp> {
     let dt = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", time)
         .map_err(|_| anyhow!("invalid time: {time}"))?;
@@ -241,11 +251,21 @@ pub fn parse_sysmon_time(time: &str) -> Result<Timestamp> {
         .map(|z| z.timestamp())
 }
 
+/// Parses a Sysmon time string into nanoseconds since the Unix epoch.
+///
+/// # Errors
+///
+/// Returns an error if the time string is malformed or overflows.
 pub fn parse_sysmon_timestamp_ns(time: &str) -> Result<i64> {
     let ts = parse_sysmon_time(time)?;
     i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
+/// Opens a Sysmon CSV file and returns a configured CSV reader.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened.
 pub fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
@@ -254,9 +274,13 @@ pub fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
         .from_path(path)?)
 }
 
-/// Convert a Sysmon CSV record into a typed event.
-/// Return the parsed event and raw timestamp (dedup offset is applied by the caller).
+/// Converts a Sysmon CSV record into a typed event.
 pub trait TryFromSysmonRecord: Sized {
+    /// Parses the record and returns the typed event with its raw timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record cannot be parsed.
     fn try_from_sysmon_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 

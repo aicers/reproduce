@@ -13,9 +13,19 @@ const PROTO_UDP: u8 = 0x11;
 const PROTO_ICMP: u8 = 0x01;
 
 pub trait TryFromZeekRecord: Sized {
+    /// Converts a Zeek TSV record into the implementing type with a timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record cannot be parsed.
     fn try_from_zeek_record(rec: &StringRecord) -> Result<(Self, i64)>;
 }
 
+/// Parses a Zeek-format timestamp string (`seconds.microseconds`) into a `Timestamp`.
+///
+/// # Errors
+///
+/// Returns an error if the timestamp string is malformed or out of range.
 pub fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
     let (secs_str, micros_str) = timestamp
         .split_once('.')
@@ -32,11 +42,21 @@ pub fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
     Timestamp::new(secs, nanos).map_err(|e| anyhow!("failed to create Timestamp: {e}"))
 }
 
+/// Parses a Zeek-format timestamp string into nanoseconds since the Unix epoch.
+///
+/// # Errors
+///
+/// Returns an error if the timestamp string is malformed or overflows.
 pub fn parse_zeek_timestamp_ns(timestamp: &str) -> Result<i64> {
     let ts = parse_zeek_timestamp(timestamp)?;
     i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")
 }
 
+/// Opens a Zeek TSV log file and returns a configured CSV reader.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened.
 pub fn open_raw_event_log_file(path: &Path) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))

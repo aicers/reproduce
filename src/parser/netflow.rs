@@ -13,6 +13,11 @@ pub use templates::TemplatesBox;
 use tracing::warn;
 
 pub trait ParseNetflowDatasets: Sized {
+    /// Parses netflow datasets from a packet buffer into typed records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the packet data cannot be parsed.
     fn parse_netflow_datasets(
         pkt_cnt: u64,
         templates: &mut TemplatesBox,

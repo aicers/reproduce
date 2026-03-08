@@ -46,18 +46,19 @@ use serde::Serialize;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use crate::config::Config;
-use crate::parser::migration::TryFromGigantoRecord;
-use crate::parser::netflow::{
+use reproduce::config::Config;
+use reproduce::parser::migration::TryFromGigantoRecord;
+use reproduce::parser::netflow::{
     NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox,
 };
-use crate::parser::operation_log;
-use crate::parser::security_log::{
+use reproduce::parser::operation_log;
+use reproduce::parser::security_log::{
     Aiwaf, Axgate, Fgt, Mf2, Nginx, ParseSecurityLog, SecurityLogInfo, ShadowWall, SniperIps,
     SonicWall, Srx, Tg, Ubuntu, Vforce, Wapples,
 };
-use crate::parser::sysmon_csv::TryFromSysmonRecord;
-use crate::parser::zeek::TryFromZeekRecord;
+use reproduce::parser::sysmon_csv::TryFromSysmonRecord;
+use reproduce::parser::zeek::TryFromZeekRecord;
+
 use crate::report::Report;
 
 const CHANNEL_CLOSE_COUNT: u8 = 150;
@@ -1426,7 +1427,7 @@ impl Giganto {
 
                         // Extract timestamp from record and implement deduplication logic
                         let current_timestamp = if let Some(timestamp) = record.get(0) {
-                            match crate::parser::zeek::parse_zeek_timestamp(timestamp) {
+                            match reproduce::parser::zeek::parse_zeek_timestamp(timestamp) {
                                 Ok(ts) => match i64::try_from(ts.as_nanosecond()) {
                                     Ok(timestamp) => timestamp,
                                     Err(_) => {
@@ -1757,7 +1758,7 @@ impl Giganto {
 
                         // Extract timestamp from record and implement deduplication logic
                         let current_timestamp = if let Some(utc_time) = record.get(3) {
-                            match crate::parser::sysmon_csv::parse_sysmon_time(utc_time) {
+                            match reproduce::parser::sysmon_csv::parse_sysmon_time(utc_time) {
                                 Ok(ts) => match i64::try_from(ts.as_nanosecond()) {
                                     Ok(timestamp) => timestamp,
                                     Err(_) => {
@@ -2401,7 +2402,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::parser::sysmon_csv::TryFromSysmonRecord;
+    use reproduce::parser::sysmon_csv::TryFromSysmonRecord;
 
     const TEST_CERT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/cert.pem");
     const TEST_KEY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/key.pem");

@@ -79,6 +79,7 @@ pub enum NetflowHeader {
 }
 
 impl NetflowHeader {
+    #[must_use] 
     pub fn timestamp(&self) -> (u32, u32) {
         match self {
             NetflowHeader::V5(x) => (x.unix_secs, x.unix_nanos),
@@ -152,6 +153,7 @@ impl std::fmt::Display for Netflow9Header {
 }
 
 impl PktBuf {
+    #[must_use] 
     pub fn new(pkt: &Packet<'_>) -> Self {
         Self {
             data: Cursor::new(pkt.data.to_vec()),
@@ -160,6 +162,7 @@ impl PktBuf {
         }
     }
 
+    #[must_use] 
     pub fn src_addr(&self) -> IpAddr {
         self.iph.addr_pair.src
     }
@@ -254,6 +257,11 @@ impl PktBuf {
         }
     }
 
+    /// Parses the netflow packet header and returns version-specific header data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the packet header is malformed or has an unsupported version.
     pub fn parse_netflow_header(&mut self) -> Result<NetflowHeader> {
         let version = self.data.read_u16::<BigEndian>()?;
         let count = self.data.read_u16::<BigEndian>()?;

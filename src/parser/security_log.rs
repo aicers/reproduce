@@ -34,6 +34,12 @@ pub struct SecurityLogInfo {
 }
 
 impl SecurityLogInfo {
+    /// Creates a new `SecurityLogInfo` by splitting a kind string on `_`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the kind string does not contain at least three `_`-separated segments.
+    #[must_use]
     pub fn new(giganto_kind: &str) -> SecurityLogInfo {
         let info: Vec<&str> = giganto_kind.split('_').collect();
         let msg =
@@ -86,8 +92,13 @@ pub struct Ubuntu;
 pub struct Nginx;
 
 pub trait ParseSecurityLog {
+    /// Parses a security log line into a `SecuLog` record with a timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the log line cannot be parsed.
     fn parse_security_log(line: &str, serial: i64, info: SecurityLogInfo)
-    -> Result<(SecuLog, i64)>; // agent: &str
+    -> Result<(SecuLog, i64)>;
 }
 
 fn proto_to_u8(proto: &str) -> u8 {
