@@ -40,10 +40,10 @@ use reproduce::parser::security_log::{
 use reproduce::parser::sysmon_csv::open_sysmon_csv_file;
 use reproduce::parser::zeek::open_raw_event_log_file;
 use reproduce::pipeline::run_pipeline;
+use reproduce::sender::GigantoSender;
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
-use crate::producer::Producer;
 use crate::report::Report;
 
 const GIGANTO_ZEEK_KINDS: [&str; 19] = [
@@ -245,17 +245,17 @@ impl Controller {
         if input_type == InputType::Elastic {
             self.run_elastic().await?;
         } else {
-            let mut producer = producer(&self.config).await;
+            let mut sender = create_sender(&self.config).await;
 
             match input_type {
                 InputType::Dir => {
-                    self.run_split(&mut producer).await?;
+                    self.run_split(&mut sender).await?;
                 }
                 InputType::Log => {
                     let file_name = Path::new(&self.config.input).to_path_buf();
                     self.run_single(
                         file_name.as_ref(),
-                        &mut producer,
+                        &mut sender,
                         &self.config.kind.clone(),
                         false,
                     )
@@ -263,13 +263,13 @@ impl Controller {
                 }
                 InputType::Elastic => {}
             }
-            producer.finish().await.expect("failed to finish stream");
+            sender.finish().await.expect("failed to finish stream");
         }
 
         Ok(())
     }
 
-    async fn run_split(&self, producer: &mut Producer) -> Result<()> {
+    async fn run_split(&self, sender: &mut GigantoSender) -> Result<()> {
         let mut processed = Vec::new();
         let Some(ref dir_option) = self.config.directory else {
             bail!("directory's parameters is required");
@@ -294,7 +294,7 @@ impl Controller {
                 info!("File: {file:?}");
                 self.run_single(
                     file.as_path(),
-                    producer,
+                    sender,
                     &self.config.kind,
                     dir_option.polling_mode,
                 )
@@ -322,13 +322,13 @@ impl Controller {
 
         files.sort_unstable();
         for file in files {
-            let mut producer = producer(&self.config).await;
+            let mut sender = create_sender(&self.config).await;
             info!("File: {file:?}");
             let kind = file_to_kind(&file)?;
-            self.run_single(file.as_path(), &mut producer, kind, false)
+            self.run_single(file.as_path(), &mut sender, kind, false)
                 .await?;
             std::fs::remove_file(&file)?;
-            producer.finish().await.expect("failed to finish stream");
+            sender.finish().await.expect("failed to finish stream");
         }
         std::fs::remove_dir(&dir)?;
         Ok(())
@@ -338,7 +338,7 @@ impl Controller {
     async fn run_single(
         &self,
         filename: &Path,
-        producer: &mut Producer,
+        sender: &mut GigantoSender,
         kind: &str,
         dir_polling_mode: bool,
     ) -> Result<()> {
@@ -376,7 +376,6 @@ impl Controller {
 
         let last_line = match input_type {
             InputType::Log => {
-                let sender = &mut producer.giganto;
                 let fpm = file.polling_mode;
                 let dpm = dir_polling_mode;
 
@@ -861,7 +860,7 @@ impl Controller {
                         ),
                         _ => bail!("unknown sysmon kind"),
                     };
-                    producer.giganto.reset_header();
+                    sender.reset_header();
                     pos
                 } else if NETFLOW_KIND.contains(&kind) {
                     match kind {
@@ -1171,12 +1170,21 @@ pub(crate) fn input_type(input: &str) -> InputType {
     }
 }
 
-async fn producer(config: &Config) -> Producer {
+async fn create_sender(config: &Config) -> GigantoSender {
     debug!("output type=GIGANTO");
-    match Producer::new_giganto(config).await {
-        Ok(p) => p,
+    match GigantoSender::new(
+        &config.cert,
+        &config.key,
+        &config.ca_certs,
+        config.giganto_ingest_srv_addr,
+        &config.giganto_name,
+        &config.kind,
+    )
+    .await
+    {
+        Ok(s) => s,
         Err(e) => {
-            error!("Cannot create producer: {e}");
+            error!("Cannot create sender: {e}");
             std::process::exit(1);
         }
     }

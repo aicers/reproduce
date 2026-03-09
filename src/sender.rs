@@ -401,3 +401,43 @@ pub fn apply_timestamp_dedup(
     }
     current_timestamp + *timestamp_offset
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedup_resets_offset_on_new_timestamp() {
+        let mut ref_ts: Option<i64> = None;
+        let mut offset = 0_i64;
+
+        // First group: two identical timestamps
+        assert_eq!(apply_timestamp_dedup(100, &mut ref_ts, &mut offset), 100);
+        assert_eq!(apply_timestamp_dedup(100, &mut ref_ts, &mut offset), 101);
+
+        // Second group: three identical timestamps (offset resets)
+        assert_eq!(apply_timestamp_dedup(200, &mut ref_ts, &mut offset), 200);
+        assert_eq!(apply_timestamp_dedup(200, &mut ref_ts, &mut offset), 201);
+        assert_eq!(apply_timestamp_dedup(200, &mut ref_ts, &mut offset), 202);
+    }
+
+    #[test]
+    fn dedup_no_offset_for_distinct_timestamps() {
+        let mut ref_ts: Option<i64> = None;
+        let mut offset = 0_i64;
+
+        assert_eq!(apply_timestamp_dedup(100, &mut ref_ts, &mut offset), 100);
+        assert_eq!(apply_timestamp_dedup(200, &mut ref_ts, &mut offset), 200);
+        assert_eq!(apply_timestamp_dedup(300, &mut ref_ts, &mut offset), 300);
+    }
+
+    #[test]
+    fn dedup_single_event() {
+        let mut ref_ts: Option<i64> = None;
+        let mut offset = 0_i64;
+
+        assert_eq!(apply_timestamp_dedup(42, &mut ref_ts, &mut offset), 42);
+        assert_eq!(ref_ts, Some(42));
+        assert_eq!(offset, 0);
+    }
+}
