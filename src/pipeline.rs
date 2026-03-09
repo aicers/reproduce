@@ -78,11 +78,17 @@ where
     let mut last_sent_pos = initial_checkpoint;
 
     while let Some(batch) = collector.next_batch().await? {
+        for &bytes in &batch.record_bytes {
+            on_record_bytes(bytes);
+        }
+
         sender.ensure_header_sent(protocol).await?;
+        let mut shutdown_requested = false;
 
         loop {
             if !collector.is_running() {
-                return Ok(last_sent_pos);
+                shutdown_requested = true;
+                break;
             }
             match sender.send_batch(&batch.events).await {
                 Ok(()) => break,
@@ -94,11 +100,14 @@ where
             }
         }
 
-        last_sent_pos = collector.position();
-
-        for &bytes in &batch.record_bytes {
-            on_record_bytes(bytes);
+        if shutdown_requested {
+            match sender.send_batch(&batch.events).await {
+                Ok(()) => {}
+                Err(e) => bail!("{e:?}"),
+            }
         }
+
+        last_sent_pos = collector.position();
     }
 
     let (success, failed) = collector.stats();
@@ -193,7 +202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preserves_initial_checkpoint_when_shutdown_during_write_error_retry() {
+    async fn shutdown_after_write_error_flushes_pending_batch_and_advances_checkpoint() {
         let initial_checkpoint = 5_000_u64;
         let next_pos = 12_345_u64;
         let running = Arc::new(AtomicBool::new(true));
@@ -221,9 +230,65 @@ mod tests {
         .expect("pipeline result");
 
         assert_eq!(collector.position(), next_pos);
-        assert_eq!(result, initial_checkpoint);
-        assert!(seen_bytes.is_empty());
-        assert_eq!(sender.send_attempts, 1);
+        assert_eq!(result, next_pos);
+        assert_eq!(seen_bytes, vec![128]);
+        assert_eq!(sender.send_attempts, 2);
         assert_eq!(sender.reconnects, 1);
+    }
+
+    struct FailingSender {
+        header_sends: usize,
+        send_attempts: usize,
+        running: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl PipelineSender for FailingSender {
+        async fn ensure_header_sent(&mut self, _protocol: RawEventKind) -> Result<()> {
+            self.header_sends += 1;
+            Ok(())
+        }
+
+        async fn send_batch(&mut self, _events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+            self.send_attempts += 1;
+            Err(SendError::WriteError(WriteError::Stopped(
+                VarInt::from_u32(0),
+            )))
+        }
+
+        async fn reconnect(&mut self) -> Result<()> {
+            self.running.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn records_report_bytes_before_send_failure() {
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = OneBatchCollector {
+            running: running.clone(),
+            yielded: false,
+            pos: 0,
+            next_pos: 9,
+        };
+        let mut sender = FailingSender {
+            header_sends: 0,
+            send_attempts: 0,
+            running,
+        };
+        let mut seen_bytes = Vec::new();
+
+        let err = run_pipeline_with_sender(&mut collector, &mut sender, 0, &mut |bytes| {
+            seen_bytes.push(bytes);
+        })
+        .await
+        .expect_err("send failure should propagate");
+
+        assert!(
+            err.to_string().contains("WriteError"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(seen_bytes, vec![128]);
+        assert_eq!(sender.send_attempts, 2);
     }
 }
