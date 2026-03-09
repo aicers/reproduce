@@ -1,0 +1,46 @@
+pub mod log;
+pub mod migration;
+pub mod netflow;
+pub mod operation_log;
+pub mod security_log;
+pub mod sysmon_csv;
+pub mod zeek;
+
+use std::time::Duration;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use giganto_client::RawEventKind;
+
+/// How long to sleep when polling for new data at EOF.
+pub(crate) const POLLING_INTERVAL: Duration = Duration::from_millis(3_000);
+
+/// A batch of parsed events ready for sending.
+pub struct CollectedBatch {
+    /// Parsed events as `(timestamp_nanos, serialized_record)` pairs.
+    pub events: Vec<(i64, Vec<u8>)>,
+    /// Total source bytes consumed (for reporting).
+    pub source_bytes: usize,
+}
+
+/// Produces batches of parsed events from a data source.
+#[async_trait]
+pub trait Collector: Send {
+    /// Returns the protocol kind for this collector.
+    fn protocol(&self) -> RawEventKind;
+
+    /// Returns the next batch of events, or `None` when the source is
+    /// exhausted (not polling or shutdown requested).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading or parsing the source data fails.
+    async fn next_batch(&mut self) -> Result<Option<CollectedBatch>>;
+
+    /// Returns the current position (line number or packet count) for
+    /// checkpointing.
+    fn position(&self) -> u64;
+
+    /// Returns `(success_count, failed_count)` for logging.
+    fn stats(&self) -> (u64, u64);
+}
