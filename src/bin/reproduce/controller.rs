@@ -123,11 +123,7 @@ impl Controller {
                 }
                 InputType::Elastic => {}
             }
-            producer
-                .giganto
-                .finish()
-                .await
-                .expect("failed to finish stream");
+            producer.finish().await.expect("failed to finish stream");
         }
 
         Ok(())
@@ -192,11 +188,7 @@ impl Controller {
             self.run_single(file.as_path(), &mut producer, kind, false)
                 .await?;
             std::fs::remove_file(&file)?;
-            producer
-                .giganto
-                .finish()
-                .await
-                .expect("failed to finish stream");
+            producer.finish().await.expect("failed to finish stream");
         }
         std::fs::remove_dir(&dir)?;
         Ok(())
