@@ -8,10 +8,38 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use giganto_client::{
+    RawEventKind,
+    ingest::{
+        netflow::{Netflow5, Netflow9},
+        network::{
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+            Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+        },
+        sysmon::{
+            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        },
+    },
+};
 use reproduce::checkpoint::Checkpoint;
+use reproduce::collector::Collector;
+use reproduce::collector::log::LogCollector;
+use reproduce::collector::migration::MigrationCollector;
+use reproduce::collector::netflow::NetflowCollector;
+use reproduce::collector::operation_log::OplogCollector;
+use reproduce::collector::security_log::SecurityLogCollector;
+use reproduce::collector::sysmon_csv::SysmonCollector;
+use reproduce::collector::zeek::ZeekCollector;
 use reproduce::config::{Config, InputType};
+use reproduce::parser::security_log::{
+    Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
+    Wapples,
+};
 use reproduce::parser::sysmon_csv::open_sysmon_csv_file;
 use reproduce::parser::zeek::open_raw_event_log_file;
+use reproduce::pipeline::run_pipeline;
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
@@ -81,6 +109,118 @@ const SUPPORTED_SECURITY_KIND: [&str; 13] = [
     "ubuntu_syslog_20.04",
     "nginx_accesslog_1.25.2",
 ];
+
+/// Runs a collector through the pipeline, wrapping with report start/end
+/// and returning the final position for checkpointing.
+macro_rules! run_collector {
+    ($collector:expr, $sender:expr, $report:expr) => {{
+        let mut c = $collector;
+        $report.start();
+        run_pipeline(&mut c, $sender, |bytes| $report.process(bytes)).await?;
+        if let Err(e) = $report.end() {
+            warn!("Cannot write report: {e}");
+        }
+        c.position()
+    }};
+}
+
+/// Creates and runs a zeek or migration collector based on the `migration` flag.
+macro_rules! zeek_or_migration {
+    ($iter:expr, $type:ty, $protocol:expr, $migration:expr,
+     $skip:expr, $count_sent:expr, $fpm:expr, $dpm:expr, $running:expr,
+     $sender:expr, $report:expr) => {{
+        if $migration {
+            run_collector!(
+                MigrationCollector::<$type>::new(
+                    $iter,
+                    $protocol,
+                    $skip,
+                    $count_sent,
+                    $fpm,
+                    $dpm,
+                    $running,
+                ),
+                $sender,
+                $report
+            )
+        } else {
+            run_collector!(
+                ZeekCollector::<$type>::new(
+                    $iter,
+                    $protocol,
+                    $skip,
+                    $count_sent,
+                    $fpm,
+                    $dpm,
+                    $running,
+                ),
+                $sender,
+                $report
+            )
+        }
+    }};
+}
+
+/// Same as `zeek_or_migration` but bails if not in migration mode.
+macro_rules! migration_only {
+    ($iter:expr, $type:ty, $protocol:expr, $migration:expr,
+     $skip:expr, $count_sent:expr, $fpm:expr, $dpm:expr, $running:expr,
+     $sender:expr, $report:expr, $name:literal) => {{
+        if !$migration {
+            bail!(concat!($name, " zeek log is not supported"));
+        }
+        run_collector!(
+            MigrationCollector::<$type>::new(
+                $iter,
+                $protocol,
+                $skip,
+                $count_sent,
+                $fpm,
+                $dpm,
+                $running,
+            ),
+            $sender,
+            $report
+        )
+    }};
+}
+
+/// Creates and runs a sysmon or migration collector.
+macro_rules! sysmon_or_migration {
+    ($iter:expr, $type:ty, $protocol:expr, $migration:expr,
+     $skip:expr, $count_sent:expr, $fpm:expr, $dpm:expr, $running:expr,
+     $sender:expr, $report:expr) => {{
+        if $migration {
+            run_collector!(
+                MigrationCollector::<$type>::new(
+                    $iter,
+                    $protocol,
+                    $skip,
+                    $count_sent,
+                    $fpm,
+                    $dpm,
+                    $running,
+                ),
+                $sender,
+                $report
+            )
+        } else {
+            run_collector!(
+                SysmonCollector::<$type>::new(
+                    $iter,
+                    $protocol,
+                    $skip,
+                    $count_sent,
+                    $fpm,
+                    $dpm,
+                    $running,
+                ),
+                $sender,
+                $report
+            )
+        }
+    }};
+}
 
 pub struct Controller {
     config: Config,
@@ -236,21 +376,273 @@ impl Controller {
 
         let last_line = match input_type {
             InputType::Log => {
+                let sender = &mut producer.giganto;
+                let fpm = file.polling_mode;
+                let dpm = dir_polling_mode;
+
                 if GIGANTO_ZEEK_KINDS.contains(&kind) {
+                    let Some(migration) = file.export_from_giganto else {
+                        bail!("export_from_giganto parameter is required");
+                    };
                     let rdr = open_raw_event_log_file(filename)?;
-                    let zeek_iter = rdr.into_records();
-                    producer
-                        .send_raw_to_giganto(
-                            zeek_iter,
+                    let iter = rdr.into_records();
+                    match kind {
+                        "conn" => zeek_or_migration!(
+                            iter,
+                            Conn,
+                            RawEventKind::Conn,
+                            migration,
                             offset,
                             count_sent,
-                            file.polling_mode,
-                            dir_polling_mode,
-                            file.export_from_giganto,
+                            fpm,
+                            dpm,
                             running,
-                            &mut report,
-                        )
-                        .await?
+                            sender,
+                            report
+                        ),
+                        "http" => zeek_or_migration!(
+                            iter,
+                            Http,
+                            RawEventKind::Http,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "rdp" => zeek_or_migration!(
+                            iter,
+                            Rdp,
+                            RawEventKind::Rdp,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "smtp" => zeek_or_migration!(
+                            iter,
+                            Smtp,
+                            RawEventKind::Smtp,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "dns" => zeek_or_migration!(
+                            iter,
+                            Dns,
+                            RawEventKind::Dns,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "ntlm" => zeek_or_migration!(
+                            iter,
+                            Ntlm,
+                            RawEventKind::Ntlm,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "kerberos" => zeek_or_migration!(
+                            iter,
+                            Kerberos,
+                            RawEventKind::Kerberos,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "ssh" => zeek_or_migration!(
+                            iter,
+                            Ssh,
+                            RawEventKind::Ssh,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "dce_rpc" => zeek_or_migration!(
+                            iter,
+                            DceRpc,
+                            RawEventKind::DceRpc,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "ftp" => zeek_or_migration!(
+                            iter,
+                            Ftp,
+                            RawEventKind::Ftp,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "ldap" => zeek_or_migration!(
+                            iter,
+                            Ldap,
+                            RawEventKind::Ldap,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "tls" => zeek_or_migration!(
+                            iter,
+                            Tls,
+                            RawEventKind::Tls,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "mqtt" => migration_only!(
+                            iter,
+                            Mqtt,
+                            RawEventKind::Mqtt,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report,
+                            "mqtt"
+                        ),
+                        "smb" => migration_only!(
+                            iter,
+                            Smb,
+                            RawEventKind::Smb,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report,
+                            "smb"
+                        ),
+                        "nfs" => migration_only!(
+                            iter,
+                            Nfs,
+                            RawEventKind::Nfs,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report,
+                            "nfs"
+                        ),
+                        "bootp" => migration_only!(
+                            iter,
+                            Bootp,
+                            RawEventKind::Bootp,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report,
+                            "bootp"
+                        ),
+                        "dhcp" => migration_only!(
+                            iter,
+                            Dhcp,
+                            RawEventKind::Dhcp,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report,
+                            "dhcp"
+                        ),
+                        "radius" => migration_only!(
+                            iter,
+                            Radius,
+                            RawEventKind::Radius,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report,
+                            "radius"
+                        ),
+                        "malformed_dns" => migration_only!(
+                            iter,
+                            MalformedDns,
+                            RawEventKind::MalformedDns,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report,
+                            "malformed_dns"
+                        ),
+                        _ => bail!("unknown zeek/migration kind"),
+                    }
                 } else if kind == OPERATION_LOG {
                     let agent = filename
                         .file_name()
@@ -265,63 +657,431 @@ impl Controller {
                     }
                     let oplog = File::open(filename)?;
                     let rdr = BufReader::new(oplog);
-                    producer
-                        .send_oplog_to_giganto(
+                    run_collector!(
+                        OplogCollector::new(
                             rdr,
-                            agent,
-                            file.polling_mode,
-                            dir_polling_mode,
+                            agent.to_string(),
                             offset,
                             count_sent,
-                            running,
-                            &mut report,
-                        )
-                        .await?
+                            fpm,
+                            dpm,
+                            running.clone(),
+                        ),
+                        sender,
+                        report
+                    )
                 } else if SYSMON_KINDS.contains(&kind) {
+                    let Some(migration) = file.export_from_giganto else {
+                        bail!("export_from_giganto parameter is required");
+                    };
                     let rdr = open_sysmon_csv_file(filename)?;
                     let iter = rdr.into_records();
-                    producer
-                        .send_sysmon_to_giganto(
+                    let pos = match kind {
+                        "process_create" => sysmon_or_migration!(
                             iter,
+                            ProcessCreate,
+                            RawEventKind::ProcessCreate,
+                            migration,
                             offset,
                             count_sent,
-                            file.polling_mode,
-                            dir_polling_mode,
-                            file.export_from_giganto,
+                            fpm,
+                            dpm,
                             running,
-                            &mut report,
-                        )
-                        .await?
+                            sender,
+                            report
+                        ),
+                        "file_create_time" => sysmon_or_migration!(
+                            iter,
+                            FileCreationTimeChanged,
+                            RawEventKind::FileCreateTime,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "network_connect" => sysmon_or_migration!(
+                            iter,
+                            NetworkConnection,
+                            RawEventKind::NetworkConnect,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "process_terminate" => sysmon_or_migration!(
+                            iter,
+                            ProcessTerminated,
+                            RawEventKind::ProcessTerminate,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "image_load" => sysmon_or_migration!(
+                            iter,
+                            ImageLoaded,
+                            RawEventKind::ImageLoad,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "file_create" => sysmon_or_migration!(
+                            iter,
+                            FileCreate,
+                            RawEventKind::FileCreate,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "registry_value_set" => sysmon_or_migration!(
+                            iter,
+                            RegistryValueSet,
+                            RawEventKind::RegistryValueSet,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "registry_key_rename" => sysmon_or_migration!(
+                            iter,
+                            RegistryKeyValueRename,
+                            RawEventKind::RegistryKeyRename,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "file_create_stream_hash" => sysmon_or_migration!(
+                            iter,
+                            FileCreateStreamHash,
+                            RawEventKind::FileCreateStreamHash,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "pipe_event" => sysmon_or_migration!(
+                            iter,
+                            PipeEvent,
+                            RawEventKind::PipeEvent,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "dns_query" => sysmon_or_migration!(
+                            iter,
+                            DnsEvent,
+                            RawEventKind::DnsQuery,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "file_delete" => sysmon_or_migration!(
+                            iter,
+                            FileDelete,
+                            RawEventKind::FileDelete,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "process_tamper" => sysmon_or_migration!(
+                            iter,
+                            ProcessTampering,
+                            RawEventKind::ProcessTamper,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        "file_delete_detected" => sysmon_or_migration!(
+                            iter,
+                            FileDeleteDetected,
+                            RawEventKind::FileDeleteDetected,
+                            migration,
+                            offset,
+                            count_sent,
+                            fpm,
+                            dpm,
+                            running,
+                            sender,
+                            report
+                        ),
+                        _ => bail!("unknown sysmon kind"),
+                    };
+                    producer.giganto.reset_header();
+                    pos
                 } else if NETFLOW_KIND.contains(&kind) {
-                    producer
-                        .send_netflow_to_giganto(filename, offset, count_sent, running, &mut report)
-                        .await?
+                    match kind {
+                        "netflow5" => {
+                            run_collector!(
+                                NetflowCollector::<Netflow5>::new(
+                                    filename,
+                                    RawEventKind::Netflow5,
+                                    offset,
+                                    count_sent,
+                                    running.clone(),
+                                )?,
+                                sender,
+                                report
+                            )
+                        }
+                        "netflow9" => {
+                            run_collector!(
+                                NetflowCollector::<Netflow9>::new(
+                                    filename,
+                                    RawEventKind::Netflow9,
+                                    offset,
+                                    count_sent,
+                                    running.clone(),
+                                )?,
+                                sender,
+                                report
+                            )
+                        }
+                        _ => bail!("unknown netflow kind"),
+                    }
                 } else if SUPPORTED_SECURITY_KIND.contains(&kind) {
                     let seculog = File::open(filename)?;
                     let rdr = BufReader::new(seculog);
-                    producer
-                        .send_seculog_to_giganto(
-                            rdr,
-                            file.polling_mode,
-                            dir_polling_mode,
-                            offset,
-                            count_sent,
-                            running,
-                            &mut report,
-                        )
-                        .await?
+                    match kind {
+                        "wapples_fw_6.0" => run_collector!(
+                            SecurityLogCollector::<Wapples>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "mf2_ips_4.0" => run_collector!(
+                            SecurityLogCollector::<Mf2>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "sniper_ips_8.0" => run_collector!(
+                            SecurityLogCollector::<SniperIps>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "aiwaf_waf_4.1" => run_collector!(
+                            SecurityLogCollector::<Aiwaf>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "tg_ips_2.7" => run_collector!(
+                            SecurityLogCollector::<Tg>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "vforce_ips_4.6" => run_collector!(
+                            SecurityLogCollector::<Vforce>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "srx_ips_15.1" => run_collector!(
+                            SecurityLogCollector::<Srx>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "sonicwall_fw_6.5" => run_collector!(
+                            SecurityLogCollector::<SonicWall>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "fgt_ips_6.2" => run_collector!(
+                            SecurityLogCollector::<Fgt>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "shadowwall_ips_5.0" => run_collector!(
+                            SecurityLogCollector::<ShadowWall>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "axgate_fw_2.1" => run_collector!(
+                            SecurityLogCollector::<Axgate>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "ubuntu_syslog_20.04" => run_collector!(
+                            SecurityLogCollector::<Ubuntu>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        "nginx_accesslog_1.25.2" => run_collector!(
+                            SecurityLogCollector::<Nginx>::new(
+                                rdr,
+                                kind.to_string(),
+                                offset,
+                                count_sent,
+                                fpm,
+                                dpm,
+                                running.clone()
+                            ),
+                            sender,
+                            report
+                        ),
+                        _ => bail!("unknown security log kind"),
+                    }
                 } else {
-                    producer
-                        .send_log_to_giganto(
+                    run_collector!(
+                        LogCollector::new(
                             filename,
-                            file.polling_mode,
-                            dir_polling_mode,
+                            kind.to_string(),
                             offset,
                             count_sent,
-                            &mut report,
-                            running,
-                        )
-                        .await?
+                            fpm,
+                            dpm,
+                            running.clone(),
+                        )?,
+                        sender,
+                        report
+                    )
                 }
             }
             InputType::Dir | InputType::Elastic => {
