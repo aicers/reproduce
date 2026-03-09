@@ -108,3 +108,122 @@ where
 
     Ok(last_sent_pos)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use quinn::{VarInt, WriteError};
+
+    use super::*;
+    use crate::collector::{CollectedBatch, Collector};
+
+    struct OneBatchCollector {
+        running: Arc<AtomicBool>,
+        yielded: bool,
+        pos: u64,
+        next_pos: u64,
+    }
+
+    #[async_trait]
+    impl Collector for OneBatchCollector {
+        fn protocol(&self) -> RawEventKind {
+            RawEventKind::Log
+        }
+
+        async fn next_batch(&mut self) -> Result<Option<CollectedBatch>> {
+            if self.yielded {
+                return Ok(None);
+            }
+            self.yielded = true;
+            self.pos = self.next_pos;
+            Ok(Some(CollectedBatch {
+                events: vec![(1, vec![7_u8; 3])],
+                record_bytes: vec![128],
+            }))
+        }
+
+        fn position(&self) -> u64 {
+            self.pos
+        }
+
+        fn stats(&self) -> (u64, u64) {
+            (u64::from(self.yielded), 0)
+        }
+
+        fn is_running(&self) -> bool {
+            self.running.load(Ordering::SeqCst)
+        }
+    }
+
+    struct ScriptedSender {
+        send_attempts: usize,
+        reconnects: usize,
+        header_sends: usize,
+        running: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl PipelineSender for ScriptedSender {
+        async fn ensure_header_sent(&mut self, _protocol: RawEventKind) -> Result<()> {
+            self.header_sends += 1;
+            Ok(())
+        }
+
+        async fn send_batch(&mut self, _events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+            self.send_attempts += 1;
+            if self.send_attempts == 1 {
+                return Err(SendError::WriteError(WriteError::Stopped(
+                    VarInt::from_u32(0),
+                )));
+            }
+            Ok(())
+        }
+
+        async fn reconnect(&mut self) -> Result<()> {
+            self.reconnects += 1;
+            self.running.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn preserves_initial_checkpoint_when_shutdown_during_write_error_retry() {
+        let initial_checkpoint = 5_000_u64;
+        let next_pos = 12_345_u64;
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = OneBatchCollector {
+            running: running.clone(),
+            yielded: false,
+            pos: 0,
+            next_pos,
+        };
+        let mut sender = ScriptedSender {
+            send_attempts: 0,
+            reconnects: 0,
+            header_sends: 0,
+            running,
+        };
+        let mut seen_bytes = Vec::new();
+
+        let result = run_pipeline_with_sender(
+            &mut collector,
+            &mut sender,
+            initial_checkpoint,
+            &mut |bytes| seen_bytes.push(bytes),
+        )
+        .await
+        .expect("pipeline result");
+
+        assert_eq!(collector.position(), next_pos);
+        assert_eq!(result, initial_checkpoint);
+        assert!(seen_bytes.is_empty());
+        assert_eq!(sender.send_attempts, 1);
+        assert_eq!(sender.reconnects, 1);
+    }
+}
