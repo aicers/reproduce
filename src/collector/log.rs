@@ -114,7 +114,7 @@ impl Collector for LogCollector {
             let timestamp = i64::try_from(Timestamp::now().as_nanosecond())
                 .context("timestamp nanoseconds overflow")?;
             let record_data = bincode::serialize(&send_log)?;
-            let source_bytes = line.len();
+            let record_bytes = vec![line.len()];
 
             self.conv_cnt += 1;
 
@@ -124,7 +124,7 @@ impl Collector for LogCollector {
 
             return Ok(Some(CollectedBatch {
                 events: vec![(timestamp, record_data)],
-                source_bytes,
+                record_bytes,
             }));
         }
 
@@ -139,6 +139,10 @@ impl Collector for LogCollector {
     fn stats(&self) -> (u64, u64) {
         let sent = self.conv_cnt.saturating_sub(self.skip);
         (sent, 0)
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 }
 

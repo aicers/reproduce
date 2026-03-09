@@ -24,7 +24,6 @@ use giganto_client::{
     },
 };
 use reproduce::checkpoint::Checkpoint;
-use reproduce::collector::Collector;
 use reproduce::collector::log::LogCollector;
 use reproduce::collector::migration::MigrationCollector;
 use reproduce::collector::netflow::NetflowCollector;
@@ -111,16 +110,17 @@ const SUPPORTED_SECURITY_KIND: [&str; 13] = [
 ];
 
 /// Runs a collector through the pipeline, wrapping with report start/end
-/// and returning the final position for checkpointing.
+/// and returning the last successfully sent position for checkpointing.
 macro_rules! run_collector {
-    ($collector:expr, $sender:expr, $report:expr) => {{
+    ($collector:expr, $sender:expr, $checkpoint:expr, $report:expr) => {{
         let mut c = $collector;
         $report.start();
-        run_pipeline(&mut c, $sender, |bytes| $report.process(bytes)).await?;
+        let pos =
+            run_pipeline(&mut c, $sender, $checkpoint, |bytes| $report.process(bytes)).await?;
         if let Err(e) = $report.end() {
             warn!("Cannot write report: {e}");
         }
-        c.position()
+        pos
     }};
 }
 
@@ -141,6 +141,7 @@ macro_rules! zeek_or_migration {
                     $running,
                 ),
                 $sender,
+                $skip,
                 $report
             )
         } else {
@@ -155,6 +156,7 @@ macro_rules! zeek_or_migration {
                     $running,
                 ),
                 $sender,
+                $skip,
                 $report
             )
         }
@@ -180,6 +182,7 @@ macro_rules! migration_only {
                 $running,
             ),
             $sender,
+            $skip,
             $report
         )
     }};
@@ -202,6 +205,7 @@ macro_rules! sysmon_or_migration {
                     $running,
                 ),
                 $sender,
+                $skip,
                 $report
             )
         } else {
@@ -216,6 +220,7 @@ macro_rules! sysmon_or_migration {
                     $running,
                 ),
                 $sender,
+                $skip,
                 $report
             )
         }
@@ -667,6 +672,7 @@ impl Controller {
                             running.clone(),
                         ),
                         sender,
+                        offset,
                         report
                     )
                 } else if SYSMON_KINDS.contains(&kind) {
@@ -874,6 +880,7 @@ impl Controller {
                                     running.clone(),
                                 )?,
                                 sender,
+                                offset,
                                 report
                             )
                         }
@@ -887,6 +894,7 @@ impl Controller {
                                     running.clone(),
                                 )?,
                                 sender,
+                                offset,
                                 report
                             )
                         }
@@ -907,6 +915,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "mf2_ips_4.0" => run_collector!(
@@ -920,6 +929,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "sniper_ips_8.0" => run_collector!(
@@ -933,6 +943,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "aiwaf_waf_4.1" => run_collector!(
@@ -946,6 +957,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "tg_ips_2.7" => run_collector!(
@@ -959,6 +971,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "vforce_ips_4.6" => run_collector!(
@@ -972,6 +985,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "srx_ips_15.1" => run_collector!(
@@ -985,6 +999,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "sonicwall_fw_6.5" => run_collector!(
@@ -998,6 +1013,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "fgt_ips_6.2" => run_collector!(
@@ -1011,6 +1027,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "shadowwall_ips_5.0" => run_collector!(
@@ -1024,6 +1041,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "axgate_fw_2.1" => run_collector!(
@@ -1037,6 +1055,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "ubuntu_syslog_20.04" => run_collector!(
@@ -1050,6 +1069,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         "nginx_accesslog_1.25.2" => run_collector!(
@@ -1063,6 +1083,7 @@ impl Controller {
                                 running.clone()
                             ),
                             sender,
+                            offset,
                             report
                         ),
                         _ => bail!("unknown security log kind"),
@@ -1079,6 +1100,7 @@ impl Controller {
                             running.clone(),
                         )?,
                         sender,
+                        offset,
                         report
                     )
                 }

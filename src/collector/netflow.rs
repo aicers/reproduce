@@ -15,12 +15,11 @@ use giganto_client::RawEventKind;
 use serde::Serialize;
 use tracing::error;
 
+use super::{CollectedBatch, Collector};
 use crate::parser::netflow::{
     NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox,
 };
 use crate::sender::BATCH_SIZE;
-
-use super::{CollectedBatch, Collector};
 
 /// Collects Netflow records from a pcap file, parsing and batching them for
 /// sending.
@@ -123,7 +122,7 @@ where
         }
 
         let mut buf: Vec<(i64, Vec<u8>)> = Vec::new();
-        let mut source_bytes = 0usize;
+        let mut record_bytes: Vec<usize> = Vec::new();
 
         while let Ok(pkt) = self.handle.next_packet() {
             self.pkt_cnt += 1;
@@ -169,13 +168,13 @@ where
 
             for (timestamp, event) in events {
                 let record_data = bincode::serialize(&event)?;
-                source_bytes += pkt.len();
+                record_bytes.push(pkt.len());
                 buf.push((timestamp, record_data));
 
                 if buf.len() >= BATCH_SIZE {
                     return Ok(Some(CollectedBatch {
                         events: buf,
-                        source_bytes,
+                        record_bytes,
                     }));
                 }
             }
@@ -185,7 +184,7 @@ where
             if !buf.is_empty() {
                 return Ok(Some(CollectedBatch {
                     events: buf,
-                    source_bytes,
+                    record_bytes,
                 }));
             }
 
@@ -214,7 +213,7 @@ where
 
         Ok(Some(CollectedBatch {
             events: buf,
-            source_bytes,
+            record_bytes,
         }))
     }
 
@@ -226,5 +225,9 @@ where
         // Netflow does not track individual success/failed the same way as
         // CSV-based collectors. Report packet count as success.
         (self.pkt_cnt, 0)
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 }

@@ -3,7 +3,6 @@ use std::io::{self, Write};
 
 use bytesize::ByteSize;
 use jiff::{SignedDuration, Timestamp, tz::TimeZone};
-
 use reproduce::config::{Config, InputType};
 
 use crate::controller::input_type;

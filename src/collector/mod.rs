@@ -19,8 +19,8 @@ pub(crate) const POLLING_INTERVAL: Duration = Duration::from_millis(3_000);
 pub struct CollectedBatch {
     /// Parsed events as `(timestamp_nanos, serialized_record)` pairs.
     pub events: Vec<(i64, Vec<u8>)>,
-    /// Total source bytes consumed (for reporting).
-    pub source_bytes: usize,
+    /// Per-record source byte sizes (for per-record report accounting).
+    pub record_bytes: Vec<usize>,
 }
 
 /// Produces batches of parsed events from a data source.
@@ -43,4 +43,10 @@ pub trait Collector: Send {
 
     /// Returns `(success_count, failed_count)` for logging.
     fn stats(&self) -> (u64, u64);
+
+    /// Returns `true` while the collector should keep running.
+    ///
+    /// When shutdown is requested (e.g. `Ctrl-C`), this returns `false`
+    /// so that the pipeline can exit gracefully.
+    fn is_running(&self) -> bool;
 }

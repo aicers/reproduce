@@ -11,10 +11,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use giganto_client::RawEventKind;
 
+use super::{CollectedBatch, Collector, POLLING_INTERVAL};
 use crate::parser::operation_log;
 use crate::sender::BATCH_SIZE;
-
-use super::{CollectedBatch, Collector, POLLING_INTERVAL};
 
 /// Collects operation-log records from a line-oriented file, parsing and
 /// batching them for sending.
@@ -74,7 +73,7 @@ impl Collector for OplogCollector {
         }
 
         let mut buf: Vec<(i64, Vec<u8>)> = Vec::new();
-        let mut source_bytes = 0usize;
+        let mut record_bytes: Vec<usize> = Vec::new();
 
         while self.running.load(Ordering::SeqCst) {
             if let Some(Ok(line)) = self.lines.next() {
@@ -93,13 +92,13 @@ impl Collector for OplogCollector {
                     };
 
                 let record_data = bincode::serialize(&oplog_data)?;
-                source_bytes += line.len();
+                record_bytes.push(line.len());
                 buf.push((timestamp, record_data));
 
                 if buf.len() >= BATCH_SIZE {
                     return Ok(Some(CollectedBatch {
                         events: buf,
-                        source_bytes,
+                        record_bytes,
                     }));
                 }
 
@@ -127,7 +126,7 @@ impl Collector for OplogCollector {
 
         Ok(Some(CollectedBatch {
             events: buf,
-            source_bytes,
+            record_bytes,
         }))
     }
 
@@ -137,5 +136,9 @@ impl Collector for OplogCollector {
 
     fn stats(&self) -> (u64, u64) {
         (self.success_cnt, self.failed_cnt)
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 }

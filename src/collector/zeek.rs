@@ -15,10 +15,9 @@ use giganto_client::RawEventKind;
 use serde::Serialize;
 use tracing::{error, warn};
 
+use super::{CollectedBatch, Collector, POLLING_INTERVAL};
 use crate::parser::zeek::TryFromZeekRecord;
 use crate::sender::{BATCH_SIZE, apply_timestamp_dedup};
-
-use super::{CollectedBatch, Collector, POLLING_INTERVAL};
 
 /// Collects Zeek TSV log records, parsing and batching them for sending.
 pub struct ZeekCollector<T> {
@@ -87,7 +86,7 @@ where
         }
 
         let mut buf: Vec<(i64, Vec<u8>)> = Vec::new();
-        let mut source_bytes = 0usize;
+        let mut record_bytes: Vec<usize> = Vec::new();
 
         while self.running.load(Ordering::SeqCst) {
             let Some(ref mut iter) = self.iter else {
@@ -134,7 +133,7 @@ where
                         match T::try_from_zeek_record(&record) {
                             Ok((event, _)) => {
                                 let record_data = bincode::serialize(&event)?;
-                                source_bytes += record.as_slice().len();
+                                record_bytes.push(record.as_slice().len());
                                 buf.push((deduped_timestamp, record_data));
                                 self.success_cnt += 1;
 
@@ -142,7 +141,7 @@ where
                                     self.pos = next_pos;
                                     return Ok(Some(CollectedBatch {
                                         events: buf,
-                                        source_bytes,
+                                        record_bytes,
                                     }));
                                 }
                             }
@@ -190,7 +189,7 @@ where
 
         Ok(Some(CollectedBatch {
             events: buf,
-            source_bytes,
+            record_bytes,
         }))
     }
 
@@ -200,5 +199,9 @@ where
 
     fn stats(&self) -> (u64, u64) {
         (self.success_cnt, self.failed_cnt)
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 }
