@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     env,
     fmt::Debug,
     marker::PhantomData,
@@ -35,7 +36,9 @@ pub struct NetflowCollector<T> {
     pkt_cnt: u64,
     timestamp_old: u32,
     nanos: u32,
+    pending_events: VecDeque<(i64, Vec<u8>, usize)>,
     exhausted: bool,
+    finalized: bool,
     _marker: PhantomData<T>,
 }
 
@@ -81,7 +84,9 @@ impl<T> NetflowCollector<T> {
             pkt_cnt: 0,
             timestamp_old: 0,
             nanos: 1,
+            pending_events: VecDeque::new(),
             exhausted: false,
+            finalized: false,
             _marker: PhantomData,
         })
     }
@@ -104,6 +109,41 @@ impl<T> NetflowCollector<T> {
             error!("{}. {}", e, path);
         }
     }
+
+    fn drain_pending_batch(&mut self) -> Option<CollectedBatch> {
+        if self.pending_events.is_empty() {
+            return None;
+        }
+
+        let mut events = Vec::new();
+        let mut record_bytes = Vec::new();
+        while events.len() < BATCH_SIZE {
+            let Some((timestamp, record_data, source_bytes)) = self.pending_events.pop_front()
+            else {
+                break;
+            };
+            events.push((timestamp, record_data));
+            record_bytes.push(source_bytes);
+        }
+
+        Some(CollectedBatch {
+            events,
+            record_bytes,
+        })
+    }
+
+    fn finalize(&mut self) {
+        if self.finalized {
+            return;
+        }
+
+        self.stats.add(
+            ProcessStats::Packets,
+            self.pkt_cnt.try_into().unwrap_or_default(),
+        );
+        self.save_templates();
+        self.finalized = true;
+    }
 }
 
 #[async_trait]
@@ -117,12 +157,14 @@ where
 
     #[allow(clippy::too_many_lines)]
     async fn next_batch(&mut self) -> Result<Option<CollectedBatch>> {
-        if self.exhausted {
-            return Ok(None);
+        if let Some(batch) = self.drain_pending_batch() {
+            return Ok(Some(batch));
         }
 
-        let mut buf: Vec<(i64, Vec<u8>)> = Vec::new();
-        let mut record_bytes: Vec<usize> = Vec::new();
+        if self.exhausted {
+            self.finalize();
+            return Ok(None);
+        }
 
         while let Ok(pkt) = self.handle.next_packet() {
             self.pkt_cnt += 1;
@@ -166,55 +208,39 @@ where
                 &mut self.stats,
             )?;
 
+            let mut saw_events = false;
             for (timestamp, event) in events {
                 let record_data = bincode::serialize(&event)?;
-                record_bytes.push(pkt.len());
-                buf.push((timestamp, record_data));
-
-                if buf.len() >= BATCH_SIZE {
-                    return Ok(Some(CollectedBatch {
-                        events: buf,
-                        record_bytes,
-                    }));
-                }
-            }
-
-            // Netflow flushes per-packet: if any events were collected from
-            // this packet, return the batch now.
-            if !buf.is_empty() {
-                return Ok(Some(CollectedBatch {
-                    events: buf,
-                    record_bytes,
-                }));
+                self.pending_events
+                    .push_back((timestamp, record_data, pkt.len()));
+                saw_events = true;
             }
 
             if self.count_sent != 0 && self.pkt_cnt >= self.count_sent {
                 self.exhausted = true;
-                break;
+                self.finalize();
             }
 
             if !self.running.load(Ordering::SeqCst) {
                 self.exhausted = true;
-                break;
+                self.finalize();
+            }
+
+            // Netflow flushes per-packet: once a packet produced events, keep
+            // returning that packet's pending records across subsequent calls
+            // until all of them have been sent.
+            if saw_events {
+                return Ok(self.drain_pending_batch());
+            }
+
+            if self.exhausted {
+                return Ok(None);
             }
         }
 
-        self.stats.add(
-            ProcessStats::Packets,
-            self.pkt_cnt.try_into().unwrap_or_default(),
-        );
-
         self.exhausted = true;
-        self.save_templates();
-
-        if buf.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(CollectedBatch {
-            events: buf,
-            record_bytes,
-        }))
+        self.finalize();
+        Ok(self.drain_pending_batch())
     }
 
     fn position(&self) -> u64 {
@@ -229,5 +255,160 @@ where
 
     fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, io::Write};
+
+    use anyhow::Result;
+    use giganto_client::ingest::netflow::Netflow5;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    const ETHERNET_DATALINK: u32 = 1;
+    const PROTO_UDP: u8 = 17;
+
+    fn hex_to_bytes(s: &str) -> Vec<u8> {
+        let filtered: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+        filtered
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect()
+    }
+
+    fn write_pcap(path: &Path, packets: &[Vec<u8>]) -> Result<()> {
+        let mut file = File::create(path)?;
+
+        file.write_all(&0xa1b2_c3d4_u32.to_le_bytes())?;
+        file.write_all(&2u16.to_le_bytes())?;
+        file.write_all(&4u16.to_le_bytes())?;
+        file.write_all(&0i32.to_le_bytes())?;
+        file.write_all(&0u32.to_le_bytes())?;
+        file.write_all(&65_535u32.to_le_bytes())?;
+        file.write_all(&ETHERNET_DATALINK.to_le_bytes())?;
+
+        for packet in packets {
+            let packet_len = u32::try_from(packet.len()).unwrap_or_default();
+            file.write_all(&0u32.to_le_bytes())?;
+            file.write_all(&0u32.to_le_bytes())?;
+            file.write_all(&packet_len.to_le_bytes())?;
+            file.write_all(&packet_len.to_le_bytes())?;
+            file.write_all(packet)?;
+        }
+
+        Ok(())
+    }
+
+    fn build_ipv4_udp_packet(payload: &[u8], dst_port: u16) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0u8; 6]);
+        bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        bytes.extend_from_slice(&0x0800u16.to_be_bytes());
+
+        let total_len = 20u16 + 8u16 + u16::try_from(payload.len()).unwrap_or_default();
+        bytes.push(0x45);
+        bytes.push(0);
+        bytes.extend_from_slice(&total_len.to_be_bytes());
+        bytes.extend_from_slice(&0x1234u16.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes.push(64);
+        bytes.push(PROTO_UDP);
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes.extend_from_slice(&[10, 0, 0, 1]);
+        bytes.extend_from_slice(&[10, 0, 0, 2]);
+
+        let udp_len = 8u16 + u16::try_from(payload.len()).unwrap_or_default();
+        bytes.extend_from_slice(&1000u16.to_be_bytes());
+        bytes.extend_from_slice(&dst_port.to_be_bytes());
+        bytes.extend_from_slice(&udp_len.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes.extend_from_slice(payload);
+
+        bytes
+    }
+
+    fn v5_header_bytes(count: u16) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&5u16.to_be_bytes());
+        bytes.extend_from_slice(&count.to_be_bytes());
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&3u32.to_be_bytes());
+        bytes.extend_from_slice(&4u32.to_be_bytes());
+        bytes.push(5);
+        bytes.push(6);
+        bytes.extend_from_slice(&0x4001u16.to_be_bytes());
+        bytes
+    }
+
+    fn build_v5_packet(record_count: u16) -> Vec<u8> {
+        let record = hex_to_bytes(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/netflow/v5_record.hex"
+        )));
+
+        let mut payload = v5_header_bytes(record_count);
+        for _ in 0..record_count {
+            payload.extend_from_slice(&record);
+        }
+
+        build_ipv4_udp_packet(&payload, 2055)
+    }
+
+    #[tokio::test]
+    async fn oversized_packet_keeps_remaining_records_for_next_batch() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("oversized.pcap");
+        write_pcap(
+            &pcap_path,
+            &[build_v5_packet(
+                u16::try_from(BATCH_SIZE + 1).expect("batch size fits in u16"),
+            )],
+        )?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector =
+            NetflowCollector::<Netflow5>::new(&pcap_path, RawEventKind::Netflow5, 0, 0, running)?;
+
+        let first = collector
+            .next_batch()
+            .await?
+            .expect("first batch should contain packet records");
+        let second = collector
+            .next_batch()
+            .await?
+            .expect("remaining packet records should be preserved");
+
+        assert_eq!(first.events.len(), BATCH_SIZE);
+        assert_eq!(first.record_bytes.len(), BATCH_SIZE);
+        assert_eq!(second.events.len(), 1);
+        assert_eq!(second.record_bytes.len(), 1);
+        assert!(collector.next_batch().await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn normal_packet_returns_all_records_then_exhausts() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("normal.pcap");
+        write_pcap(&pcap_path, &[build_v5_packet(2)])?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector =
+            NetflowCollector::<Netflow5>::new(&pcap_path, RawEventKind::Netflow5, 0, 0, running)?;
+
+        let batch = collector
+            .next_batch()
+            .await?
+            .expect("packet records should be returned");
+
+        assert_eq!(batch.events.len(), 2);
+        assert_eq!(batch.record_bytes.len(), 2);
+        assert!(collector.next_batch().await?.is_none());
+        Ok(())
     }
 }

@@ -6,11 +6,15 @@ pub mod security_log;
 pub mod sysmon_csv;
 pub mod zeek;
 
+mod common;
+
 use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use giganto_client::RawEventKind;
+
+pub(crate) use common::apply_timestamp_dedup;
 
 /// How long to sleep when polling for new data at EOF.
 pub(crate) const POLLING_INTERVAL: Duration = Duration::from_millis(3_000);

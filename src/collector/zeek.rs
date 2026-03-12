@@ -15,9 +15,9 @@ use giganto_client::RawEventKind;
 use serde::Serialize;
 use tracing::{error, warn};
 
-use super::{CollectedBatch, Collector, POLLING_INTERVAL};
+use super::{CollectedBatch, Collector, POLLING_INTERVAL, apply_timestamp_dedup};
 use crate::parser::zeek::TryFromZeekRecord;
-use crate::sender::{BATCH_SIZE, apply_timestamp_dedup};
+use crate::sender::BATCH_SIZE;
 
 /// Collects Zeek TSV log records, parsing and batching them for sending.
 pub struct ZeekCollector<T> {

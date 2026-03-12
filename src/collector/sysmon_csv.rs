@@ -15,9 +15,9 @@ use giganto_client::RawEventKind;
 use serde::Serialize;
 use tracing::{error, warn};
 
-use super::{CollectedBatch, Collector, POLLING_INTERVAL};
+use super::{CollectedBatch, Collector, POLLING_INTERVAL, apply_timestamp_dedup};
 use crate::parser::sysmon_csv::TryFromSysmonRecord;
-use crate::sender::{BATCH_SIZE, apply_timestamp_dedup};
+use crate::sender::BATCH_SIZE;
 
 /// Collects Sysmon CSV records, parsing and batching them for sending.
 ///

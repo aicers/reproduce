@@ -236,6 +236,64 @@ mod tests {
         assert_eq!(sender.reconnects, 1);
     }
 
+    struct MultiRetrySender {
+        send_attempts: usize,
+        reconnects: usize,
+        header_sends: usize,
+    }
+
+    #[async_trait]
+    impl PipelineSender for MultiRetrySender {
+        async fn ensure_header_sent(&mut self, _protocol: RawEventKind) -> Result<()> {
+            self.header_sends += 1;
+            Ok(())
+        }
+
+        async fn send_batch(&mut self, _events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+            self.send_attempts += 1;
+            if self.send_attempts < 3 {
+                return Err(SendError::WriteError(WriteError::Stopped(
+                    VarInt::from_u32(0),
+                )));
+            }
+            Ok(())
+        }
+
+        async fn reconnect(&mut self) -> Result<()> {
+            self.reconnects += 1;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_same_batch_until_send_succeeds() {
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = OneBatchCollector {
+            running,
+            yielded: false,
+            pos: 0,
+            next_pos: 777,
+        };
+        let mut sender = MultiRetrySender {
+            send_attempts: 0,
+            reconnects: 0,
+            header_sends: 0,
+        };
+        let mut seen_bytes = Vec::new();
+
+        let result = run_pipeline_with_sender(&mut collector, &mut sender, 0, &mut |bytes| {
+            seen_bytes.push(bytes);
+        })
+        .await
+        .expect("pipeline result");
+
+        assert_eq!(result, 777);
+        assert_eq!(seen_bytes, vec![128]);
+        assert_eq!(sender.send_attempts, 3);
+        assert_eq!(sender.reconnects, 2);
+        assert_eq!(sender.header_sends, 3);
+    }
+
     struct FailingSender {
         header_sends: usize,
         send_attempts: usize,

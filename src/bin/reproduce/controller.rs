@@ -1200,7 +1200,6 @@ async fn create_sender(config: &Config) -> GigantoSender {
         &config.ca_certs,
         config.giganto_ingest_srv_addr,
         &config.giganto_name,
-        &config.kind,
     )
     .await
     {
