@@ -79,7 +79,7 @@ pub enum NetflowHeader {
 }
 
 impl NetflowHeader {
-    #[must_use] 
+    #[must_use]
     pub fn timestamp(&self) -> (u32, u32) {
         match self {
             NetflowHeader::V5(x) => (x.unix_secs, x.unix_nanos),
@@ -153,7 +153,7 @@ impl std::fmt::Display for Netflow9Header {
 }
 
 impl PktBuf {
-    #[must_use] 
+    #[must_use]
     pub fn new(pkt: &Packet<'_>) -> Self {
         Self {
             data: Cursor::new(pkt.data.to_vec()),
@@ -162,7 +162,7 @@ impl PktBuf {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn src_addr(&self) -> IpAddr {
         self.iph.addr_pair.src
     }

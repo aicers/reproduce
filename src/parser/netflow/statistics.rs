@@ -35,7 +35,7 @@ impl Default for Stats {
 }
 
 impl Stats {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             stats: HashMap::new(),
