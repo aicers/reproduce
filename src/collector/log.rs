@@ -2,18 +2,18 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use giganto_client::{RawEventKind, ingest::log::Log};
 use jiff::Timestamp;
+use tokio::sync::watch;
 
-use super::{CollectedBatch, Collector, POLLING_INTERVAL};
+use super::{
+    CollectedBatch, Collector, CollectorResult, position_bytes, shutdown_requested,
+    wait_for_poll_or_shutdown,
+};
 
 /// Collects raw log lines from a binary file, wrapping each in a `Log` record
 /// for sending.
@@ -27,9 +27,11 @@ pub struct LogCollector {
     count_sent: u64,
     file_polling_mode: bool,
     dir_polling_mode: bool,
-    running: Arc<AtomicBool>,
+    shutdown: watch::Receiver<bool>,
     conv_cnt: u64,
     skip: u64,
+    committed_cnt: u64,
+    pending_commit: Option<u64>,
     exhausted: bool,
 }
 
@@ -46,8 +48,8 @@ impl LogCollector {
         count_sent: u64,
         file_polling_mode: bool,
         dir_polling_mode: bool,
-        running: Arc<AtomicBool>,
-    ) -> Result<Self> {
+        shutdown: watch::Receiver<bool>,
+    ) -> CollectorResult<Self> {
         let log_file = File::open(file_name)
             .map_err(|e| anyhow!("failed to open {}: {e}", file_name.display()))?;
         let lines = BinaryLines::new(BufReader::new(log_file));
@@ -58,26 +60,35 @@ impl LogCollector {
             count_sent,
             file_polling_mode,
             dir_polling_mode,
-            running,
+            shutdown,
             conv_cnt: 0,
             skip,
+            committed_cnt: skip,
+            pending_commit: None,
             exhausted: false,
         })
+    }
+
+    /// Returns the number of successful and failed records observed so far.
+    #[must_use]
+    pub fn stats(&self) -> (u64, u64) {
+        let sent = self.committed_cnt.saturating_sub(self.skip);
+        (sent, 0)
     }
 }
 
 #[async_trait]
 impl Collector for LogCollector {
-    fn protocol(&self) -> RawEventKind {
-        RawEventKind::Log
-    }
+    async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
+        if let Some(position) = self.pending_commit.take() {
+            self.committed_cnt = position;
+        }
 
-    async fn next_batch(&mut self) -> Result<Option<CollectedBatch>> {
         if self.exhausted {
             return Ok(None);
         }
 
-        while self.running.load(Ordering::SeqCst) {
+        while !shutdown_requested(&self.shutdown) {
             let line = match self.lines.next() {
                 Some(Ok(line)) => {
                     if line.is_empty() {
@@ -87,11 +98,14 @@ impl Collector for LogCollector {
                 }
                 Some(Err(e)) => {
                     self.exhausted = true;
-                    return Err(anyhow!("Failed to convert input data: {e}"));
+                    return Err(anyhow!("Failed to convert input data: {e}").into());
                 }
                 None => {
                     if self.file_polling_mode && !self.dir_polling_mode {
-                        tokio::time::sleep(POLLING_INTERVAL).await;
+                        if wait_for_poll_or_shutdown(&mut self.shutdown).await {
+                            self.exhausted = true;
+                            return Ok(None);
+                        }
                         continue;
                     }
                     self.exhausted = true;
@@ -113,7 +127,7 @@ impl Collector for LogCollector {
 
             let timestamp = i64::try_from(Timestamp::now().as_nanosecond())
                 .context("timestamp nanoseconds overflow")?;
-            let record_data = bincode::serialize(&send_log)?;
+            let record_data = bincode::serialize(&send_log).map_err(anyhow::Error::from)?;
             let record_bytes = vec![line.len()];
 
             self.conv_cnt += 1;
@@ -122,7 +136,9 @@ impl Collector for LogCollector {
                 self.exhausted = true;
             }
 
+            self.pending_commit = Some(self.conv_cnt);
             return Ok(Some(CollectedBatch {
+                kind: RawEventKind::Log,
                 events: vec![(timestamp, record_data)],
                 record_bytes,
             }));
@@ -132,17 +148,8 @@ impl Collector for LogCollector {
         Ok(None)
     }
 
-    fn position(&self) -> u64 {
-        self.conv_cnt
-    }
-
-    fn stats(&self) -> (u64, u64) {
-        let sent = self.conv_cnt.saturating_sub(self.skip);
-        (sent, 0)
-    }
-
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+    fn position(&self) -> Vec<u8> {
+        position_bytes(self.committed_cnt)
     }
 }
 
@@ -182,12 +189,10 @@ impl<B: BufRead> Iterator for BinaryLines<B> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{self, BufRead, BufReader, Read, Write},
-        sync::{Arc, atomic::AtomicBool},
-    };
+    use std::io::{self, BufRead, BufReader, Read, Write};
 
     use tempfile::tempdir;
+    use tokio::sync::watch;
 
     use super::*;
 
@@ -217,7 +222,7 @@ mod tests {
         content: &[u8],
         skip: u64,
         count_sent: u64,
-        running: Arc<AtomicBool>,
+        shutdown: watch::Receiver<bool>,
     ) -> (LogCollector, tempfile::TempDir) {
         let dir = tempdir().expect("temp dir");
         let path = dir.path().join("test.log");
@@ -229,7 +234,7 @@ mod tests {
             count_sent,
             false,
             false,
-            running,
+            shutdown,
         )
         .expect("log collector should be created");
         (collector, dir)
@@ -275,9 +280,9 @@ mod tests {
         writeln!(f, "line2").expect("write line2");
         drop(f);
 
-        let running = Arc::new(AtomicBool::new(true));
+        let (_tx, shutdown) = watch::channel(false);
         let mut collector =
-            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, shutdown)
                 .expect("create collector");
 
         let b1 = collector
@@ -308,9 +313,9 @@ mod tests {
         writeln!(f, "line2").expect("write line2");
         drop(f);
 
-        let running = Arc::new(AtomicBool::new(true));
+        let (_tx, shutdown) = watch::channel(false);
         let mut collector =
-            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, shutdown)
                 .expect("create collector");
 
         let mut event_count = 0;
@@ -326,9 +331,9 @@ mod tests {
         let path = dir.path().join("test.log");
         std::fs::write(&path, b"line\n").expect("write");
 
-        let running = Arc::new(AtomicBool::new(true));
+        let (_tx, shutdown) = watch::channel(false);
         let mut collector =
-            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, shutdown)
                 .expect("create collector");
 
         collector.next_batch().await.expect("first call");
@@ -344,9 +349,9 @@ mod tests {
         let path = dir.path().join("test.log");
         std::fs::write(&path, b"line1\nline2\n").expect("write");
 
-        let running = Arc::new(AtomicBool::new(true));
+        let (_tx, shutdown) = watch::channel(false);
         let mut collector =
-            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, shutdown)
                 .expect("create collector");
 
         while collector.next_batch().await.expect("next_batch").is_some() {}
@@ -355,8 +360,8 @@ mod tests {
 
     #[tokio::test]
     async fn log_collector_respects_skip_and_count_sent() {
-        let running = Arc::new(AtomicBool::new(true));
-        let (mut collector, _dir) = make_log_collector(b"skip\nkeep\nextra\n", 1, 1, running);
+        let (_tx, shutdown) = watch::channel(false);
+        let (mut collector, _dir) = make_log_collector(b"skip\nkeep\nextra\n", 1, 1, shutdown);
 
         let batch = collector
             .next_batch()
@@ -366,10 +371,7 @@ mod tests {
 
         assert_eq!(batch.events.len(), 1);
         assert_eq!(batch.record_bytes, vec![4]);
-        assert_eq!(collector.position(), 2);
-        assert_eq!(collector.stats(), (1, 0));
-        assert_eq!(collector.protocol(), RawEventKind::Log);
-        assert!(collector.is_running());
+        assert_eq!(batch.kind, RawEventKind::Log);
         assert!(
             collector
                 .next_batch()
@@ -377,15 +379,15 @@ mod tests {
                 .expect("collector should be exhausted")
                 .is_none()
         );
+        assert_eq!(collector.position(), b"2".to_vec());
+        assert_eq!(collector.stats(), (1, 0));
     }
 
     #[tokio::test]
     async fn log_collector_returns_none_when_running_flag_is_false() {
-        let running = Arc::new(AtomicBool::new(false));
-        let (mut collector, _dir) = make_log_collector(b"line\n", 0, 0, running);
+        let (_tx, shutdown) = watch::channel(true);
+        let (mut collector, _dir) = make_log_collector(b"line\n", 0, 0, shutdown);
 
-        assert!(collector.protocol() == RawEventKind::Log);
-        assert!(!collector.is_running());
         assert!(
             collector
                 .next_batch()

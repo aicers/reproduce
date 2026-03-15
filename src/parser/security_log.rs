@@ -1,4 +1,4 @@
-#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::module_name_repetitions)] // Vendor parser names intentionally mirror device families.
 
 mod aiwaf;
 mod axgate;
@@ -16,7 +16,6 @@ mod wapples;
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use anyhow::Result;
 use giganto_client::ingest::log::SecuLog;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -39,6 +38,18 @@ pub(crate) enum SecurityLogInfoError {
     #[error("security log kind must contain at least three '_' separated segments: {kind}")]
     InvalidKind { kind: String },
 }
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub(crate) struct SecurityLogParseError(anyhow::Error);
+
+impl From<anyhow::Error> for SecurityLogParseError {
+    fn from(error: anyhow::Error) -> Self {
+        Self(error)
+    }
+}
+
+pub(crate) type SecurityLogParseResult<T> = std::result::Result<T, SecurityLogParseError>;
 
 impl SecurityLogInfo {
     /// Creates a new `SecurityLogInfo` by splitting a kind string on `_`.
@@ -120,8 +131,11 @@ pub(crate) trait ParseSecurityLog {
     /// # Errors
     ///
     /// Returns an error if the log line cannot be parsed.
-    fn parse_security_log(line: &str, serial: i64, info: SecurityLogInfo)
-    -> Result<(SecuLog, i64)>;
+    fn parse_security_log(
+        line: &str,
+        serial: i64,
+        info: SecurityLogInfo,
+    ) -> SecurityLogParseResult<(SecuLog, i64)>;
 }
 
 fn proto_to_u8(proto: &str) -> u8 {

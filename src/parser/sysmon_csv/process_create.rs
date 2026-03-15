@@ -1,95 +1,98 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::sysmon::ProcessCreate;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_timestamp_ns};
+use super::{
+    EventToCsv, SysmonCsvResult, TryFromSysmonRecord, parse_sysmon_timestamp_ns, split_message_part,
+};
 
 impl TryFromSysmonRecord for ProcessCreate {
     #[allow(clippy::too_many_lines)]
-    fn try_from_sysmon_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+    fn try_from_sysmon_record(rec: &csv::StringRecord) -> SysmonCsvResult<(Self, i64)> {
         let agent_name = if let Some(agent_name) = rec.get(0) {
             agent_name.to_string()
         } else {
-            return Err(anyhow!("missing agent_name"));
+            return Err(anyhow!("missing agent_name").into());
         };
         let agent_id = if let Some(agent_id) = rec.get(1) {
             agent_id.to_string()
         } else {
-            return Err(anyhow!("missing agent_id"));
+            return Err(anyhow!("missing agent_id").into());
         };
         let time = if let Some(utc_time) = rec.get(3) {
             parse_sysmon_timestamp_ns(utc_time)?
         } else {
-            return Err(anyhow!("missing time"));
+            return Err(anyhow!("missing time").into());
         };
         let process_guid = if let Some(process_guid) = rec.get(4) {
             process_guid.to_string()
         } else {
-            return Err(anyhow!("missing process_guid"));
+            return Err(anyhow!("missing process_guid").into());
         };
         let process_id = if let Some(process_id) = rec.get(5) {
             process_id.parse::<u32>().context("invalid process_id")?
         } else {
-            return Err(anyhow!("missing process_id"));
+            return Err(anyhow!("missing process_id").into());
         };
         let image = if let Some(image) = rec.get(6) {
             image.to_string()
         } else {
-            return Err(anyhow!("missing image"));
+            return Err(anyhow!("missing image").into());
         };
         let file_version = if let Some(file_version) = rec.get(7) {
             file_version.to_string()
         } else {
-            return Err(anyhow!("missing file_version"));
+            return Err(anyhow!("missing file_version").into());
         };
         let description = if let Some(description) = rec.get(8) {
             description.to_string()
         } else {
-            return Err(anyhow!("missing description"));
+            return Err(anyhow!("missing description").into());
         };
         let product = if let Some(product) = rec.get(9) {
             product.to_string()
         } else {
-            return Err(anyhow!("missing product"));
+            return Err(anyhow!("missing product").into());
         };
         let company = if let Some(company) = rec.get(10) {
             company.to_string()
         } else {
-            return Err(anyhow!("missing company"));
+            return Err(anyhow!("missing company").into());
         };
         let original_file_name = if let Some(original_file_name) = rec.get(11) {
             original_file_name.to_string()
         } else {
-            return Err(anyhow!("missing original_file_name"));
+            return Err(anyhow!("missing original_file_name").into());
         };
         let command_line = if let Some(command_line) = rec.get(12) {
             command_line.to_string()
         } else {
-            return Err(anyhow!("missing command_line"));
+            return Err(anyhow!("missing command_line").into());
         };
         let current_directory = if let Some(current_directory) = rec.get(13) {
             current_directory.to_string()
         } else {
-            return Err(anyhow!("missing current_directory"));
+            return Err(anyhow!("missing current_directory").into());
         };
         let user = if let Some(user) = rec.get(14) {
             user.to_string()
         } else {
-            return Err(anyhow!("missing user"));
+            return Err(anyhow!("missing user").into());
         };
         let logon_guid = if let Some(logon_guid) = rec.get(15) {
             logon_guid.to_string()
         } else {
-            return Err(anyhow!("missing logon_guid"));
+            return Err(anyhow!("missing logon_guid").into());
         };
         let logon_id = if let Some(logon_id) = rec.get(16) {
             if logon_id.eq("-") {
                 0
             } else {
-                u32::from_str_radix(logon_id.trim_start_matches("0x"), 16)?
+                u32::from_str_radix(logon_id.trim_start_matches("0x"), 16)
+                    .map_err(anyhow::Error::from)?
             }
         } else {
-            return Err(anyhow!("missing logon_id"));
+            return Err(anyhow!("missing logon_id").into());
         };
         let terminal_session_id = if let Some(terminal_session_id) = rec.get(17) {
             if terminal_session_id.eq("-") {
@@ -100,12 +103,12 @@ impl TryFromSysmonRecord for ProcessCreate {
                     .context("invalid terminal_session_id")?
             }
         } else {
-            return Err(anyhow!("missing terminal_session_id"));
+            return Err(anyhow!("missing terminal_session_id").into());
         };
         let integrity_level = if let Some(integrity_level) = rec.get(18) {
             integrity_level.to_string()
         } else {
-            return Err(anyhow!("missing integrity_level"));
+            return Err(anyhow!("missing integrity_level").into());
         };
         let hashes = if let Some(hashes) = rec.get(19) {
             hashes
@@ -113,12 +116,12 @@ impl TryFromSysmonRecord for ProcessCreate {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing hashes"));
+            return Err(anyhow!("missing hashes").into());
         };
         let parent_process_guid = if let Some(parent_process_guid) = rec.get(20) {
             parent_process_guid.to_string()
         } else {
-            return Err(anyhow!("missing parent_process_guid"));
+            return Err(anyhow!("missing parent_process_guid").into());
         };
         let parent_process_id = if let Some(parent_process_id) = rec.get(21) {
             if parent_process_id.eq("-") {
@@ -129,22 +132,22 @@ impl TryFromSysmonRecord for ProcessCreate {
                     .context("invalid parent_process_id")?
             }
         } else {
-            return Err(anyhow!("missing parent_process_id"));
+            return Err(anyhow!("missing parent_process_id").into());
         };
         let parent_image = if let Some(parent_image) = rec.get(22) {
             parent_image.to_string()
         } else {
-            return Err(anyhow!("missing parent_image"));
+            return Err(anyhow!("missing parent_image").into());
         };
         let parent_command_line = if let Some(parent_command_line) = rec.get(23) {
             parent_command_line.to_string()
         } else {
-            return Err(anyhow!("missing parent_command_line"));
+            return Err(anyhow!("missing parent_command_line").into());
         };
         let parent_user = if let Some(parent_user) = rec.get(24) {
             parent_user.to_string()
         } else {
-            return Err(anyhow!("missing parent_user"));
+            return Err(anyhow!("missing parent_user").into());
         };
 
         Ok((
@@ -178,7 +181,7 @@ impl TryFromSysmonRecord for ProcessCreate {
     }
 }
 
-#[allow(clippy::module_name_repetitions)]
+#[allow(clippy::module_name_repetitions)] // Elastic mirror types intentionally keep Sysmon event names.
 #[derive(Serialize)]
 pub struct ElasticProcessCreate {
     agent_name: Option<String>,
@@ -252,10 +255,7 @@ impl EventToCsv for ElasticProcessCreate {
                     }
 
                     for part in message.split('\n') {
-                        let segments: Vec<_> = part.splitn(2, ':').collect();
-                        if segments.len() == 2 {
-                            let key = segments[0].trim();
-                            let value = segments[1].trim();
+                        if let Some((key, value)) = split_message_part(part) {
                             match key {
                                 "UtcTime" => entry.utc_time = Some(value.to_string()),
                                 "ProcessGuid" => entry.process_guid = Some(value.to_string()),

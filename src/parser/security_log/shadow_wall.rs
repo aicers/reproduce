@@ -1,11 +1,12 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{Context, Result, bail};
+use anyhow::Context;
 use giganto_client::ingest::log::SecuLog;
 use regex::Regex;
 
 use super::{
-    DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, ShadowWall,
+    DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo,
+    SecurityLogParseResult, ShadowWall,
 };
 
 fn get_shadow_regex() -> &'static Regex {
@@ -13,7 +14,7 @@ fn get_shadow_regex() -> &'static Regex {
 
     LOG_REGEX.get_or_init(|| {
         Regex::new(r"(?<timestamp>\d{10}).*?(?<proto>\d+)\t(?<srcIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\t(?<srcPort>\d+)\t(?<dstIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\t(?<dstPort>\d+)")
-            .expect("regex")
+            .expect("security log regex literal must compile")
     })
 }
 
@@ -22,14 +23,14 @@ impl ParseSecurityLog for ShadowWall {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(SecuLog, i64)> {
+    ) -> SecurityLogParseResult<(SecuLog, i64)> {
         let caps = get_shadow_regex()
             .captures(line)
             .context("invalid log line")?;
 
         let timestamp = match caps.name("timestamp") {
             Some(d) => d.as_str(),
-            None => bail!("invalid datetime"),
+            None => return Err(anyhow::anyhow!("invalid datetime").into()),
         };
 
         let orig_addr = match caps.name("srcIp") {

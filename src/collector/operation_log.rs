@@ -1,17 +1,16 @@
 use std::{
     fs::File,
     io::{BufRead, BufReader, Lines},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
 };
 
-use anyhow::Result;
 use async_trait::async_trait;
 use giganto_client::RawEventKind;
+use tokio::sync::watch;
 
-use super::{CollectedBatch, Collector, POLLING_INTERVAL};
+use super::{
+    CollectedBatch, Collector, CollectorResult, position_bytes, shutdown_requested,
+    wait_for_poll_or_shutdown,
+};
 use crate::parser::operation_log;
 use crate::sender::BATCH_SIZE;
 
@@ -24,8 +23,10 @@ pub struct OplogCollector {
     count_sent: u64,
     file_polling_mode: bool,
     dir_polling_mode: bool,
-    running: Arc<AtomicBool>,
+    shutdown: watch::Receiver<bool>,
     cnt: u64,
+    committed_cnt: u64,
+    pending_commit: Option<u64>,
     success_cnt: u64,
     failed_cnt: u64,
     exhausted: bool,
@@ -43,7 +44,7 @@ impl OplogCollector {
         count_sent: u64,
         file_polling_mode: bool,
         dir_polling_mode: bool,
-        running: Arc<AtomicBool>,
+        shutdown: watch::Receiver<bool>,
     ) -> Self {
         Self {
             lines: reader.lines(),
@@ -52,22 +53,30 @@ impl OplogCollector {
             count_sent,
             file_polling_mode,
             dir_polling_mode,
-            running,
+            shutdown,
             cnt: 0,
+            committed_cnt: skip,
+            pending_commit: None,
             success_cnt: 0,
             failed_cnt: 0,
             exhausted: false,
         }
     }
+
+    /// Returns the number of successful and failed records observed so far.
+    #[must_use]
+    pub fn stats(&self) -> (u64, u64) {
+        (self.success_cnt, self.failed_cnt)
+    }
 }
 
 #[async_trait]
 impl Collector for OplogCollector {
-    fn protocol(&self) -> RawEventKind {
-        RawEventKind::OpLog
-    }
+    async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
+        if let Some(position) = self.pending_commit.take() {
+            self.committed_cnt = position;
+        }
 
-    async fn next_batch(&mut self) -> Result<Option<CollectedBatch>> {
         if self.exhausted {
             return Ok(None);
         }
@@ -75,7 +84,7 @@ impl Collector for OplogCollector {
         let mut buf: Vec<(i64, Vec<u8>)> = Vec::new();
         let mut record_bytes: Vec<usize> = Vec::new();
 
-        while self.running.load(Ordering::SeqCst) {
+        while !shutdown_requested(&self.shutdown) {
             if let Some(Ok(line)) = self.lines.next() {
                 self.cnt += 1;
                 if self.cnt <= self.skip {
@@ -91,12 +100,14 @@ impl Collector for OplogCollector {
                         continue;
                     };
 
-                let record_data = bincode::serialize(&oplog_data)?;
+                let record_data = bincode::serialize(&oplog_data).map_err(anyhow::Error::from)?;
                 record_bytes.push(line.len());
                 buf.push((timestamp, record_data));
 
                 if buf.len() >= BATCH_SIZE {
+                    self.pending_commit = Some(self.cnt);
                     return Ok(Some(CollectedBatch {
+                        kind: RawEventKind::OpLog,
                         events: buf,
                         record_bytes,
                     }));
@@ -108,7 +119,10 @@ impl Collector for OplogCollector {
                 }
             } else {
                 if self.file_polling_mode && !self.dir_polling_mode {
-                    tokio::time::sleep(POLLING_INTERVAL).await;
+                    if wait_for_poll_or_shutdown(&mut self.shutdown).await {
+                        self.exhausted = true;
+                        break;
+                    }
                     continue;
                 }
                 self.exhausted = true;
@@ -116,7 +130,7 @@ impl Collector for OplogCollector {
             }
         }
 
-        if !self.running.load(Ordering::SeqCst) {
+        if shutdown_requested(&self.shutdown) {
             self.exhausted = true;
         }
 
@@ -124,45 +138,38 @@ impl Collector for OplogCollector {
             return Ok(None);
         }
 
+        self.pending_commit = Some(self.cnt);
         Ok(Some(CollectedBatch {
+            kind: RawEventKind::OpLog,
             events: buf,
             record_bytes,
         }))
     }
 
-    fn position(&self) -> u64 {
-        self.cnt
-    }
-
-    fn stats(&self) -> (u64, u64) {
-        (self.success_cnt, self.failed_cnt)
-    }
-
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+    fn position(&self) -> Vec<u8> {
+        position_bytes(self.committed_cnt)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::BufReader,
-        sync::{Arc, atomic::AtomicBool},
-    };
+    use std::io::BufReader;
 
     use tempfile::tempdir;
+    use tokio::sync::watch;
 
     use super::*;
 
     fn make_collector(content: &[u8], skip: u64) -> (OplogCollector, tempfile::TempDir) {
-        make_collector_with_options(content, skip, 0, Arc::new(AtomicBool::new(true)))
+        let (_tx, shutdown) = watch::channel(false);
+        make_collector_with_options(content, skip, 0, shutdown)
     }
 
     fn make_collector_with_options(
         content: &[u8],
         skip: u64,
         count_sent: u64,
-        running: Arc<AtomicBool>,
+        shutdown: watch::Receiver<bool>,
     ) -> (OplogCollector, tempfile::TempDir) {
         let dir = tempdir().expect("temp dir");
         let path = dir.path().join("oplog.log");
@@ -175,7 +182,7 @@ mod tests {
             count_sent,
             false,
             false,
-            running,
+            shutdown,
         );
         (collector, dir)
     }
@@ -227,9 +234,9 @@ mod tests {
 
     #[tokio::test]
     async fn oplog_collector_respects_count_sent() {
-        let running = Arc::new(AtomicBool::new(true));
         let content = b"2023-01-02T07:36:17Z INFO one\n2023-01-02T07:36:18Z INFO two\n";
-        let (mut collector, _dir) = make_collector_with_options(content, 0, 1, running);
+        let (_tx, shutdown) = watch::channel(false);
+        let (mut collector, _dir) = make_collector_with_options(content, 0, 1, shutdown);
 
         let batch = collector
             .next_batch()
@@ -238,10 +245,7 @@ mod tests {
             .expect("collector should emit one record before exhausting");
 
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(collector.position(), 1);
-        assert_eq!(collector.stats(), (1, 0));
-        assert_eq!(collector.protocol(), RawEventKind::OpLog);
-        assert!(collector.is_running());
+        assert_eq!(batch.kind, RawEventKind::OpLog);
         assert!(
             collector
                 .next_batch()
@@ -249,15 +253,16 @@ mod tests {
                 .expect("collector should be exhausted")
                 .is_none()
         );
+        assert_eq!(collector.position(), b"1".to_vec());
+        assert_eq!(collector.stats(), (1, 0));
     }
 
     #[tokio::test]
     async fn oplog_collector_returns_none_when_running_flag_is_false() {
-        let running = Arc::new(AtomicBool::new(false));
+        let (_tx, shutdown) = watch::channel(true);
         let (mut collector, _dir) =
-            make_collector_with_options(b"2023-01-02T07:36:17Z INFO line\n", 0, 0, running);
+            make_collector_with_options(b"2023-01-02T07:36:17Z INFO line\n", 0, 0, shutdown);
 
-        assert!(!collector.is_running());
         assert!(
             collector
                 .next_batch()

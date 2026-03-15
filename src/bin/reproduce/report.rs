@@ -3,9 +3,39 @@ use std::io::{self, Write};
 
 use bytesize::ByteSize;
 use jiff::{SignedDuration, Timestamp, tz::TimeZone};
-use reproduce::config::{Config, InputType};
+use num_traits::ToPrimitive;
 
-use crate::controller::input_type;
+use crate::{
+    config::{Config, InputType},
+    input_type,
+};
+
+const ARRANGE_VAR: usize = 28;
+const MILLIS_PER_SECOND: f64 = 1_000.0;
+
+fn usize_to_u64(value: usize, field_name: &str) -> io::Result<u64> {
+    u64::try_from(value).map_err(|_| io::Error::other(format!("{field_name} exceeds u64")))
+}
+
+fn usize_to_f64(value: usize, field_name: &str) -> io::Result<f64> {
+    value
+        .to_f64()
+        .ok_or_else(|| io::Error::other(format!("{field_name} cannot be represented as f64")))
+}
+
+fn i128_to_f64(value: i128, field_name: &str) -> io::Result<f64> {
+    value
+        .to_f64()
+        .ok_or_else(|| io::Error::other(format!("{field_name} cannot be represented as f64")))
+}
+
+fn f64_to_u64_rounded(value: f64, field_name: &str) -> io::Result<u64> {
+    value.round().to_u64().ok_or_else(|| {
+        io::Error::other(format!(
+            "{field_name} cannot be represented as a rounded u64"
+        ))
+    })
+}
 
 pub(crate) struct Report {
     config: Config,
@@ -67,7 +97,7 @@ impl Report {
         self.process_cnt += 1;
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // report skipping is preserved for future parity with the legacy report.
     fn skip(&mut self, bytes: usize) {
         if !self.config.report {
             return;
@@ -81,8 +111,6 @@ impl Report {
     /// * `io::Error` when writing to the report file fails.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn end(&mut self) -> io::Result<()> {
-        const ARRANGE_VAR: usize = 28;
-
         if !self.config.report {
             return Ok(());
         }
@@ -103,9 +131,10 @@ impl Report {
         self.time_now = Timestamp::now();
         self.time_diff = self.time_now.duration_since(self.time_start);
 
-        #[allow(clippy::cast_precision_loss)] // approximation is ok
         if self.process_cnt > 0 {
-            self.avg_bytes = self.sum_bytes as f64 / self.process_cnt as f64;
+            let total_bytes = usize_to_f64(self.sum_bytes, "sum_bytes")?;
+            let processed_count = usize_to_f64(self.process_cnt, "process_cnt")?;
+            self.avg_bytes = total_bytes / processed_count;
         }
 
         report_file.write_all(b"--------------------------------------------------\n")?;
@@ -121,7 +150,11 @@ impl Report {
         let (header, processed_bytes) = match input_type {
             InputType::Log => {
                 // add 1 byte newline character per line
-                let processed_bytes = (self.sum_bytes + self.process_cnt) as u64;
+                let processed_bytes = self
+                    .sum_bytes
+                    .checked_add(self.process_cnt)
+                    .ok_or_else(|| io::Error::other("processed bytes overflowed usize"))?;
+                let processed_bytes = usize_to_u64(processed_bytes, "processed bytes")?;
                 ("Input(LOG)", processed_bytes)
             }
             InputType::Dir | InputType::Elastic => ("", 0),
@@ -154,26 +187,29 @@ impl Report {
             "{:width$}{} ({})\n",
             "Skip Count:",
             self.skip_cnt,
-            ByteSize(self.skip_bytes as u64),
+            ByteSize(usize_to_u64(self.skip_bytes, "skip_bytes")?),
             width = ARRANGE_VAR,
         ))?;
         let elapsed_ms = self.time_diff.as_millis();
-        #[allow(clippy::cast_precision_loss)]
-        // approximation is okay; i128 -> f64 loses precision but that's fine for display
-        let elapsed_sec = elapsed_ms as f64 / 1_000.;
+        let elapsed_sec = i128_to_f64(elapsed_ms, "elapsed milliseconds")? / MILLIS_PER_SECOND;
         report_file.write_fmt(format_args!(
             "{:width$}{:.2} sec\n",
             "Elapsed Time:",
             elapsed_sec,
             width = ARRANGE_VAR,
         ))?;
-        #[allow(clippy::cast_possible_truncation)] // rounded number
-        #[allow(clippy::cast_precision_loss)] // approximation is okay
-        #[allow(clippy::cast_sign_loss)] // positive number
+        let performance = if elapsed_ms <= 0 || processed_bytes == 0 {
+            0
+        } else {
+            let processed_bytes_f64 = processed_bytes
+                .to_f64()
+                .ok_or_else(|| io::Error::other("processed bytes cannot be represented as f64"))?;
+            f64_to_u64_rounded(processed_bytes_f64 / elapsed_sec, "throughput")?
+        };
         report_file.write_fmt(format_args!(
             "{:width$}{}/s\n",
             "Performance:",
-            ByteSize((processed_bytes as f64 / (elapsed_ms as f64 / 1_000.)).round() as u64),
+            ByteSize(performance),
             width = ARRANGE_VAR,
         ))?;
         Ok(())
@@ -185,16 +221,22 @@ mod tests {
     use std::net::SocketAddr;
     use std::path::PathBuf;
 
+    use reproduce::config::GigantoConfig;
+
     use super::*;
 
     /// Creates a test `Config` with the given parameters.
     fn test_config(report: bool, kind: &str, input: &str, report_dir: Option<PathBuf>) -> Config {
         Config {
-            cert: String::new(),
-            key: String::new(),
-            ca_certs: vec![],
-            giganto_ingest_srv_addr: "127.0.0.1:8080".parse::<SocketAddr>().expect("valid addr"),
-            giganto_name: String::from("test"),
+            giganto: GigantoConfig {
+                cert: String::new(),
+                key: String::new(),
+                ca_certs: vec![],
+                ingest_srv_addr: "127.0.0.1:8080"
+                    .parse::<SocketAddr>()
+                    .expect("test socket address literal should parse"),
+                name: String::from("test"),
+            },
             kind: String::from(kind),
             input: String::from(input),
             report,

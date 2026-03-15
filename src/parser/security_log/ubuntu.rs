@@ -1,27 +1,31 @@
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::log::SecuLog;
 use jiff::{Timestamp, tz::TimeZone};
 use regex::Regex;
 
-use super::{ParseSecurityLog, SecurityLogInfo, Ubuntu};
+use super::{ParseSecurityLog, SecurityLogInfo, SecurityLogParseResult, Ubuntu};
 
 fn get_ubuntu_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
 
-    LOG_REGEX
-        .get_or_init(|| Regex::new(r"(?<datetime>\w{3} \d{1,2} \d{2}:\d{2}:\d{2})").expect("regex"))
+    LOG_REGEX.get_or_init(|| {
+        Regex::new(r"(?<datetime>\w{3} \d{1,2} \d{2}:\d{2}:\d{2})")
+            .expect("security log regex literal must compile")
+    })
 }
 
-fn parse_ubuntu_timestamp_ns(datetime: &str) -> Result<i64> {
+fn parse_ubuntu_timestamp_ns(datetime: &str) -> SecurityLogParseResult<i64> {
     let year = Timestamp::now().to_zoned(TimeZone::UTC).year();
     let datetime_with_year = format!("{year} {datetime} +0900");
-    Timestamp::strptime("%Y %b %d %H:%M:%S %z", datetime_with_year)
-        .map_err(|e| anyhow!("{e:?}"))?
-        .as_nanosecond()
-        .try_into()
-        .map_err(|e| anyhow!("{e:?}"))
+    Ok(
+        Timestamp::strptime("%Y %b %d %H:%M:%S %z", datetime_with_year)
+            .map_err(|e| anyhow!("{e:?}"))?
+            .as_nanosecond()
+            .try_into()
+            .map_err(|e| anyhow!("{e:?}"))?,
+    )
 }
 
 impl ParseSecurityLog for Ubuntu {
@@ -29,14 +33,14 @@ impl ParseSecurityLog for Ubuntu {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(SecuLog, i64)> {
+    ) -> SecurityLogParseResult<(SecuLog, i64)> {
         let caps = get_ubuntu_regex()
             .captures(line)
             .context("invalid log line")?;
 
         let datetime = match caps.name("datetime") {
             Some(d) => d.as_str(),
-            None => bail!("invalid datetime"),
+            None => return Err(anyhow::anyhow!("invalid datetime").into()),
         };
 
         let timestamp = parse_ubuntu_timestamp_ns(datetime)? + serial;
