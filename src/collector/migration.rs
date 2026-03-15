@@ -169,3 +169,196 @@ where
         self.running.load(Ordering::SeqCst)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::Write,
+        sync::{Arc, atomic::AtomicBool},
+    };
+
+    use giganto_client::{RawEventKind, ingest::network::Conn};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    // Two distinct Conn migration records (tab-separated, 17 fields each).
+    // Fields: timestamp, skipped, orig_addr, orig_port, resp_addr, resp_port,
+    // proto, conn_state, start_time, duration, service, orig_bytes, resp_bytes,
+    // orig_pkts, resp_pkts, orig_l2_bytes, resp_l2_bytes
+    const MIGR_CONN_1: &str = "1669773412.655728000\tsrc1\t192.168.1.77\t57655\t209.197.168.151\t1024\t6\tSF\t1669773412.655728000\t2256935000\tirc-dcc-data\t124\t42208\t28\t43\t1592\t44452";
+    const MIGR_CONN_2: &str = "1669773413.000000000\tsrc2\t10.0.0.1\t12345\t8.8.8.8\t443\t6\tSF\t1669773413.000000000\t123456000\t-\t0\t1500\t1\t1\t52\t1552";
+
+    fn make_conn_collector(
+        lines: &[&str],
+        skip: u64,
+    ) -> (MigrationCollector<Conn>, tempfile::TempDir) {
+        make_conn_collector_with_options(lines, skip, 0, Arc::new(AtomicBool::new(true)))
+    }
+
+    fn make_conn_collector_with_options(
+        lines: &[&str],
+        skip: u64,
+        count_sent: u64,
+        running: Arc<AtomicBool>,
+    ) -> (MigrationCollector<Conn>, tempfile::TempDir) {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("conn.log");
+        let mut f = std::fs::File::create(&path).expect("create conn.log");
+        for line in lines {
+            writeln!(f, "{line}").expect("write line");
+        }
+        drop(f);
+
+        let reader = csv::ReaderBuilder::new()
+            .comment(Some(b'#'))
+            .delimiter(b'\t')
+            .has_headers(false)
+            .flexible(true)
+            .from_path(&path)
+            .expect("open csv");
+        let iter = reader.into_records();
+        let collector = MigrationCollector::<Conn>::new(
+            iter,
+            RawEventKind::Conn,
+            skip,
+            count_sent,
+            false,
+            false,
+            running,
+        );
+        (collector, dir)
+    }
+
+    #[tokio::test]
+    async fn migration_collector_batches_valid_conn_records() {
+        let lines = [MIGR_CONN_1, MIGR_CONN_2];
+        let (mut collector, _dir) = make_conn_collector(&lines, 0);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch")
+            .expect("some batch");
+        assert_eq!(batch.events.len(), 2);
+        assert_eq!(batch.record_bytes.len(), 2);
+
+        let none = collector.next_batch().await.expect("second call");
+        assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn migration_collector_stats_after_exhaustion() {
+        let lines = [MIGR_CONN_1, MIGR_CONN_2];
+        let (mut collector, _dir) = make_conn_collector(&lines, 0);
+
+        while collector.next_batch().await.expect("next_batch").is_some() {}
+        assert_eq!(collector.stats(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn migration_collector_returns_none_on_empty_input() {
+        let (mut collector, _dir) = make_conn_collector(&[], 0);
+        let result = collector.next_batch().await.expect("next_batch");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn migration_collector_respects_count_sent() {
+        let running = Arc::new(AtomicBool::new(true));
+        let (mut collector, _dir) =
+            make_conn_collector_with_options(&[MIGR_CONN_1, MIGR_CONN_2], 0, 1, running);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should emit one event before hitting the count limit");
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(collector.position(), 1);
+        assert_eq!(collector.stats(), (1, 0));
+        assert_eq!(collector.protocol(), RawEventKind::Conn);
+        assert!(collector.is_running());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should now be exhausted")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_collector_skips_duplicates_and_counts_invalid_rows() {
+        let lines = [MIGR_CONN_1, MIGR_CONN_1, "invalid\trow"];
+        let (mut collector, _dir) = make_conn_collector(&lines, 0);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should keep the first valid record");
+
+        assert_eq!(batch.events.len(), 1);
+
+        while collector
+            .next_batch()
+            .await
+            .expect("draining collector should succeed")
+            .is_some()
+        {}
+        assert_eq!(collector.stats(), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn migration_collector_returns_none_when_running_flag_is_false() {
+        let running = Arc::new(AtomicBool::new(false));
+        let (mut collector, _dir) = make_conn_collector_with_options(&[MIGR_CONN_1], 0, 0, running);
+
+        assert!(!collector.is_running());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("stopped collector should not fail")
+                .is_none()
+        );
+        assert_eq!(collector.stats(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn migration_collector_flushes_at_batch_size_boundary() {
+        let lines = (0..=BATCH_SIZE)
+            .map(|index| {
+                if index % 2 == 0 {
+                    MIGR_CONN_1
+                } else {
+                    MIGR_CONN_2
+                }
+            })
+            .collect::<Vec<_>>();
+        let (mut collector, _dir) = make_conn_collector(&lines, 0);
+
+        let first = collector
+            .next_batch()
+            .await
+            .expect("first batch should succeed")
+            .expect("collector should flush the first full batch");
+        let second = collector
+            .next_batch()
+            .await
+            .expect("second batch should succeed")
+            .expect("collector should keep the remainder for the next call");
+
+        assert_eq!(first.events.len(), BATCH_SIZE);
+        assert_eq!(second.events.len(), 1);
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should then exhaust")
+                .is_none()
+        );
+    }
+}

@@ -142,3 +142,159 @@ impl Collector for OplogCollector {
         self.running.load(Ordering::SeqCst)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::BufReader,
+        sync::{Arc, atomic::AtomicBool},
+    };
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn make_collector(content: &[u8], skip: u64) -> (OplogCollector, tempfile::TempDir) {
+        make_collector_with_options(content, skip, 0, Arc::new(AtomicBool::new(true)))
+    }
+
+    fn make_collector_with_options(
+        content: &[u8],
+        skip: u64,
+        count_sent: u64,
+        running: Arc<AtomicBool>,
+    ) -> (OplogCollector, tempfile::TempDir) {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("oplog.log");
+        std::fs::write(&path, content).expect("write oplog");
+        let file = std::fs::File::open(&path).expect("open oplog");
+        let collector = OplogCollector::new(
+            BufReader::new(file),
+            "sensor".to_string(),
+            skip,
+            count_sent,
+            false,
+            false,
+            running,
+        );
+        (collector, dir)
+    }
+
+    #[tokio::test]
+    async fn oplog_collector_batches_valid_lines() {
+        let content = b"2023-01-02T07:36:17Z INFO msg1\n2023-01-02T07:36:18Z WARN msg2\n";
+        let (mut collector, _dir) = make_collector(content, 0);
+
+        let mut total_events = 0;
+        while let Some(batch) = collector.next_batch().await.expect("next_batch") {
+            total_events += batch.events.len();
+        }
+        assert_eq!(total_events, 2);
+        assert_eq!(collector.stats(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn oplog_collector_counts_failures() {
+        let content = b"2023-01-02T07:36:17Z INFO good\nnot-a-log-line\n";
+        let (mut collector, _dir) = make_collector(content, 0);
+
+        let mut total_events = 0;
+        while let Some(batch) = collector.next_batch().await.expect("next_batch") {
+            total_events += batch.events.len();
+        }
+        assert_eq!(total_events, 1);
+        assert_eq!(collector.stats(), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn oplog_collector_returns_none_on_empty_input() {
+        let (mut collector, _dir) = make_collector(b"", 0);
+        let result = collector.next_batch().await.expect("next_batch");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn oplog_collector_skip_first_lines() {
+        let content = b"2023-01-02T07:36:17Z INFO skip\n2023-01-02T07:36:18Z INFO keep\n";
+        let (mut collector, _dir) = make_collector(content, 1);
+
+        let mut total_events = 0;
+        while let Some(batch) = collector.next_batch().await.expect("next_batch") {
+            total_events += batch.events.len();
+        }
+        assert_eq!(total_events, 1);
+    }
+
+    #[tokio::test]
+    async fn oplog_collector_respects_count_sent() {
+        let running = Arc::new(AtomicBool::new(true));
+        let content = b"2023-01-02T07:36:17Z INFO one\n2023-01-02T07:36:18Z INFO two\n";
+        let (mut collector, _dir) = make_collector_with_options(content, 0, 1, running);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should emit one record before exhausting");
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(collector.position(), 1);
+        assert_eq!(collector.stats(), (1, 0));
+        assert_eq!(collector.protocol(), RawEventKind::OpLog);
+        assert!(collector.is_running());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should be exhausted")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn oplog_collector_returns_none_when_running_flag_is_false() {
+        let running = Arc::new(AtomicBool::new(false));
+        let (mut collector, _dir) =
+            make_collector_with_options(b"2023-01-02T07:36:17Z INFO line\n", 0, 0, running);
+
+        assert!(!collector.is_running());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("stopped collector should not fail")
+                .is_none()
+        );
+        assert_eq!(collector.stats(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn oplog_collector_flushes_at_batch_size_boundary() {
+        let repeated = std::iter::repeat_n("2023-01-02T07:36:17Z INFO line", BATCH_SIZE + 1)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content = format!("{repeated}\n");
+        let (mut collector, _dir) = make_collector(content.as_bytes(), 0);
+
+        let first = collector
+            .next_batch()
+            .await
+            .expect("first batch should succeed")
+            .expect("collector should flush the first full batch");
+        let second = collector
+            .next_batch()
+            .await
+            .expect("second batch should succeed")
+            .expect("collector should keep the remainder for the next call");
+
+        assert_eq!(first.events.len(), BATCH_SIZE);
+        assert_eq!(second.events.len(), 1);
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should then exhaust")
+                .is_none()
+        );
+    }
+}

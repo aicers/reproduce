@@ -179,3 +179,227 @@ impl<B: BufRead> Iterator for BinaryLines<B> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::{self, BufRead, BufReader, Read, Write},
+        sync::{Arc, atomic::AtomicBool},
+    };
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn collect_binary_lines(data: &[u8]) -> Vec<Vec<u8>> {
+        BinaryLines::new(BufReader::new(data))
+            .map(|r| r.expect("io error in BinaryLines"))
+            .collect()
+    }
+
+    struct FailingBuf;
+
+    impl Read for FailingBuf {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("forced read failure"))
+        }
+    }
+
+    impl BufRead for FailingBuf {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            Err(io::Error::other("forced fill_buf failure"))
+        }
+
+        fn consume(&mut self, _amt: usize) {}
+    }
+
+    fn make_log_collector(
+        content: &[u8],
+        skip: u64,
+        count_sent: u64,
+        running: Arc<AtomicBool>,
+    ) -> (LogCollector, tempfile::TempDir) {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("test.log");
+        std::fs::write(&path, content).expect("log fixture should be written");
+        let collector = LogCollector::new(
+            &path,
+            "kind".to_string(),
+            skip,
+            count_sent,
+            false,
+            false,
+            running,
+        )
+        .expect("log collector should be created");
+        (collector, dir)
+    }
+
+    #[test]
+    fn binary_lines_strips_lf() {
+        assert_eq!(collect_binary_lines(b"a\nb\n"), vec![b"a", b"b"]);
+    }
+
+    #[test]
+    fn binary_lines_strips_crlf() {
+        assert_eq!(collect_binary_lines(b"a\r\nb\r\n"), vec![b"a", b"b"]);
+    }
+
+    #[test]
+    fn binary_lines_empty_input() {
+        let result = collect_binary_lines(b"");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn binary_lines_no_trailing_newline() {
+        assert_eq!(collect_binary_lines(b"hello"), vec![b"hello"]);
+    }
+
+    #[test]
+    fn binary_lines_propagates_reader_errors() {
+        let err = BinaryLines::new(FailingBuf)
+            .next()
+            .expect("failing reader should still yield an iterator item")
+            .expect_err("failing reader must propagate the I/O error");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert_eq!(err.to_string(), "forced fill_buf failure");
+    }
+
+    #[tokio::test]
+    async fn log_collector_returns_one_batch_per_nonempty_line() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("test.log");
+        let mut f = std::fs::File::create(&path).expect("create file");
+        writeln!(f, "line1").expect("write line1");
+        writeln!(f, "line2").expect("write line2");
+        drop(f);
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector =
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+                .expect("create collector");
+
+        let b1 = collector
+            .next_batch()
+            .await
+            .expect("next_batch 1")
+            .expect("some batch 1");
+        assert_eq!(b1.events.len(), 1);
+
+        let b2 = collector
+            .next_batch()
+            .await
+            .expect("next_batch 2")
+            .expect("some batch 2");
+        assert_eq!(b2.events.len(), 1);
+
+        let none = collector.next_batch().await.expect("next_batch 3");
+        assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn log_collector_skips_empty_lines() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("test.log");
+        let mut f = std::fs::File::create(&path).expect("create file");
+        writeln!(f, "line1").expect("write line1");
+        writeln!(f).expect("write empty line");
+        writeln!(f, "line2").expect("write line2");
+        drop(f);
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector =
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+                .expect("create collector");
+
+        let mut event_count = 0;
+        while let Some(batch) = collector.next_batch().await.expect("next_batch") {
+            event_count += batch.events.len();
+        }
+        assert_eq!(event_count, 2);
+    }
+
+    #[tokio::test]
+    async fn log_collector_exhausts_cleanly() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("test.log");
+        std::fs::write(&path, b"line\n").expect("write");
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector =
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+                .expect("create collector");
+
+        collector.next_batch().await.expect("first call");
+        let none = collector.next_batch().await.expect("second call");
+        assert!(none.is_none());
+        let none2 = collector.next_batch().await.expect("third call");
+        assert!(none2.is_none());
+    }
+
+    #[tokio::test]
+    async fn log_collector_stats_after_exhaustion() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("test.log");
+        std::fs::write(&path, b"line1\nline2\n").expect("write");
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector =
+            LogCollector::new(&path, "kind".to_string(), 0, 0, false, false, running)
+                .expect("create collector");
+
+        while collector.next_batch().await.expect("next_batch").is_some() {}
+        assert_eq!(collector.stats(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn log_collector_respects_skip_and_count_sent() {
+        let running = Arc::new(AtomicBool::new(true));
+        let (mut collector, _dir) = make_log_collector(b"skip\nkeep\nextra\n", 1, 1, running);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should emit the first unskipped line");
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.record_bytes, vec![4]);
+        assert_eq!(collector.position(), 2);
+        assert_eq!(collector.stats(), (1, 0));
+        assert_eq!(collector.protocol(), RawEventKind::Log);
+        assert!(collector.is_running());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should be exhausted")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn log_collector_returns_none_when_running_flag_is_false() {
+        let running = Arc::new(AtomicBool::new(false));
+        let (mut collector, _dir) = make_log_collector(b"line\n", 0, 0, running);
+
+        assert!(collector.protocol() == RawEventKind::Log);
+        assert!(!collector.is_running());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("stopped collector should not fail")
+                .is_none()
+        );
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("exhausted collector should stay empty")
+                .is_none()
+        );
+        assert_eq!(collector.stats(), (0, 0));
+    }
+}

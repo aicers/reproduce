@@ -1,21 +1,41 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use async_trait::async_trait;
 use giganto_client::{RawEventKind, frame::SendError};
+use thiserror::Error;
 use tracing::info;
 
 use crate::collector::Collector;
-use crate::sender::GigantoSender;
+use crate::sender::{GigantoSender, SenderError};
 
+#[derive(Debug, Error)]
+pub enum PipelineError {
+    #[error(transparent)]
+    Collect(#[from] anyhow::Error),
+
+    #[error(transparent)]
+    Sender(#[from] SenderError),
+
+    #[error("{0:?}")]
+    Send(SendError),
+}
+
+/// Defines the sender operations required by the pipeline.
 #[async_trait]
-trait PipelineSender {
-    async fn ensure_header_sent(&mut self, protocol: RawEventKind) -> Result<()>;
+pub trait PipelineSender {
+    async fn ensure_header_sent(
+        &mut self,
+        protocol: RawEventKind,
+    ) -> std::result::Result<(), SenderError>;
     async fn send_batch(&mut self, events: &[(i64, Vec<u8>)]) -> Result<(), SendError>;
-    async fn reconnect(&mut self) -> Result<()>;
+    async fn reconnect(&mut self) -> std::result::Result<(), SenderError>;
 }
 
 #[async_trait]
 impl PipelineSender for GigantoSender {
-    async fn ensure_header_sent(&mut self, protocol: RawEventKind) -> Result<()> {
+    async fn ensure_header_sent(
+        &mut self,
+        protocol: RawEventKind,
+    ) -> std::result::Result<(), SenderError> {
         GigantoSender::ensure_header_sent(self, protocol).await
     }
 
@@ -23,7 +43,7 @@ impl PipelineSender for GigantoSender {
         GigantoSender::send_batch(self, events).await
     }
 
-    async fn reconnect(&mut self) -> Result<()> {
+    async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
         GigantoSender::reconnect(self).await
     }
 }
@@ -60,16 +80,24 @@ pub async fn run_pipeline(
     sender: &mut GigantoSender,
     initial_checkpoint: u64,
     mut on_record_bytes: impl FnMut(usize),
-) -> Result<u64> {
+) -> std::result::Result<u64, PipelineError> {
     run_pipeline_with_sender(collector, sender, initial_checkpoint, &mut on_record_bytes).await
 }
 
-async fn run_pipeline_with_sender<S, F>(
+/// Drives a collector using any sender that implements [`PipelineSender`].
+///
+/// `on_record_bytes` is called once per record with the source byte size for
+/// report accounting.
+///
+/// # Errors
+///
+/// Returns an error if the collector, sender, or reconnection logic fails.
+pub async fn run_pipeline_with_sender<S, F>(
     collector: &mut dyn Collector,
     sender: &mut S,
     initial_checkpoint: u64,
     on_record_bytes: &mut F,
-) -> Result<u64>
+) -> std::result::Result<u64, PipelineError>
 where
     S: PipelineSender + ?Sized,
     F: FnMut(usize) + ?Sized,
@@ -96,14 +124,14 @@ where
                     sender.reconnect().await?;
                     sender.ensure_header_sent(protocol).await?;
                 }
-                Err(e) => bail!("{e:?}"),
+                Err(e) => return Err(PipelineError::Send(e)),
             }
         }
 
         if shutdown_requested {
             match sender.send_batch(&batch.events).await {
                 Ok(()) => {}
-                Err(e) => bail!("{e:?}"),
+                Err(e) => return Err(PipelineError::Send(e)),
             }
         }
 
@@ -179,7 +207,10 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ScriptedSender {
-        async fn ensure_header_sent(&mut self, _protocol: RawEventKind) -> Result<()> {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
             self.header_sends += 1;
             Ok(())
         }
@@ -194,7 +225,7 @@ mod tests {
             Ok(())
         }
 
-        async fn reconnect(&mut self) -> Result<()> {
+        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
             self.reconnects += 1;
             self.running.store(false, Ordering::SeqCst);
             Ok(())
@@ -244,7 +275,10 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for MultiRetrySender {
-        async fn ensure_header_sent(&mut self, _protocol: RawEventKind) -> Result<()> {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
             self.header_sends += 1;
             Ok(())
         }
@@ -259,7 +293,7 @@ mod tests {
             Ok(())
         }
 
-        async fn reconnect(&mut self) -> Result<()> {
+        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
             self.reconnects += 1;
             Ok(())
         }
@@ -302,7 +336,10 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for FailingSender {
-        async fn ensure_header_sent(&mut self, _protocol: RawEventKind) -> Result<()> {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
             self.header_sends += 1;
             Ok(())
         }
@@ -314,7 +351,7 @@ mod tests {
             )))
         }
 
-        async fn reconnect(&mut self) -> Result<()> {
+        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
             self.running.store(false, Ordering::SeqCst);
             Ok(())
         }
@@ -348,5 +385,166 @@ mod tests {
         );
         assert_eq!(seen_bytes, vec![128]);
         assert_eq!(sender.send_attempts, 2);
+    }
+
+    struct ReconnectFailingSender {
+        reconnects: usize,
+    }
+
+    #[async_trait]
+    impl PipelineSender for ReconnectFailingSender {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            Ok(())
+        }
+
+        async fn send_batch(&mut self, _events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+            Err(SendError::WriteError(WriteError::Stopped(
+                VarInt::from_u32(0),
+            )))
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+            self.reconnects += 1;
+            Err(SenderError::Context {
+                context: "reconnect failed",
+                source: anyhow::anyhow!("reconnect failed"),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn propagates_reconnect_failure() {
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = OneBatchCollector {
+            running,
+            yielded: false,
+            pos: 0,
+            next_pos: 42,
+        };
+        let mut sender = ReconnectFailingSender { reconnects: 0 };
+
+        let err = run_pipeline_with_sender(&mut collector, &mut sender, 0, &mut |_| {})
+            .await
+            .expect_err("reconnect failures must be returned to the caller");
+
+        assert_eq!(sender.reconnects, 1);
+        assert!(err.to_string().contains("reconnect failed"));
+    }
+
+    fn serialization_failure(message: &str) -> SendError {
+        SendError::SerializationFailure(Box::new(bincode::ErrorKind::Custom(message.to_string())))
+    }
+
+    struct NonWriteErrorSender {
+        send_attempts: usize,
+        reconnects: usize,
+    }
+
+    #[async_trait]
+    impl PipelineSender for NonWriteErrorSender {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            Ok(())
+        }
+
+        async fn send_batch(&mut self, _events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+            self.send_attempts += 1;
+            Err(serialization_failure("non-write failure"))
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+            self.reconnects += 1;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn propagates_non_write_send_error_without_reconnect() {
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = OneBatchCollector {
+            running,
+            yielded: false,
+            pos: 0,
+            next_pos: 44,
+        };
+        let mut sender = NonWriteErrorSender {
+            send_attempts: 0,
+            reconnects: 0,
+        };
+
+        let err = run_pipeline_with_sender(&mut collector, &mut sender, 0, &mut |_| {})
+            .await
+            .expect_err("non-write send errors must be returned immediately");
+
+        assert_eq!(sender.send_attempts, 1);
+        assert_eq!(sender.reconnects, 0);
+        assert!(
+            err.to_string().contains("SerializationFailure"),
+            "unexpected error: {err}",
+        );
+    }
+
+    struct ShutdownNonWriteErrorSender {
+        send_attempts: usize,
+        reconnects: usize,
+        running: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl PipelineSender for ShutdownNonWriteErrorSender {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            Ok(())
+        }
+
+        async fn send_batch(&mut self, _events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+            self.send_attempts += 1;
+            if self.send_attempts == 1 {
+                return Err(SendError::WriteError(WriteError::Stopped(
+                    VarInt::from_u32(0),
+                )));
+            }
+            Err(serialization_failure("shutdown flush failed"))
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+            self.reconnects += 1;
+            self.running.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_flush_propagates_non_write_error() {
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = OneBatchCollector {
+            running: running.clone(),
+            yielded: false,
+            pos: 0,
+            next_pos: 55,
+        };
+        let mut sender = ShutdownNonWriteErrorSender {
+            send_attempts: 0,
+            reconnects: 0,
+            running,
+        };
+
+        let err = run_pipeline_with_sender(&mut collector, &mut sender, 0, &mut |_| {})
+            .await
+            .expect_err("shutdown flush failures must be returned");
+
+        assert_eq!(sender.send_attempts, 2);
+        assert_eq!(sender.reconnects, 1);
+        assert!(
+            err.to_string().contains("SerializationFailure"),
+            "unexpected error: {err}",
+        );
     }
 }

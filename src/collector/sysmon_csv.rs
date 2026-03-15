@@ -220,3 +220,208 @@ where
         self.running.load(Ordering::SeqCst)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::Write,
+        sync::{Arc, atomic::AtomicBool},
+    };
+
+    use giganto_client::{RawEventKind, ingest::sysmon::ProcessCreate};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    // Two distinct ProcessCreate records (different timestamp and process_id to avoid
+    // the consecutive-duplicate guard).
+    // Fields (tab-separated, 0-indexed): agent_name, agent_id, event_action, utc_time,
+    // process_guid, process_id, image, file_version, description, product, company,
+    // original_file_name, command_line, current_directory, user, logon_guid, logon_id,
+    // terminal_session_id, integrity_level, hashes, parent_process_guid,
+    // parent_process_id, parent_image, parent_command_line, parent_user
+    const SYSMON_PC_1: &str = "sensor\tagent001\tProcess Create\t2023-01-15 14:30:45.123456\t{AAAA-0001}\t1234\tC:\\notepad.exe\t1.0\tdesc\tprod\tco\torig.exe\tnotepad.exe /f\tC:\\Windows\\\tSYSTEM\t{BBBB-0001}\t0x3e7\t0\tSystem\tSHA256=abc123\t{CCCC-0001}\t5678\tC:\\explorer.exe\texplorer.exe\tSYSTEM";
+    const SYSMON_PC_2: &str = "sensor\tagent001\tProcess Create\t2023-01-15 14:30:46.000000\t{AAAA-0002}\t2345\tC:\\cmd.exe\t2.0\tdesc2\tprod2\tco2\torig2.exe\tcmd.exe /c\tC:\\Temp\\\tUSER\t{BBBB-0002}\t0x1234\t1\tMedium\tSHA256=def456\t{CCCC-0002}\t6789\tC:\\svchost.exe\tsvchost.exe\tSYSTEM";
+    const SYSMON_PC_INVALID_TIME: &str = "sensor\tagent001\tProcess Create\tinvalid-time\t{AAAA-0003}\t3456\tC:\\calc.exe\t3.0\tdesc3\tprod3\tco3\torig3.exe\tcalc.exe\tC:\\Temp\\\tUSER\t{BBBB-0003}\t0x1235\t1\tMedium\tSHA256=ghi789\t{CCCC-0003}\t6790\tC:\\svchost.exe\tsvchost.exe\tSYSTEM";
+
+    // open_sysmon_csv_file uses has_headers(true), so the CSV reader consumes
+    // the first non-comment row as column headers.  Prepend a header row so
+    // that every data row is yielded by into_records().
+    const SYSMON_HEADER: &str = "agent_name\tagent_id\tevent_action\tutc_time\tprocess_guid\tprocess_id\timage\t\
+         file_version\tdescription\tproduct\tcompany\toriginal_file_name\tcommand_line\t\
+         current_directory\tuser\tlogon_guid\tlogon_id\tterminal_session_id\t\
+         integrity_level\thashes\tparent_process_guid\tparent_process_id\t\
+         parent_image\tparent_command_line\tparent_user";
+
+    fn make_sysmon_collector(
+        lines: &[&str],
+        skip: u64,
+    ) -> (SysmonCollector<ProcessCreate>, tempfile::TempDir) {
+        make_sysmon_collector_with_options(lines, skip, 0, Arc::new(AtomicBool::new(true)))
+    }
+
+    fn make_sysmon_collector_with_options(
+        lines: &[&str],
+        skip: u64,
+        count_sent: u64,
+        running: Arc<AtomicBool>,
+    ) -> (SysmonCollector<ProcessCreate>, tempfile::TempDir) {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("sysmon.csv");
+        let mut f = std::fs::File::create(&path).expect("create sysmon.csv");
+        writeln!(f, "{SYSMON_HEADER}").expect("write header");
+        for line in lines {
+            writeln!(f, "{line}").expect("write line");
+        }
+        drop(f);
+
+        let reader =
+            crate::parser::sysmon_csv::open_sysmon_csv_file(&path).expect("open sysmon csv");
+        let iter = reader.into_records();
+        let collector = SysmonCollector::<ProcessCreate>::new(
+            iter,
+            RawEventKind::ProcessCreate,
+            skip,
+            count_sent,
+            false,
+            false,
+            running,
+        );
+        (collector, dir)
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_batches_valid_process_create_records() {
+        let lines = [SYSMON_PC_1, SYSMON_PC_2];
+        let (mut collector, _dir) = make_sysmon_collector(&lines, 0);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch")
+            .expect("some batch");
+        assert_eq!(batch.events.len(), 2);
+        assert_eq!(batch.record_bytes.len(), 2);
+
+        let none = collector.next_batch().await.expect("second call");
+        assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_stats_after_exhaustion() {
+        let lines = [SYSMON_PC_1, SYSMON_PC_2];
+        let (mut collector, _dir) = make_sysmon_collector(&lines, 0);
+
+        while collector.next_batch().await.expect("next_batch").is_some() {}
+        assert_eq!(collector.stats(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_returns_none_on_empty_file() {
+        let (mut collector, _dir) = make_sysmon_collector(&[], 0);
+        let result = collector.next_batch().await.expect("next_batch");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_respects_count_sent_and_sets_header_reset() {
+        let running = Arc::new(AtomicBool::new(true));
+        let (mut collector, _dir) =
+            make_sysmon_collector_with_options(&[SYSMON_PC_1, SYSMON_PC_2], 0, 1, running);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should emit one record before exhausting");
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(collector.position(), 1);
+        assert_eq!(collector.stats(), (1, 0));
+        assert_eq!(collector.protocol(), RawEventKind::ProcessCreate);
+        assert!(collector.is_running());
+        assert!(collector.needs_header_reset());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should be exhausted")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_skips_duplicates_and_counts_invalid_rows() {
+        let lines = [
+            SYSMON_PC_1,
+            SYSMON_PC_1,
+            SYSMON_PC_INVALID_TIME,
+            SYSMON_PC_2,
+        ];
+        let (mut collector, _dir) = make_sysmon_collector(&lines, 0);
+
+        while collector
+            .next_batch()
+            .await
+            .expect("draining collector should succeed")
+            .is_some()
+        {}
+
+        assert_eq!(collector.stats(), (2, 1));
+        assert!(collector.needs_header_reset());
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_returns_none_when_running_flag_is_false() {
+        let running = Arc::new(AtomicBool::new(false));
+        let (mut collector, _dir) =
+            make_sysmon_collector_with_options(&[SYSMON_PC_1], 0, 0, running);
+
+        assert!(!collector.is_running());
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("stopped collector should not fail")
+                .is_none()
+        );
+        assert!(collector.needs_header_reset());
+        assert_eq!(collector.stats(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_flushes_at_batch_size_boundary() {
+        let lines = (0..=BATCH_SIZE)
+            .map(|index| {
+                if index % 2 == 0 {
+                    SYSMON_PC_1
+                } else {
+                    SYSMON_PC_2
+                }
+            })
+            .collect::<Vec<_>>();
+        let (mut collector, _dir) = make_sysmon_collector(&lines, 0);
+
+        let first = collector
+            .next_batch()
+            .await
+            .expect("first batch should succeed")
+            .expect("collector should flush the first full batch");
+        let second = collector
+            .next_batch()
+            .await
+            .expect("second batch should succeed")
+            .expect("collector should keep the remainder for the next call");
+
+        assert_eq!(first.events.len(), BATCH_SIZE);
+        assert_eq!(second.events.len(), 1);
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should then exhaust")
+                .is_none()
+        );
+        assert!(collector.needs_header_reset());
+    }
+}
