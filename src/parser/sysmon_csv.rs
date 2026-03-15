@@ -30,6 +30,7 @@ use reqwest::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use thiserror::Error;
+use tokio::task;
 use tracing::{error, info};
 
 use self::{
@@ -81,7 +82,11 @@ pub async fn fetch_elastic_search(
 
     let size = elasticsearch.size;
     let dump_dir = format!("{}/{exec_time}", elasticsearch.dump_dir);
-    fs::create_dir_all(&dump_dir).map_err(anyhow::Error::from)?;
+    let dump_dir_for_creation = dump_dir.clone();
+    task::spawn_blocking(move || fs::create_dir_all(&dump_dir_for_creation))
+        .await
+        .map_err(|source| anyhow!("failed to join dump-dir creation task: {source}"))?
+        .map_err(anyhow::Error::from)?;
 
     for event_code in elasticsearch.event_codes {
         match fetch_data_from_es(event_code, elasticsearch).await {
@@ -90,35 +95,60 @@ pub async fn fetch_elastic_search(
                 info!("Event {event_code}");
                 for data in &data_vec {
                     match event_code.as_str() {
-                        "1" => process_event_data::<ElasticProcessCreate>(data, &file_name, size),
-                        "2" => process_event_data::<ElasticFileCreationTimeChanged>(
-                            data, &file_name, size,
-                        ),
+                        "1" => {
+                            process_event_data::<ElasticProcessCreate>(data, &file_name, size)
+                                .await;
+                        }
+                        "2" => {
+                            process_event_data::<ElasticFileCreationTimeChanged>(
+                                data, &file_name, size,
+                            )
+                            .await;
+                        }
                         "3" => {
-                            process_event_data::<ElasticNetworkConnection>(data, &file_name, size);
+                            process_event_data::<ElasticNetworkConnection>(data, &file_name, size)
+                                .await;
                         }
                         "5" => {
-                            process_event_data::<ElasticProcessTerminated>(data, &file_name, size);
+                            process_event_data::<ElasticProcessTerminated>(data, &file_name, size)
+                                .await;
                         }
-                        "7" => process_event_data::<ElasticImageLoaded>(data, &file_name, size),
-                        "11" => process_event_data::<ElasticFileCreate>(data, &file_name, size),
+                        "7" => {
+                            process_event_data::<ElasticImageLoaded>(data, &file_name, size).await;
+                        }
+                        "11" => {
+                            process_event_data::<ElasticFileCreate>(data, &file_name, size).await;
+                        }
                         "13" => {
-                            process_event_data::<ElasticRegistryValueSet>(data, &file_name, size);
+                            process_event_data::<ElasticRegistryValueSet>(data, &file_name, size)
+                                .await;
                         }
-                        "14" => process_event_data::<ElasticRegistryKeyValueRename>(
-                            data, &file_name, size,
-                        ),
-                        "15" => process_event_data::<ElasticFileCreateStreamHash>(
-                            data, &file_name, size,
-                        ),
-                        "17" => process_event_data::<ElasticPipeEvent>(data, &file_name, size),
-                        "22" => process_event_data::<ElasticDnsEvent>(data, &file_name, size),
-                        "23" => process_event_data::<ElasticFileDelete>(data, &file_name, size),
+                        "14" => {
+                            process_event_data::<ElasticRegistryKeyValueRename>(
+                                data, &file_name, size,
+                            )
+                            .await;
+                        }
+                        "15" => {
+                            process_event_data::<ElasticFileCreateStreamHash>(
+                                data, &file_name, size,
+                            )
+                            .await;
+                        }
+                        "17" => {
+                            process_event_data::<ElasticPipeEvent>(data, &file_name, size).await;
+                        }
+                        "22" => process_event_data::<ElasticDnsEvent>(data, &file_name, size).await,
+                        "23" => {
+                            process_event_data::<ElasticFileDelete>(data, &file_name, size).await;
+                        }
                         "25" => {
-                            process_event_data::<ElasticProcessTampering>(data, &file_name, size);
+                            process_event_data::<ElasticProcessTampering>(data, &file_name, size)
+                                .await;
                         }
                         "26" => {
-                            process_event_data::<ElasticFileDeleteDetected>(data, &file_name, size);
+                            process_event_data::<ElasticFileDeleteDetected>(data, &file_name, size)
+                                .await;
                         }
                         _ => {}
                     }
@@ -130,7 +160,7 @@ pub async fn fetch_elastic_search(
     Ok(dump_dir)
 }
 
-/// Query multiple index with `event_code`
+/// Queries multiple indices for the requested `event_code`.
 async fn fetch_data_from_es(
     event_code: &str,
     config: ElasticDumpOptions<'_>,
@@ -150,7 +180,6 @@ async fn fetch_data_from_es(
             );
 
             let result = send_request(&client, &query, config.url, index).await?;
-            all_results.push(result.clone());
             if let Some(data) = result["hits"]["hits"].as_array() {
                 if let Some(last) = data.last() {
                     if let Some(lts) = last
@@ -169,6 +198,7 @@ async fn fetch_data_from_es(
                     break;
                 }
             }
+            all_results.push(result);
         }
     }
 
@@ -214,7 +244,7 @@ fn build_query(event_code: &str, start: &str, end: &str, size: usize, last: u64)
     })
 }
 
-/// Send a query with `_search` option.
+/// Sends a query using the Elasticsearch `_search` endpoint.
 async fn send_request(
     client: &Client,
     query: &Value,
@@ -232,11 +262,17 @@ async fn send_request(
         .map_err(|e| anyhow!({ e }))?)
 }
 
-fn process_event_data<T: EventToCsv + Serialize>(data: &Value, file_name: &str, size: usize) {
+async fn process_event_data<T>(data: &Value, file_name: &str, size: usize)
+where
+    T: EventToCsv + Serialize + Send + 'static,
+{
     let entries = T::parse(data);
     info!("Data counts(Max: {size}): {}", entries.len());
-    if let Err(e) = write_to_csv(&entries, file_name) {
-        error!("Failed to write csv: {e:?}");
+    let file_name = file_name.to_string();
+    match task::spawn_blocking(move || write_to_csv(&entries, &file_name)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => error!("Failed to write csv: {error:?}"),
+        Err(error) => error!("Failed to join csv writer task: {error}"),
     }
 }
 

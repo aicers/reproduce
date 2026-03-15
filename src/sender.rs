@@ -19,6 +19,7 @@ use giganto_client::{
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use thiserror::Error;
+use tokio::task;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -133,49 +134,27 @@ impl GigantoSender {
         server_addr: SocketAddr,
         server_name: &str,
     ) -> std::result::Result<Self, SenderError> {
-        let endpoint = create_endpoint(cert, key, ca_certs)?;
+        let cert = cert.to_owned();
+        let key = key.to_owned();
+        let ca_certs = ca_certs.to_vec();
+        let endpoint = task::spawn_blocking(move || create_endpoint(&cert, &key, &ca_certs))
+            .await
+            .map_err(|source| {
+                SenderError::context("failed to join endpoint creation task", source)
+            })??;
+        let (conn, send, finish_checker) =
+            connect_stream(&endpoint, server_addr, server_name).await?;
+        info!("Connected to data store ingest server at {server_addr}");
 
-        loop {
-            let conn = match endpoint
-                .connect(server_addr, server_name)
-                .map_err(SenderError::Connect)?
-                .await
-            {
-                Ok(r) => {
-                    info!("Connected to data store ingest server at {server_addr}");
-                    r
-                }
-                Err(quinn::ConnectionError::TimedOut) => {
-                    info!("Server timeout, reconnecting...");
-                    sleep(Duration::from_secs(INTERVAL)).await;
-                    continue;
-                }
-                Err(e) => return Err(SenderError::Connection(e)),
-            };
-
-            client_handshake(&conn, REQUIRED_GIGANTO_VERSION)
-                .await
-                .map_err(|source| SenderError::Handshake(source.into()))?;
-
-            let (send, recv) = conn.open_bi().await.map_err(|source| {
-                SenderError::context("failed to open stream to Giganto", source)
-            })?;
-
-            let finish_checker_send = Arc::new(AtomicBool::new(false));
-            let finish_checker_recv = finish_checker_send.clone();
-
-            tokio::spawn(async move { recv_ack(recv, finish_checker_recv).await });
-
-            return Ok(Self {
-                endpoint,
-                server_addr,
-                name: server_name.to_string(),
-                conn,
-                sender: send,
-                init_msg: true,
-                finish_checker: finish_checker_send,
-            });
-        }
+        Ok(Self {
+            endpoint,
+            server_addr,
+            name: server_name.to_string(),
+            conn,
+            sender: send,
+            init_msg: true,
+            finish_checker,
+        })
     }
 
     /// Resets the header flag so that the next call to `ensure_header_sent`
@@ -261,42 +240,14 @@ impl GigantoSender {
     ///
     /// Returns an error if the handshake or stream opening fails.
     pub async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
-        loop {
-            sleep(Duration::from_secs(2)).await;
-            let conn = match self
-                .endpoint
-                .connect(self.server_addr, &self.name)
-                .map_err(SenderError::Connect)?
-                .await
-            {
-                Ok(r) => r,
-                Err(quinn::ConnectionError::TimedOut) => {
-                    info!("Server timeout, reconnecting...");
-                    sleep(Duration::from_secs(INTERVAL)).await;
-                    continue;
-                }
-                Err(e) => return Err(SenderError::Connection(e)),
-            };
-
-            client_handshake(&conn, REQUIRED_GIGANTO_VERSION)
-                .await
-                .map_err(|source| SenderError::Handshake(source.into()))?;
-
-            let (send, recv) = conn.open_bi().await.map_err(|source| {
-                SenderError::context("failed to open stream to Giganto", source)
-            })?;
-            let finish_checker_send = Arc::new(AtomicBool::new(false));
-            let finish_checker_recv = finish_checker_send.clone();
-
-            tokio::spawn(async move { recv_ack(recv, finish_checker_recv).await });
-
-            self.conn = conn;
-            self.sender = send;
-            self.init_msg = true;
-            self.finish_checker = finish_checker_send;
-
-            return Ok(());
-        }
+        sleep(Duration::from_secs(2)).await;
+        let (conn, send, finish_checker) =
+            connect_stream(&self.endpoint, self.server_addr, &self.name).await?;
+        self.conn = conn;
+        self.sender = send;
+        self.init_msg = true;
+        self.finish_checker = finish_checker;
+        Ok(())
     }
 
     /// Sends the channel-close sentinel message to signal the server that
@@ -314,6 +265,53 @@ impl GigantoSender {
     }
 }
 
+/// Establishes a connected QUIC stream and starts the background ACK task.
+async fn connect_stream(
+    endpoint: &Endpoint,
+    server_addr: SocketAddr,
+    server_name: &str,
+) -> std::result::Result<(Connection, SendStream, Arc<AtomicBool>), SenderError> {
+    let conn = connect_with_retry(endpoint, server_addr, server_name).await?;
+    client_handshake(&conn, REQUIRED_GIGANTO_VERSION)
+        .await
+        .map_err(|source| SenderError::Handshake(source.into()))?;
+
+    let (send, recv) = conn
+        .open_bi()
+        .await
+        .map_err(|source| SenderError::context("failed to open stream to Giganto", source))?;
+    let finish_checker_send = Arc::new(AtomicBool::new(false));
+    let finish_checker_recv = Arc::clone(&finish_checker_send);
+
+    tokio::spawn(async move {
+        let _ = recv_ack(recv, finish_checker_recv).await;
+    });
+
+    Ok((conn, send, finish_checker_send))
+}
+
+/// Connects to the server, retrying on timeout to preserve the legacy behavior.
+async fn connect_with_retry(
+    endpoint: &Endpoint,
+    server_addr: SocketAddr,
+    server_name: &str,
+) -> std::result::Result<Connection, SenderError> {
+    loop {
+        match endpoint
+            .connect(server_addr, server_name)
+            .map_err(SenderError::Connect)?
+            .await
+        {
+            Ok(conn) => return Ok(conn),
+            Err(quinn::ConnectionError::TimedOut) => {
+                info!("Server timeout, reconnecting...");
+                sleep(Duration::from_secs(INTERVAL)).await;
+            }
+            Err(error) => return Err(SenderError::Connection(error)),
+        }
+    }
+}
+
 /// Creates a QUIC client `Endpoint` configured with the given TLS
 /// certificate, private key, and CA root certificates.
 ///
@@ -326,6 +324,24 @@ fn create_endpoint(
     key: &str,
     ca_certs: &[String],
 ) -> std::result::Result<Endpoint, SenderError> {
+    let (cert_pem, key_pem) = read_identity_files(cert, key)?;
+    let pv_key = parse_private_key(key, key_pem)?;
+    let cert_chain = parse_cert_chain(cert, cert_pem)?;
+    let server_root = to_root_cert(ca_certs)?;
+    let client_config = build_client_config(server_root, cert_chain, pv_key)?;
+
+    let any_addr = SocketAddr::from(([0_u16; 8], 0));
+    let mut endpoint = quinn::Endpoint::client(any_addr)
+        .map_err(|source| SenderError::context("failed to create QUIC endpoint", source))?;
+    endpoint.set_default_client_config(client_config);
+    Ok(endpoint)
+}
+
+/// Reads the client certificate and key files from disk.
+fn read_identity_files(
+    cert: &str,
+    key: &str,
+) -> std::result::Result<(Vec<u8>, Vec<u8>), SenderError> {
     let cert_pem = fs::read(cert).map_err(|source| SenderError::ReadIdentity {
         cert: cert.to_string(),
         key: key.to_string(),
@@ -336,33 +352,60 @@ fn create_endpoint(
         key: key.to_string(),
         source,
     })?;
+    Ok((cert_pem, key_pem))
+}
 
-    let pv_key = if Path::new(key).extension().is_some_and(|x| x == "der") {
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pem))
+/// Parses the private key from DER or PEM bytes.
+fn parse_private_key(
+    key_path: &str,
+    key_pem: Vec<u8>,
+) -> std::result::Result<PrivateKeyDer<'static>, SenderError> {
+    if Path::new(key_path)
+        .extension()
+        .is_some_and(|ext| ext == "der")
+    {
+        Ok(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pem)))
     } else {
         rustls_pemfile::private_key(&mut &*key_pem)
             .map_err(|source| SenderError::context("malformed PKCS #1 private key", source))?
-            .ok_or(SenderError::MissingPrivateKey)?
-    };
+            .ok_or(SenderError::MissingPrivateKey)
+    }
+}
 
-    let cert_chain = if Path::new(cert).extension().is_some_and(|x| x == "der") {
+/// Parses the client certificate chain from DER or PEM bytes.
+fn parse_cert_chain(
+    cert_path: &str,
+    cert_pem: Vec<u8>,
+) -> std::result::Result<Vec<CertificateDer<'static>>, SenderError> {
+    let cert_chain = if Path::new(cert_path)
+        .extension()
+        .is_some_and(|ext| ext == "der")
+    {
         vec![CertificateDer::from(cert_pem)]
     } else {
         rustls_pemfile::certs(&mut &*cert_pem)
             .collect::<std::result::Result<_, _>>()
             .map_err(|source| SenderError::context("invalid PEM-encoded certificate", source))?
     };
+
     if cert_chain.is_empty() {
         return Err(SenderError::MissingCertificate {
-            path: cert.to_string(),
+            path: cert_path.to_string(),
         });
     }
 
-    let server_root = to_root_cert(ca_certs)?;
+    Ok(cert_chain)
+}
 
+/// Builds the QUIC client configuration from the parsed TLS materials.
+fn build_client_config(
+    server_root: rustls::RootCertStore,
+    cert_chain: Vec<CertificateDer<'static>>,
+    private_key: PrivateKeyDer<'static>,
+) -> std::result::Result<quinn::ClientConfig, SenderError> {
     let client_crypto = rustls::ClientConfig::builder()
         .with_root_certificates(server_root)
-        .with_client_auth_cert(cert_chain, pv_key)
+        .with_client_auth_cert(cert_chain, private_key)
         .map_err(|source| {
             SenderError::context("invalid client certificate or private key", source)
         })?;
@@ -375,12 +418,7 @@ fn create_endpoint(
             .map_err(|source| SenderError::context("failed to build QUIC client config", source))?,
     ));
     client_config.transport_config(Arc::new(transport));
-
-    let any_addr = SocketAddr::from(([0_u16; 8], 0));
-    let mut endpoint = quinn::Endpoint::client(any_addr)
-        .map_err(|source| SenderError::context("failed to create QUIC endpoint", source))?;
-    endpoint.set_default_client_config(client_config);
-    Ok(endpoint)
+    Ok(client_config)
 }
 
 /// Builds a `RootCertStore` from a list of PEM-encoded CA certificate file

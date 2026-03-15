@@ -1,12 +1,22 @@
 use std::net::IpAddr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Context;
 use giganto_client::ingest::network::{
     Conn, DceRpc, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, Ntlm, Rdp, Smtp, Ssh, Tls,
 };
 use num_traits::ToPrimitive;
 
-use super::{PROTO_ICMP, PROTO_TCP, PROTO_UDP, TryFromZeekRecord, parse_zeek_timestamp_ns};
+use super::{
+    PROTO_ICMP, PROTO_TCP, PROTO_UDP, TryFromZeekRecord, ZeekResult, parse_zeek_timestamp_ns,
+};
+
+type Result<T> = ZeekResult<T>;
+
+macro_rules! zeek_error {
+    ($($arg:tt)*) => {
+        super::ZeekError::from(::anyhow::anyhow!($($arg)*))
+    };
+}
 
 impl TryFromZeekRecord for Conn {
     #[allow(clippy::too_many_lines)]
@@ -18,26 +28,26 @@ impl TryFromZeekRecord for Conn {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             match proto {
@@ -47,12 +57,12 @@ impl TryFromZeekRecord for Conn {
                 _ => 0,
             }
         } else {
-            return Err(anyhow!("missing protocol"));
+            return Err(zeek_error!("missing protocol"));
         };
         let service = if let Some(service) = rec.get(7) {
             service.to_string()
         } else {
-            return Err(anyhow!("missing service"));
+            return Err(zeek_error!("missing service"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             if duration.eq("-") {
@@ -60,10 +70,10 @@ impl TryFromZeekRecord for Conn {
             } else {
                 ((duration.parse::<f64>().context("invalid duration")? * 1_000_000_000.0).round())
                     .to_i64()
-                    .expect("valid")
+                    .ok_or_else(|| zeek_error!("duration nanoseconds overflow"))?
             }
         } else {
-            return Err(anyhow!("missing duration"));
+            return Err(zeek_error!("missing duration"));
         };
         let orig_bytes = if let Some(orig_bytes) = rec.get(9) {
             if orig_bytes.eq("-") {
@@ -72,7 +82,7 @@ impl TryFromZeekRecord for Conn {
                 orig_bytes.parse::<u64>().context("invalid source bytes")?
             }
         } else {
-            return Err(anyhow!("missing source bytes"));
+            return Err(zeek_error!("missing source bytes"));
         };
         let resp_bytes = if let Some(resp_bytes) = rec.get(10) {
             if resp_bytes.eq("-") {
@@ -83,12 +93,12 @@ impl TryFromZeekRecord for Conn {
                     .context("invalid destination bytes")?
             }
         } else {
-            return Err(anyhow!("missing destination bytes"));
+            return Err(zeek_error!("missing destination bytes"));
         };
         let conn_state = if let Some(conn_state) = rec.get(11) {
             conn_state.to_string()
         } else {
-            return Err(anyhow!("missing conn_state"));
+            return Err(zeek_error!("missing conn_state"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(16) {
             if orig_pkts.eq("-") {
@@ -97,7 +107,7 @@ impl TryFromZeekRecord for Conn {
                 orig_pkts.parse::<u64>().context("invalid source packets")?
             }
         } else {
-            return Err(anyhow!("missing source packets"));
+            return Err(zeek_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(18) {
             if resp_pkts.eq("-") {
@@ -108,7 +118,7 @@ impl TryFromZeekRecord for Conn {
                     .context("invalid destination packets")?
             }
         } else {
-            return Err(anyhow!("missing destination packets"));
+            return Err(zeek_error!("missing destination packets"));
         };
 
         Ok((
@@ -135,6 +145,9 @@ impl TryFromZeekRecord for Conn {
 }
 
 impl TryFromZeekRecord for Dns {
+    // Network event records intentionally mirror Zeek field names, and their
+    // integer widths match the upstream protocol schema rather than idealized
+    // local naming and casting preferences.
     #[allow(
         clippy::similar_names,
         clippy::cast_possible_truncation,
@@ -148,26 +161,26 @@ impl TryFromZeekRecord for Dns {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             match proto {
@@ -177,12 +190,12 @@ impl TryFromZeekRecord for Dns {
                 _ => 0,
             }
         } else {
-            return Err(anyhow!("missing protocol"));
+            return Err(zeek_error!("missing protocol"));
         };
         let query = if let Some(query) = rec.get(9) {
             query.to_string()
         } else {
-            return Err(anyhow!("missing query"));
+            return Err(zeek_error!("missing query"));
         };
         let answer = if let Some(answer) = rec.get(21) {
             answer
@@ -190,7 +203,7 @@ impl TryFromZeekRecord for Dns {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing answer"));
+            return Err(zeek_error!("missing answer"));
         };
         let trans_id = if let Some(trans_id) = rec.get(7) {
             if trans_id.eq("-") {
@@ -199,7 +212,7 @@ impl TryFromZeekRecord for Dns {
                 trans_id.parse::<u16>().context("invalid trans_id")?
             }
         } else {
-            return Err(anyhow!("missing trans_id"));
+            return Err(zeek_error!("missing trans_id"));
         };
         let rtt: i64 = if let Some(rtt) = rec.get(8) {
             if rtt.eq("-") {
@@ -208,7 +221,7 @@ impl TryFromZeekRecord for Dns {
                 parse_zeek_timestamp_ns(rtt)?
             }
         } else {
-            return Err(anyhow!("missing rtt"));
+            return Err(zeek_error!("missing rtt"));
         };
         let qclass = if let Some(qclass) = rec.get(10) {
             if qclass.eq("-") {
@@ -217,7 +230,7 @@ impl TryFromZeekRecord for Dns {
                 qclass.parse::<u16>().context("invalid qclass")?
             }
         } else {
-            return Err(anyhow!("missing qclass"));
+            return Err(zeek_error!("missing qclass"));
         };
         let qtype = if let Some(qtype) = rec.get(12) {
             if qtype.eq("-") {
@@ -226,7 +239,7 @@ impl TryFromZeekRecord for Dns {
                 qtype.parse::<u16>().context("invalid qtype")?
             }
         } else {
-            return Err(anyhow!("missing qtype"));
+            return Err(zeek_error!("missing qtype"));
         };
         let rcode = if let Some(rcode) = rec.get(14) {
             if rcode.eq("-") {
@@ -235,7 +248,7 @@ impl TryFromZeekRecord for Dns {
                 rcode.parse::<u16>().context("rcode")?
             }
         } else {
-            return Err(anyhow!("missing rcode"));
+            return Err(zeek_error!("missing rcode"));
         };
         let aa_flag = if let Some(aa) = rec.get(16) {
             if aa.eq("T") {
@@ -243,10 +256,10 @@ impl TryFromZeekRecord for Dns {
             } else if aa.eq("F") {
                 false
             } else {
-                return Err(anyhow!("invalid aa_flag"));
+                return Err(zeek_error!("invalid aa_flag"));
             }
         } else {
-            return Err(anyhow!("missing aa_flag"));
+            return Err(zeek_error!("missing aa_flag"));
         };
         let tc_flag = if let Some(tc) = rec.get(17) {
             if tc.eq("T") {
@@ -254,10 +267,10 @@ impl TryFromZeekRecord for Dns {
             } else if tc.eq("F") {
                 false
             } else {
-                return Err(anyhow!("invalid tc_flag"));
+                return Err(zeek_error!("invalid tc_flag"));
             }
         } else {
-            return Err(anyhow!("missing tc_flag"));
+            return Err(zeek_error!("missing tc_flag"));
         };
         let rd_flag = if let Some(rd) = rec.get(18) {
             if rd.eq("T") {
@@ -265,10 +278,10 @@ impl TryFromZeekRecord for Dns {
             } else if rd.eq("F") {
                 false
             } else {
-                return Err(anyhow!("invalid rd_flag"));
+                return Err(zeek_error!("invalid rd_flag"));
             }
         } else {
-            return Err(anyhow!("missing rd_flag"));
+            return Err(zeek_error!("missing rd_flag"));
         };
         let ra_flag = if let Some(ra) = rec.get(19) {
             if ra.eq("T") {
@@ -276,10 +289,10 @@ impl TryFromZeekRecord for Dns {
             } else if ra.eq("F") {
                 false
             } else {
-                return Err(anyhow!("invalid ra_flag"));
+                return Err(zeek_error!("invalid ra_flag"));
             }
         } else {
-            return Err(anyhow!("missing ra_flag"));
+            return Err(zeek_error!("missing ra_flag"));
         };
         let ttl = if let Some(ttl) = rec.get(22) {
             if ttl.eq("-") {
@@ -288,7 +301,8 @@ impl TryFromZeekRecord for Dns {
                 let mut ttl_vec = Vec::new();
                 for t in ttl.split(',') {
                     ttl_vec.push(
-                        t.parse::<f32>()?
+                        t.parse::<f32>()
+                            .context("invalid ttl")?
                             .to_i32()
                             .context("failed to convert f32 to i32")?,
                     );
@@ -296,7 +310,7 @@ impl TryFromZeekRecord for Dns {
                 ttl_vec
             }
         } else {
-            return Err(anyhow!("missing ttl"));
+            return Err(zeek_error!("missing ttl"));
         };
 
         Ok((
@@ -340,56 +354,56 @@ impl TryFromZeekRecord for Http {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let method = if let Some(method) = rec.get(7) {
             method.to_string()
         } else {
-            return Err(anyhow!("missing method"));
+            return Err(zeek_error!("missing method"));
         };
         let host = if let Some(host) = rec.get(8) {
             host.to_string()
         } else {
-            return Err(anyhow!("missing host"));
+            return Err(zeek_error!("missing host"));
         };
         let uri = if let Some(uri) = rec.get(9) {
             uri.to_string()
         } else {
-            return Err(anyhow!("missing uri"));
+            return Err(zeek_error!("missing uri"));
         };
         let referer = if let Some(referer) = rec.get(10) {
             referer.to_string()
         } else {
-            return Err(anyhow!("missing referer"));
+            return Err(zeek_error!("missing referer"));
         };
         let version = if let Some(version) = rec.get(11) {
             version.to_string()
         } else {
-            return Err(anyhow!("missing version"));
+            return Err(zeek_error!("missing version"));
         };
         let user_agent = if let Some(user_agent) = rec.get(12) {
             user_agent.to_string()
         } else {
-            return Err(anyhow!("missing user_agent"));
+            return Err(zeek_error!("missing user_agent"));
         };
         let request_len = if let Some(request_len) = rec.get(14) {
             if request_len.eq("-") {
@@ -400,7 +414,7 @@ impl TryFromZeekRecord for Http {
                     .context("invalid request_len")?
             }
         } else {
-            return Err(anyhow!("missing request_len"));
+            return Err(zeek_error!("missing request_len"));
         };
         let response_len = if let Some(response_len) = rec.get(15) {
             if response_len.eq("-") {
@@ -411,7 +425,7 @@ impl TryFromZeekRecord for Http {
                     .context("invalid response_len")?
             }
         } else {
-            return Err(anyhow!("missing request_len"));
+            return Err(zeek_error!("missing request_len"));
         };
         let status_code = if let Some(status_code) = rec.get(16) {
             if status_code.eq("-") {
@@ -420,22 +434,22 @@ impl TryFromZeekRecord for Http {
                 status_code.parse::<u16>().context("invalid status code")?
             }
         } else {
-            return Err(anyhow!("missing status code"));
+            return Err(zeek_error!("missing status code"));
         };
         let status_msg = if let Some(status_msg) = rec.get(17) {
             status_msg.to_string()
         } else {
-            return Err(anyhow!("missing status_msg"));
+            return Err(zeek_error!("missing status_msg"));
         };
         let username = if let Some(username) = rec.get(21) {
             username.to_string()
         } else {
-            return Err(anyhow!("missing username"));
+            return Err(zeek_error!("missing username"));
         };
         let password = if let Some(password) = rec.get(22) {
             password.to_string()
         } else {
-            return Err(anyhow!("missing password"));
+            return Err(zeek_error!("missing password"));
         };
         let orig_filenames: Vec<String> = if let Some(orig_filenames) = rec.get(25) {
             orig_filenames
@@ -443,7 +457,7 @@ impl TryFromZeekRecord for Http {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing orig_filenames"));
+            return Err(zeek_error!("missing orig_filenames"));
         };
         let orig_mime_types: Vec<String> = if let Some(orig_mime_types) = rec.get(26) {
             orig_mime_types
@@ -451,7 +465,7 @@ impl TryFromZeekRecord for Http {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing orig_mime_types"));
+            return Err(zeek_error!("missing orig_mime_types"));
         };
         let resp_filenames: Vec<String> = if let Some(resp_filenames) = rec.get(28) {
             resp_filenames
@@ -459,7 +473,7 @@ impl TryFromZeekRecord for Http {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing resp_filenames"));
+            return Err(zeek_error!("missing resp_filenames"));
         };
         let resp_mime_types: Vec<String> = if let Some(resp_mime_types) = rec.get(29) {
             resp_mime_types
@@ -467,7 +481,7 @@ impl TryFromZeekRecord for Http {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing resp_mime_types"));
+            return Err(zeek_error!("missing resp_mime_types"));
         };
 
         // Merge orig and resp fields into unified fields
@@ -525,26 +539,26 @@ impl TryFromZeekRecord for Kerberos {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
 
         Ok((
@@ -584,46 +598,46 @@ impl TryFromZeekRecord for Ntlm {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let username = if let Some(username) = rec.get(6) {
             username.to_string()
         } else {
-            return Err(anyhow!("missing username"));
+            return Err(zeek_error!("missing username"));
         };
         let hostname = if let Some(hostname) = rec.get(7) {
             hostname.to_string()
         } else {
-            return Err(anyhow!("missing hostname"));
+            return Err(zeek_error!("missing hostname"));
         };
         let domainname = if let Some(domainname) = rec.get(8) {
             domainname.to_string()
         } else {
-            return Err(anyhow!("missing domainname"));
+            return Err(zeek_error!("missing domainname"));
         };
         let success = if let Some(success) = rec.get(12) {
             success.to_string()
         } else {
-            return Err(anyhow!("missing success"));
+            return Err(zeek_error!("missing success"));
         };
 
         Ok((
@@ -659,31 +673,31 @@ impl TryFromZeekRecord for Rdp {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let cookie = if let Some(cookie) = rec.get(6) {
             cookie.to_string()
         } else {
-            return Err(anyhow!("missing cookie"));
+            return Err(zeek_error!("missing cookie"));
         };
 
         Ok((
@@ -715,56 +729,56 @@ impl TryFromZeekRecord for Smtp {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let mailfrom = if let Some(mailfrom) = rec.get(8) {
             mailfrom.to_string()
         } else {
-            return Err(anyhow!("missing mailfrom"));
+            return Err(zeek_error!("missing mailfrom"));
         };
         let date = if let Some(date) = rec.get(10) {
             date.to_string()
         } else {
-            return Err(anyhow!("missing date"));
+            return Err(zeek_error!("missing date"));
         };
         let from = if let Some(from) = rec.get(11) {
             from.to_string()
         } else {
-            return Err(anyhow!("missing from"));
+            return Err(zeek_error!("missing from"));
         };
         let to = if let Some(to) = rec.get(12) {
             to.to_string()
         } else {
-            return Err(anyhow!("missing to"));
+            return Err(zeek_error!("missing to"));
         };
         let subject = if let Some(subject) = rec.get(17) {
             subject.to_string()
         } else {
-            return Err(anyhow!("missing subject"));
+            return Err(zeek_error!("missing subject"));
         };
         let agent = if let Some(agent) = rec.get(23) {
             agent.to_string()
         } else {
-            return Err(anyhow!("missing agent"));
+            return Err(zeek_error!("missing agent"));
         };
 
         Ok((
@@ -803,61 +817,61 @@ impl TryFromZeekRecord for Ssh {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let client = if let Some(client) = rec.get(10) {
             client.to_string()
         } else {
-            return Err(anyhow!("missing client"));
+            return Err(zeek_error!("missing client"));
         };
         let server = if let Some(server) = rec.get(11) {
             server.to_string()
         } else {
-            return Err(anyhow!("missing server"));
+            return Err(zeek_error!("missing server"));
         };
         let cipher_alg = if let Some(cipher_alg) = rec.get(12) {
             cipher_alg.to_string()
         } else {
-            return Err(anyhow!("missing cipher_alg"));
+            return Err(zeek_error!("missing cipher_alg"));
         };
         let mac_alg = if let Some(mac_alg) = rec.get(13) {
             mac_alg.to_string()
         } else {
-            return Err(anyhow!("missing mac_alg"));
+            return Err(zeek_error!("missing mac_alg"));
         };
         let compression_alg = if let Some(compression_alg) = rec.get(14) {
             compression_alg.to_string()
         } else {
-            return Err(anyhow!("missing compression_alg"));
+            return Err(zeek_error!("missing compression_alg"));
         };
         let kex_alg = if let Some(kex_alg) = rec.get(15) {
             kex_alg.to_string()
         } else {
-            return Err(anyhow!("missing kex_alg"));
+            return Err(zeek_error!("missing kex_alg"));
         };
         let host_key_alg = if let Some(host_key_alg) = rec.get(16) {
             host_key_alg.to_string()
         } else {
-            return Err(anyhow!("missing host_key_alg"));
+            return Err(zeek_error!("missing host_key_alg"));
         };
 
         Ok((
@@ -901,26 +915,26 @@ impl TryFromZeekRecord for DceRpc {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let rtt: i64 = if let Some(rtt) = rec.get(6) {
             if rtt.eq("-") {
@@ -929,22 +943,22 @@ impl TryFromZeekRecord for DceRpc {
                 parse_zeek_timestamp_ns(rtt)?
             }
         } else {
-            return Err(anyhow!("missing rtt"));
+            return Err(zeek_error!("missing rtt"));
         };
         let named_pipe = if let Some(named_pipe) = rec.get(7) {
             named_pipe.to_string()
         } else {
-            return Err(anyhow!("missing named_pipe"));
+            return Err(zeek_error!("missing named_pipe"));
         };
         let endpoint = if let Some(endpoint) = rec.get(8) {
             endpoint.to_string()
         } else {
-            return Err(anyhow!("missing endpoint"));
+            return Err(zeek_error!("missing endpoint"));
         };
         let operation = if let Some(operation) = rec.get(9) {
             operation.to_string()
         } else {
-            return Err(anyhow!("missing operation"));
+            return Err(zeek_error!("missing operation"));
         };
 
         Ok((
@@ -980,51 +994,51 @@ impl TryFromZeekRecord for Ftp {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let user = if let Some(user) = rec.get(6) {
             user.to_string()
         } else {
-            return Err(anyhow!("missing user"));
+            return Err(zeek_error!("missing user"));
         };
         let password = if let Some(password) = rec.get(7) {
             password.to_string()
         } else {
-            return Err(anyhow!("missing password"));
+            return Err(zeek_error!("missing password"));
         };
         let command = if let Some(command) = rec.get(8) {
             command.to_string()
         } else {
-            return Err(anyhow!("missing command"));
+            return Err(zeek_error!("missing command"));
         };
         let reply_code = if let Some(reply_code) = rec.get(9) {
             reply_code.to_string()
         } else {
-            return Err(anyhow!("missing reply_code"));
+            return Err(zeek_error!("missing reply_code"));
         };
         let reply_msg = if let Some(reply_msg) = rec.get(10) {
             reply_msg.to_string()
         } else {
-            return Err(anyhow!("missing reply_msg"));
+            return Err(zeek_error!("missing reply_msg"));
         };
         let data_passive = if let Some(data_passive) = rec.get(11) {
             if data_passive.eq("T") {
@@ -1032,31 +1046,31 @@ impl TryFromZeekRecord for Ftp {
             } else if data_passive.eq("F") {
                 false
             } else {
-                return Err(anyhow!("invalid data_passive"));
+                return Err(zeek_error!("invalid data_passive"));
             }
         } else {
-            return Err(anyhow!("missing data_passive"));
+            return Err(zeek_error!("missing data_passive"));
         };
         let data_orig_addr = if let Some(data_orig_addr) = rec.get(12) {
             data_orig_addr
                 .parse::<IpAddr>()
                 .context("invalid data source address")?
         } else {
-            return Err(anyhow!("missing data source address"));
+            return Err(zeek_error!("missing data source address"));
         };
         let data_resp_addr = if let Some(data_resp_addr) = rec.get(13) {
             data_resp_addr
                 .parse::<IpAddr>()
                 .context("invalid data destination address")?
         } else {
-            return Err(anyhow!("missing data destination address"));
+            return Err(zeek_error!("missing data destination address"));
         };
         let data_resp_port = if let Some(data_resp_port) = rec.get(14) {
             data_resp_port
                 .parse::<u16>()
                 .context("invalid data destination port")?
         } else {
-            return Err(anyhow!("missing data destination port"));
+            return Err(zeek_error!("missing data destination port"));
         };
 
         let ftp_command = FtpCommand {
@@ -1104,26 +1118,26 @@ impl TryFromZeekRecord for Ldap {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             match proto {
@@ -1133,7 +1147,7 @@ impl TryFromZeekRecord for Ldap {
                 _ => 0,
             }
         } else {
-            return Err(anyhow!("missing protocol"));
+            return Err(zeek_error!("missing protocol"));
         };
         let message_id = if let Some(message_id) = rec.get(7) {
             if message_id.eq("-") {
@@ -1142,7 +1156,7 @@ impl TryFromZeekRecord for Ldap {
                 message_id.parse::<u32>().context("invalid message_id")?
             }
         } else {
-            return Err(anyhow!("missing message_id"));
+            return Err(zeek_error!("missing message_id"));
         };
         let version = if let Some(version) = rec.get(8) {
             if version.eq("-") {
@@ -1151,7 +1165,7 @@ impl TryFromZeekRecord for Ldap {
                 version.parse::<u8>().context("invalid version")?
             }
         } else {
-            return Err(anyhow!("missing version"));
+            return Err(zeek_error!("missing version"));
         };
         let opcode = if let Some(opcode) = rec.get(9) {
             opcode
@@ -1159,7 +1173,7 @@ impl TryFromZeekRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing opcode"));
+            return Err(zeek_error!("missing opcode"));
         };
         let result = if let Some(result) = rec.get(10) {
             result
@@ -1167,7 +1181,7 @@ impl TryFromZeekRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing result"));
+            return Err(zeek_error!("missing result"));
         };
         let diagnostic_message = if let Some(diagnostic_message) = rec.get(11) {
             diagnostic_message
@@ -1175,7 +1189,7 @@ impl TryFromZeekRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing diagnostic_message"));
+            return Err(zeek_error!("missing diagnostic_message"));
         };
         let object = if let Some(object) = rec.get(12) {
             object
@@ -1183,7 +1197,7 @@ impl TryFromZeekRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing object"));
+            return Err(zeek_error!("missing object"));
         };
         let argument = if let Some(argument) = rec.get(13) {
             argument
@@ -1191,7 +1205,7 @@ impl TryFromZeekRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(anyhow!("missing argument"));
+            return Err(zeek_error!("missing argument"));
         };
 
         Ok((
@@ -1229,36 +1243,36 @@ impl TryFromZeekRecord for Tls {
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(anyhow!("missing source address"));
+            return Err(zeek_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(anyhow!("missing source port"));
+            return Err(zeek_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(anyhow!("missing destination address"));
+            return Err(zeek_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(anyhow!("missing destination port"));
+            return Err(zeek_error!("missing destination port"));
         };
         let version = if let Some(version) = rec.get(6) {
             version.to_string()
         } else {
-            return Err(anyhow!("missing version"));
+            return Err(zeek_error!("missing version"));
         };
         let server_name = if let Some(server_name) = rec.get(9) {
             server_name.to_string()
         } else {
-            return Err(anyhow!("missing server_name"));
+            return Err(zeek_error!("missing server_name"));
         };
         let last_alert = if let Some(last_alert) = rec.get(11) {
             if last_alert.eq("-") {
@@ -1267,7 +1281,7 @@ impl TryFromZeekRecord for Tls {
                 last_alert.parse::<u8>().context("invalid last_alert")?
             }
         } else {
-            return Err(anyhow!("missing last_alert"));
+            return Err(zeek_error!("missing last_alert"));
         };
 
         Ok((
