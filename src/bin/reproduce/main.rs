@@ -6,7 +6,6 @@ use std::{
 };
 
 mod controller;
-mod producer;
 mod report;
 
 use anyhow::{Context, Result};
