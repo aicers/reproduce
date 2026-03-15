@@ -19,6 +19,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use anyhow::Result;
 use giganto_client::ingest::log::SecuLog;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 const PROTO_TCP: u8 = 0x06;
 const PROTO_UDP: u8 = 0x11;
@@ -27,28 +28,50 @@ const DEFAULT_PORT: u16 = 0;
 const DEFAULT_IPADDR: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
 #[derive(Debug, Clone)]
-pub struct SecurityLogInfo {
+pub(crate) struct SecurityLogInfo {
     kind: String,
     log_type: String,
     version: String,
 }
 
+#[derive(Debug, Error)]
+pub(crate) enum SecurityLogInfoError {
+    #[error("security log kind must contain at least three '_' separated segments: {kind}")]
+    InvalidKind { kind: String },
+}
+
 impl SecurityLogInfo {
     /// Creates a new `SecurityLogInfo` by splitting a kind string on `_`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the kind string does not contain at least three `_`-separated segments.
-    #[must_use]
-    pub fn new(giganto_kind: &str) -> SecurityLogInfo {
-        let info: Vec<&str> = giganto_kind.split('_').collect();
-        let msg =
-            "verified by `match` expression in the `Producer::send_seculog_to_giganto` method.";
-        SecurityLogInfo {
-            kind: (*info.first().expect(msg)).to_string(),
-            log_type: (*info.get(1).expect(msg)).to_string(),
-            version: (*info.get(2).expect(msg)).to_string(),
-        }
+    /// Returns an error if the kind string does not contain at least three
+    /// `_`-separated segments.
+    pub(crate) fn try_new(
+        giganto_kind: &str,
+    ) -> std::result::Result<SecurityLogInfo, SecurityLogInfoError> {
+        let mut parts = giganto_kind.splitn(3, '_');
+        let Some(kind) = parts.next() else {
+            return Err(SecurityLogInfoError::InvalidKind {
+                kind: giganto_kind.to_string(),
+            });
+        };
+        let Some(log_type) = parts.next() else {
+            return Err(SecurityLogInfoError::InvalidKind {
+                kind: giganto_kind.to_string(),
+            });
+        };
+        let Some(version) = parts.next() else {
+            return Err(SecurityLogInfoError::InvalidKind {
+                kind: giganto_kind.to_string(),
+            });
+        };
+
+        Ok(SecurityLogInfo {
+            kind: kind.to_string(),
+            log_type: log_type.to_string(),
+            version: version.to_string(),
+        })
     }
 }
 
@@ -91,7 +114,7 @@ pub struct Ubuntu;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Nginx;
 
-pub trait ParseSecurityLog {
+pub(crate) trait ParseSecurityLog {
     /// Parses a security log line into a `SecuLog` record with a timestamp.
     ///
     /// # Errors

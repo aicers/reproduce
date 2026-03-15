@@ -4,8 +4,25 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use thiserror::Error;
 use tracing::info;
+
+#[derive(Debug, Error)]
+pub enum CheckpointError {
+    #[error("cannot create {path}")]
+    Create {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("cannot write to {path}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Manages reading and writing transfer position offsets for resumable
 /// file processing.
@@ -51,11 +68,16 @@ impl Checkpoint {
     /// # Errors
     ///
     /// Returns an error if the file cannot be created or written.
-    pub fn save(&self, offset: u64) -> Result<()> {
-        let mut f = File::create(&self.path)
-            .with_context(|| format!("cannot create {}", self.path.display()))?;
+    pub fn save(&self, offset: u64) -> std::result::Result<(), CheckpointError> {
+        let mut f = File::create(&self.path).map_err(|source| CheckpointError::Create {
+            path: self.path.clone(),
+            source,
+        })?;
         f.write_all(offset.to_string().as_bytes())
-            .with_context(|| format!("cannot write to {}", self.path.display()))?;
+            .map_err(|source| CheckpointError::Write {
+                path: self.path.clone(),
+                source,
+            })?;
         Ok(())
     }
 

@@ -49,26 +49,26 @@ async fn main() -> Result<()> {
 /// Parses the command line arguments and returns the first argument.
 fn parse() -> PathBuf {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() <= 1 {
+    let Some(arg) = args.get(1).map(String::as_str) else {
         eprintln!("Error: insufficient arguments");
         exit(1);
-    }
-    if args.len() > 2 {
+    };
+    if args.get(2).is_some() {
         eprintln!("Error: too many arguments");
         exit(1);
     }
 
-    if args[1] == "--help" || args[1] == "-h" {
+    if arg == "--help" || arg == "-h" {
         println!("{}", version());
         println!();
         print!("{USAGE}");
         exit(0);
     }
-    if args[1] == "--version" || args[1] == "-V" {
+    if arg == "--version" || arg == "-V" {
         println!("{}", version());
         exit(0);
     }
-    PathBuf::from(&args[1])
+    PathBuf::from(arg)
 }
 
 fn version() -> String {

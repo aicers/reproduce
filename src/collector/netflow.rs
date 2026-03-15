@@ -260,16 +260,47 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write};
+    use std::{env, fs::File, io::Write, sync::Mutex};
 
     use anyhow::Result;
-    use giganto_client::ingest::netflow::Netflow5;
+    use giganto_client::ingest::netflow::{Netflow5, Netflow9};
     use tempfile::tempdir;
 
     use super::*;
 
     const ETHERNET_DATALINK: u32 = 1;
+    const RAW_DATALINK: u32 = 101;
+    const NETFLOW_TEMPLATES_ENV: &str = "NETFLOW_TEMPLATES_PATH";
     const PROTO_UDP: u8 = 17;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(path: &str) -> Self {
+            let previous = env::var(NETFLOW_TEMPLATES_ENV).ok();
+            unsafe {
+                env::set_var(NETFLOW_TEMPLATES_ENV, path);
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.take() {
+                unsafe {
+                    env::set_var(NETFLOW_TEMPLATES_ENV, previous);
+                }
+            } else {
+                unsafe {
+                    env::remove_var(NETFLOW_TEMPLATES_ENV);
+                }
+            }
+        }
+    }
 
     fn hex_to_bytes(s: &str) -> Vec<u8> {
         let filtered: String = s.chars().filter(|c| !c.is_whitespace()).collect();
@@ -280,7 +311,7 @@ mod tests {
             .collect()
     }
 
-    fn write_pcap(path: &Path, packets: &[Vec<u8>]) -> Result<()> {
+    fn write_pcap_with_datalink(path: &Path, packets: &[Vec<u8>], datalink: u32) -> Result<()> {
         let mut file = File::create(path)?;
 
         file.write_all(&0xa1b2_c3d4_u32.to_le_bytes())?;
@@ -289,7 +320,7 @@ mod tests {
         file.write_all(&0i32.to_le_bytes())?;
         file.write_all(&0u32.to_le_bytes())?;
         file.write_all(&65_535u32.to_le_bytes())?;
-        file.write_all(&ETHERNET_DATALINK.to_le_bytes())?;
+        file.write_all(&datalink.to_le_bytes())?;
 
         for packet in packets {
             let packet_len = u32::try_from(packet.len()).unwrap_or_default();
@@ -301,6 +332,10 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    fn write_pcap(path: &Path, packets: &[Vec<u8>]) -> Result<()> {
+        write_pcap_with_datalink(path, packets, ETHERNET_DATALINK)
     }
 
     fn build_ipv4_udp_packet(payload: &[u8], dst_port: u16) -> Vec<u8> {
@@ -359,6 +394,33 @@ mod tests {
         build_ipv4_udp_packet(&payload, 2055)
     }
 
+    fn build_v9_template_packet() -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&9u16.to_be_bytes());
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&1u32.to_be_bytes());
+        payload.extend_from_slice(&1u32.to_be_bytes());
+        payload.extend_from_slice(&0u16.to_be_bytes());
+        payload.extend_from_slice(&16u16.to_be_bytes());
+        payload.extend_from_slice(&256u16.to_be_bytes());
+        payload.extend_from_slice(&2u16.to_be_bytes());
+        payload.extend_from_slice(&8u16.to_be_bytes());
+        payload.extend_from_slice(&4u16.to_be_bytes());
+        payload.extend_from_slice(&12u16.to_be_bytes());
+        payload.extend_from_slice(&4u16.to_be_bytes());
+        build_ipv4_udp_packet(&payload, 2055)
+    }
+
+    fn make_collector_with_options(
+        path: &Path,
+        count_sent: u64,
+        running: Arc<AtomicBool>,
+    ) -> Result<NetflowCollector<Netflow5>> {
+        NetflowCollector::<Netflow5>::new(path, RawEventKind::Netflow5, 0, count_sent, running)
+    }
+
     #[tokio::test]
     async fn oversized_packet_keeps_remaining_records_for_next_batch() -> Result<()> {
         let temp_dir = tempdir()?;
@@ -409,6 +471,189 @@ mod tests {
         assert_eq!(batch.events.len(), 2);
         assert_eq!(batch.record_bytes.len(), 2);
         assert!(collector.next_batch().await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_and_non_netflow_packets_are_skipped_before_valid_data() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("mixed.pcap");
+        let truncated_payload = build_ipv4_udp_packet(&[0x00, 0x05], 2055);
+        let non_netflow_payload = build_ipv4_udp_packet(&v5_header_bytes(1), 9999);
+        write_pcap(
+            &pcap_path,
+            &[non_netflow_payload, truncated_payload, build_v5_packet(1)],
+        )?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = make_collector_with_options(&pcap_path, 0, running)?;
+
+        let batch = collector
+            .next_batch()
+            .await?
+            .expect("collector should eventually emit the valid netflow packet");
+        assert_eq!(batch.events.len(), 1);
+        assert!(collector.next_batch().await?.is_none());
+
+        let rendered = format!("{}", collector.netflow_stats());
+        assert!(rendered.contains("NoNetflowPackets = 1"));
+        assert!(rendered.contains("InvalidNetflowPackets = 1"));
+        assert!(rendered.contains("Packets = 3"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn count_sent_stops_netflow_processing_after_first_packet() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("count-sent.pcap");
+        write_pcap(&pcap_path, &[build_v5_packet(1), build_v5_packet(1)])?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut collector = make_collector_with_options(&pcap_path, 1, running)?;
+
+        let batch = collector
+            .next_batch()
+            .await?
+            .expect("collector should emit the first packet before exhausting");
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(collector.position(), 1);
+        assert_eq!(collector.protocol(), RawEventKind::Netflow5);
+        assert!(collector.is_running());
+        assert!(collector.next_batch().await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stopped_netflow_collector_flushes_current_packet_then_exhausts() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("stopped.pcap");
+        write_pcap(&pcap_path, &[build_v5_packet(1)])?;
+
+        let running = Arc::new(AtomicBool::new(false));
+        let mut collector = make_collector_with_options(&pcap_path, 0, running)?;
+
+        let batch = collector
+            .next_batch()
+            .await?
+            .expect("collector should flush records already parsed from the current packet");
+        assert_eq!(batch.events.len(), 1);
+        assert!(collector.next_batch().await?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn new_rejects_non_ethernet_pcaps() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("raw-linktype.pcap");
+        write_pcap_with_datalink(&pcap_path, &[build_v5_packet(1)], RAW_DATALINK)?;
+
+        let err = NetflowCollector::<Netflow5>::new(
+            &pcap_path,
+            RawEventKind::Netflow5,
+            0,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .err()
+        .expect("non-Ethernet captures must be rejected");
+        assert!(err.to_string().contains("unknown datalink"));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_template_cache_path_falls_back_to_empty_templates() -> Result<()> {
+        let _env_lock = ENV_LOCK
+            .lock()
+            .expect("template env lock should be acquired");
+        let temp_dir = tempdir()?;
+        let cache_path = temp_dir.path().join("invalid-templates.bin");
+        std::fs::write(&cache_path, b"invalid template cache")?;
+        let _env_guard = EnvVarGuard::set(
+            cache_path
+                .to_str()
+                .expect("template cache fixture path must be valid UTF-8"),
+        );
+        let pcap_path = temp_dir.path().join("packet.pcap");
+        write_pcap(&pcap_path, &[build_v5_packet(1)])?;
+
+        let collector = NetflowCollector::<Netflow5>::new(
+            &pcap_path,
+            RawEventKind::Netflow5,
+            0,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        )?;
+        assert!(collector.templates.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn v9_templates_are_persisted_when_cache_path_is_configured() -> Result<()> {
+        let _env_lock = ENV_LOCK
+            .lock()
+            .expect("template env lock should be acquired");
+        let temp_dir = tempdir()?;
+        let cache_path = temp_dir.path().join("templates.bin");
+        let _env_guard = EnvVarGuard::set(
+            cache_path
+                .to_str()
+                .expect("template cache path must be valid UTF-8"),
+        );
+        let pcap_path = temp_dir.path().join("template-flowset.pcap");
+        write_pcap(&pcap_path, &[build_v9_template_packet()])?;
+
+        let mut collector = NetflowCollector::<Netflow9>::new(
+            &pcap_path,
+            RawEventKind::Netflow9,
+            0,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        )?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        let batch = runtime.block_on(async { collector.next_batch().await })?;
+        assert!(batch.is_none());
+        assert_eq!(collector.stats(), (1, 0));
+        assert!(!collector.templates.is_empty());
+        assert!(cache_path.exists());
+        assert!(!std::fs::read(&cache_path)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn template_cache_write_failures_do_not_abort_collection() -> Result<()> {
+        let _env_lock = ENV_LOCK
+            .lock()
+            .expect("template env lock should be acquired");
+        let temp_dir = tempdir()?;
+        let _env_guard = EnvVarGuard::set(
+            temp_dir
+                .path()
+                .to_str()
+                .expect("template cache directory must be valid UTF-8"),
+        );
+        let pcap_path = temp_dir.path().join("template-flowset.pcap");
+        write_pcap(&pcap_path, &[build_v9_template_packet()])?;
+
+        let mut collector = NetflowCollector::<Netflow9>::new(
+            &pcap_path,
+            RawEventKind::Netflow9,
+            0,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        )?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        let batch = runtime.block_on(async { collector.next_batch().await })?;
+        assert!(batch.is_none());
+        assert_eq!(collector.stats(), (1, 0));
+        assert!(!collector.templates.is_empty());
         Ok(())
     }
 }
