@@ -46,7 +46,6 @@ pub struct GigantoSender {
     endpoint: Endpoint,
     server_addr: SocketAddr,
     name: String,
-    kind: String,
     conn: Connection,
     sender: SendStream,
     init_msg: bool,
@@ -75,7 +74,6 @@ impl GigantoSender {
         ca_certs: &[String],
         server_addr: SocketAddr,
         server_name: &str,
-        kind: &str,
     ) -> Result<Self> {
         let endpoint = create_endpoint(cert, key, ca_certs)?;
 
@@ -113,20 +111,12 @@ impl GigantoSender {
                 endpoint,
                 server_addr,
                 name: server_name.to_string(),
-                kind: kind.to_string(),
                 conn,
                 sender: send,
                 init_msg: true,
                 finish_checker: finish_checker_send,
             });
         }
-    }
-
-    /// Returns the kind identifier for this sender (e.g. the data source
-    /// kind such as `"zeek"` or `"sysmon"`).
-    #[must_use]
-    pub fn kind(&self) -> &str {
-        &self.kind
     }
 
     /// Resets the header flag so that the next call to `ensure_header_sent`
@@ -372,32 +362,4 @@ async fn recv_ack(mut recv: RecvStream, finish_checker: Arc<AtomicBool>) -> Resu
         }
     }
     Ok(())
-}
-
-/// Applies timestamp deduplication by incrementing the offset for consecutive
-/// identical timestamps.
-///
-/// Returns the deduplicated timestamp (original + offset). When a new
-/// timestamp is encountered the reference is updated and the offset resets to
-/// 0. For identical consecutive timestamps the offset increments by 1 for
-/// each occurrence.
-pub fn apply_timestamp_dedup(
-    current_timestamp: i64,
-    reference_timestamp: &mut Option<i64>,
-    timestamp_offset: &mut i64,
-) -> i64 {
-    if let Some(ref_ts) = *reference_timestamp {
-        if current_timestamp == ref_ts {
-            // Same timestamp, increment offset
-            *timestamp_offset += 1;
-        } else {
-            // Different timestamp, update reference and reset offset
-            *reference_timestamp = Some(current_timestamp);
-            *timestamp_offset = 0;
-        }
-    } else {
-        // First event, set reference timestamp
-        *reference_timestamp = Some(current_timestamp);
-    }
-    current_timestamp + *timestamp_offset
 }
