@@ -11,55 +11,56 @@ const DEFAULT_POLLING_MODE: bool = false;
 const DEFAULT_EXPORT_FROM_GIGANTO: bool = false;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum InputType {
+pub enum InputType {
     Log,
     Dir,
     Elastic,
 }
 #[derive(Deserialize, Debug, Clone)]
-pub(crate) struct File {
-    pub(crate) export_from_giganto: Option<bool>,
-    pub(crate) polling_mode: bool,
-    pub(crate) transfer_count: Option<u64>,
-    pub(crate) transfer_skip_count: Option<u64>,
-    pub(crate) last_transfer_line_suffix: Option<String>,
+pub struct File {
+    pub export_from_giganto: Option<bool>,
+    pub polling_mode: bool,
+    pub transfer_count: Option<u64>,
+    pub transfer_skip_count: Option<u64>,
+    pub last_transfer_line_suffix: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub(crate) struct Directory {
-    pub(crate) file_prefix: Option<String>,
-    pub(crate) polling_mode: bool,
+pub struct Directory {
+    pub file_prefix: Option<String>,
+    pub polling_mode: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub(crate) struct ElasticSearch {
-    pub(crate) url: String,
-    pub(crate) event_codes: Vec<String>,
-    pub(crate) indices: Vec<String>,
-    pub(crate) start_time: String,
-    pub(crate) end_time: String,
-    pub(crate) size: usize,
-    pub(crate) dump_dir: String,
-    pub(crate) elastic_auth: String,
+pub struct ElasticSearch {
+    pub url: String,
+    pub event_codes: Vec<String>,
+    pub indices: Vec<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub size: usize,
+    pub dump_dir: String,
+    pub elastic_auth: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub(crate) struct Config {
-    pub(crate) cert: String,
-    pub(crate) key: String,
-    pub(crate) ca_certs: Vec<String>,
+pub struct Config {
+    pub cert: String,
+    pub key: String,
+    pub ca_certs: Vec<String>,
     #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub(crate) giganto_ingest_srv_addr: SocketAddr,
-    pub(crate) giganto_name: String,
-    pub(crate) kind: String,
-    pub(crate) input: String,
-    pub(crate) report: bool,
-    pub(crate) report_dir: Option<PathBuf>,
-    pub(crate) log_path: Option<PathBuf>,
+    pub giganto_ingest_srv_addr: SocketAddr,
+    pub giganto_name: String,
+    pub kind: String,
+    pub input: String,
+    pub report: bool,
+    pub report_dir: Option<PathBuf>,
+    /// Path to the log file. `None` means stdout.
+    pub log_path: Option<PathBuf>,
 
-    pub(crate) file: Option<File>,
-    pub(crate) directory: Option<Directory>,
-    pub(crate) elastic: Option<ElasticSearch>,
+    pub file: Option<File>,
+    pub directory: Option<Directory>,
+    pub elastic: Option<ElasticSearch>,
 }
 
 impl Config {
@@ -71,7 +72,7 @@ impl Config {
     /// - The configuration file cannot be read or parsed
     /// - Required fields are missing
     /// - The `kind` field is missing or empty
-    pub(crate) fn new(path: &Path) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         let config = config::Config::builder()
             .set_default("report", DEFAULT_REPORT_MODE)
             .context("cannot set the default report value")?
