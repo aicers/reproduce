@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -8,12 +8,12 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use tracing::{debug, error, info, warn};
-use walkdir::WalkDir;
-
+use reproduce::checkpoint::Checkpoint;
 use reproduce::config::{Config, InputType};
 use reproduce::parser::sysmon_csv::open_sysmon_csv_file;
 use reproduce::parser::zeek::open_raw_event_log_file;
+use tracing::{debug, error, info, warn};
+use walkdir::WalkDir;
 
 use crate::producer::Producer;
 use crate::report::Report;
@@ -123,11 +123,7 @@ impl Controller {
                 }
                 InputType::Elastic => {}
             }
-            producer
-                .giganto
-                .finish()
-                .await
-                .expect("failed to finish stream");
+            producer.finish().await.expect("failed to finish stream");
         }
 
         Ok(())
@@ -192,11 +188,7 @@ impl Controller {
             self.run_single(file.as_path(), &mut producer, kind, false)
                 .await?;
             std::fs::remove_file(&file)?;
-            producer
-                .giganto
-                .finish()
-                .await
-                .expect("failed to finish stream");
+            producer.finish().await.expect("failed to finish stream");
         }
         std::fs::remove_dir(&dir)?;
         Ok(())
@@ -228,11 +220,15 @@ impl Controller {
 
         let mut report = Report::new(self.config.clone());
 
+        let checkpoint = file
+            .last_transfer_line_suffix
+            .as_ref()
+            .map(|suffix| Checkpoint::from_input_and_suffix(&self.config.input, suffix));
+
         let offset = if let Some(count_skip) = file.transfer_skip_count {
             count_skip
-        } else if let Some(ref offset_suffix) = file.last_transfer_line_suffix {
-            let filename = self.config.input.clone() + "_" + offset_suffix;
-            u64::try_from(read_offset(&filename))?
+        } else if let Some(ref cp) = checkpoint {
+            cp.load()
         } else {
             0
         };
@@ -333,11 +329,8 @@ impl Controller {
             }
         };
 
-        if let Some(ref offset_suffix) = file.last_transfer_line_suffix
-            && let Err(e) = write_offset(
-                &(self.config.input.clone() + "_" + offset_suffix),
-                last_line,
-            )
+        if let Some(ref cp) = checkpoint
+            && let Err(e) = cp.save(last_line)
         {
             warn!("Cannot write to offset file: {e}");
         }
@@ -416,25 +409,6 @@ pub(crate) fn input_type(input: &str) -> InputType {
             InputType::Log
         }
     }
-}
-
-fn read_offset(filename: &str) -> usize {
-    if let Ok(mut f) = File::open(filename) {
-        let mut content = String::new();
-        if f.read_to_string(&mut content).is_ok()
-            && let Ok(offset) = content.parse()
-        {
-            info!("Found offset file, skipping {offset} entries");
-            return offset;
-        }
-    }
-    0
-}
-
-fn write_offset(filename: &str, offset: u64) -> Result<()> {
-    let mut f = File::create(filename)?;
-    f.write_all(offset.to_string().as_bytes())?;
-    Ok(())
 }
 
 async fn producer(config: &Config) -> Producer {
