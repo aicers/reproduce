@@ -1,21 +1,16 @@
-use std::{
-    fmt::Debug,
-    fs::File,
-    marker::PhantomData,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{fmt::Debug, fs::File, marker::PhantomData};
 
-use anyhow::Result;
 use async_trait::async_trait;
 use csv::{Position, StringRecord, StringRecordsIntoIter};
 use giganto_client::RawEventKind;
 use serde::Serialize;
+use tokio::sync::watch;
 use tracing::warn;
 
-use super::{CollectedBatch, Collector, POLLING_INTERVAL};
+use super::{
+    CollectedBatch, Collector, CollectorResult, position_bytes, shutdown_requested,
+    wait_for_poll_or_shutdown,
+};
 use crate::parser::migration::TryFromGigantoRecord;
 use crate::sender::BATCH_SIZE;
 
@@ -28,8 +23,10 @@ pub struct MigrationCollector<T> {
     count_sent: u64,
     file_polling_mode: bool,
     dir_polling_mode: bool,
-    running: Arc<AtomicBool>,
+    shutdown: watch::Receiver<bool>,
     pos: Position,
+    committed_line: u64,
+    pending_commit: Option<u64>,
     last_record: StringRecord,
     success_cnt: u64,
     failed_cnt: u64,
@@ -47,7 +44,7 @@ impl<T> MigrationCollector<T> {
         count_sent: u64,
         file_polling_mode: bool,
         dir_polling_mode: bool,
-        running: Arc<AtomicBool>,
+        shutdown: watch::Receiver<bool>,
     ) -> Self {
         Self {
             iter: Some(iter),
@@ -56,14 +53,22 @@ impl<T> MigrationCollector<T> {
             count_sent,
             file_polling_mode,
             dir_polling_mode,
-            running,
+            shutdown,
             pos: Position::new(),
+            committed_line: skip,
+            pending_commit: None,
             last_record: StringRecord::new(),
             success_cnt: 0,
             failed_cnt: 0,
             exhausted: false,
             _marker: PhantomData,
         }
+    }
+
+    /// Returns the number of successful and failed records observed so far.
+    #[must_use]
+    pub fn stats(&self) -> (u64, u64) {
+        (self.success_cnt, self.failed_cnt)
     }
 }
 
@@ -72,11 +77,11 @@ impl<T> Collector for MigrationCollector<T>
 where
     T: Serialize + TryFromGigantoRecord + Unpin + Debug + Send,
 {
-    fn protocol(&self) -> RawEventKind {
-        self.protocol
-    }
+    async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
+        if let Some(position) = self.pending_commit.take() {
+            self.committed_line = position;
+        }
 
-    async fn next_batch(&mut self) -> Result<Option<CollectedBatch>> {
         if self.exhausted {
             return Ok(None);
         }
@@ -84,7 +89,7 @@ where
         let mut buf: Vec<(i64, Vec<u8>)> = Vec::new();
         let mut record_bytes: Vec<usize> = Vec::new();
 
-        while self.running.load(Ordering::SeqCst) {
+        while !shutdown_requested(&self.shutdown) {
             let Some(ref mut iter) = self.iter else {
                 break;
             };
@@ -98,14 +103,17 @@ where
                         self.last_record = record.clone();
                         match T::try_from_giganto_record(&record) {
                             Ok((event, timestamp)) => {
-                                let record_data = bincode::serialize(&event)?;
+                                let record_data =
+                                    bincode::serialize(&event).map_err(anyhow::Error::from)?;
                                 record_bytes.push(record.as_slice().len());
                                 buf.push((timestamp, record_data));
                                 self.success_cnt += 1;
 
                                 if buf.len() >= BATCH_SIZE {
                                     self.pos = next_pos;
+                                    self.pending_commit = Some(self.pos.line());
                                     return Ok(Some(CollectedBatch {
+                                        kind: self.protocol,
                                         events: buf,
                                         record_bytes,
                                     }));
@@ -132,9 +140,15 @@ where
                 }
             } else {
                 if self.file_polling_mode && !self.dir_polling_mode {
-                    tokio::time::sleep(POLLING_INTERVAL).await;
+                    if wait_for_poll_or_shutdown(&mut self.shutdown).await {
+                        self.exhausted = true;
+                        break;
+                    }
                     let mut taken = self.iter.take().expect("iter is Some inside this branch");
-                    taken.reader_mut().seek(self.pos.clone())?;
+                    taken
+                        .reader_mut()
+                        .seek(self.pos.clone())
+                        .map_err(anyhow::Error::from)?;
                     self.iter = Some(taken.into_reader().into_records());
                     continue;
                 }
@@ -143,7 +157,7 @@ where
             }
         }
 
-        if !self.running.load(Ordering::SeqCst) {
+        if shutdown_requested(&self.shutdown) {
             self.exhausted = true;
         }
 
@@ -151,34 +165,26 @@ where
             return Ok(None);
         }
 
+        self.pending_commit = Some(self.pos.line());
         Ok(Some(CollectedBatch {
+            kind: self.protocol,
             events: buf,
             record_bytes,
         }))
     }
 
-    fn position(&self) -> u64 {
-        self.pos.line()
-    }
-
-    fn stats(&self) -> (u64, u64) {
-        (self.success_cnt, self.failed_cnt)
-    }
-
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+    fn position(&self) -> Vec<u8> {
+        position_bytes(self.committed_line)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::Write,
-        sync::{Arc, atomic::AtomicBool},
-    };
+    use std::io::Write;
 
     use giganto_client::{RawEventKind, ingest::network::Conn};
     use tempfile::tempdir;
+    use tokio::sync::watch;
 
     use super::*;
 
@@ -193,14 +199,15 @@ mod tests {
         lines: &[&str],
         skip: u64,
     ) -> (MigrationCollector<Conn>, tempfile::TempDir) {
-        make_conn_collector_with_options(lines, skip, 0, Arc::new(AtomicBool::new(true)))
+        let (_tx, shutdown) = watch::channel(false);
+        make_conn_collector_with_options(lines, skip, 0, shutdown)
     }
 
     fn make_conn_collector_with_options(
         lines: &[&str],
         skip: u64,
         count_sent: u64,
-        running: Arc<AtomicBool>,
+        shutdown: watch::Receiver<bool>,
     ) -> (MigrationCollector<Conn>, tempfile::TempDir) {
         let dir = tempdir().expect("temp dir");
         let path = dir.path().join("conn.log");
@@ -225,7 +232,7 @@ mod tests {
             count_sent,
             false,
             false,
-            running,
+            shutdown,
         );
         (collector, dir)
     }
@@ -265,9 +272,9 @@ mod tests {
 
     #[tokio::test]
     async fn migration_collector_respects_count_sent() {
-        let running = Arc::new(AtomicBool::new(true));
+        let (_tx, shutdown) = watch::channel(false);
         let (mut collector, _dir) =
-            make_conn_collector_with_options(&[MIGR_CONN_1, MIGR_CONN_2], 0, 1, running);
+            make_conn_collector_with_options(&[MIGR_CONN_1, MIGR_CONN_2], 0, 1, shutdown);
 
         let batch = collector
             .next_batch()
@@ -276,10 +283,7 @@ mod tests {
             .expect("collector should emit one event before hitting the count limit");
 
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(collector.position(), 1);
-        assert_eq!(collector.stats(), (1, 0));
-        assert_eq!(collector.protocol(), RawEventKind::Conn);
-        assert!(collector.is_running());
+        assert_eq!(batch.kind, RawEventKind::Conn);
         assert!(
             collector
                 .next_batch()
@@ -287,6 +291,8 @@ mod tests {
                 .expect("collector should now be exhausted")
                 .is_none()
         );
+        assert_eq!(collector.position(), b"1".to_vec());
+        assert_eq!(collector.stats(), (1, 0));
     }
 
     #[tokio::test]
@@ -313,10 +319,10 @@ mod tests {
 
     #[tokio::test]
     async fn migration_collector_returns_none_when_running_flag_is_false() {
-        let running = Arc::new(AtomicBool::new(false));
-        let (mut collector, _dir) = make_conn_collector_with_options(&[MIGR_CONN_1], 0, 0, running);
+        let (_tx, shutdown) = watch::channel(true);
+        let (mut collector, _dir) =
+            make_conn_collector_with_options(&[MIGR_CONN_1], 0, 0, shutdown);
 
-        assert!(!collector.is_running());
         assert!(
             collector
                 .next_batch()

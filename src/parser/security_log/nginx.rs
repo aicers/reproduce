@@ -1,27 +1,27 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::log::SecuLog;
 use jiff::Timestamp;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, Nginx, ParseSecurityLog, SecurityLogInfo};
+use super::{DEFAULT_IPADDR, Nginx, ParseSecurityLog, SecurityLogInfo, SecurityLogParseResult};
 
 fn get_nginx_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
 
     LOG_REGEX.get_or_init(|| {
         Regex::new(r"(?<srcIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*?(?<datetime>\d{1,2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2} \+\d{4})")
-            .expect("regex")
+            .expect("security log regex literal must compile")
     })
 }
 
-fn parse_nginx_timestamp_ns(datetime: &str) -> Result<i64> {
-    Timestamp::strptime("%d/%b/%Y:%T %z", datetime)
+fn parse_nginx_timestamp_ns(datetime: &str) -> SecurityLogParseResult<i64> {
+    Ok(Timestamp::strptime("%d/%b/%Y:%T %z", datetime)
         .map_err(|e| anyhow!("{e:?}"))?
         .as_nanosecond()
         .try_into()
-        .map_err(|e| anyhow!("{e:?}"))
+        .map_err(|e| anyhow!("{e:?}"))?)
 }
 
 impl ParseSecurityLog for Nginx {
@@ -29,14 +29,14 @@ impl ParseSecurityLog for Nginx {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(SecuLog, i64)> {
+    ) -> SecurityLogParseResult<(SecuLog, i64)> {
         let caps = get_nginx_regex()
             .captures(line)
             .context("invalid log line")?;
 
         let datetime = match caps.name("datetime") {
             Some(d) => d.as_str(),
-            None => bail!("invalid datetime"),
+            None => return Err(anyhow::anyhow!("invalid datetime").into()),
         };
 
         let orig_addr = match caps.name("srcIp") {

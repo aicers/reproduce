@@ -1,12 +1,13 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::log::SecuLog;
 use jiff::Timestamp;
 use regex::Regex;
 
 use super::{
-    DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, SonicWall, proto_to_u8,
+    DEFAULT_IPADDR, DEFAULT_PORT, ParseSecurityLog, SecurityLogInfo, SecurityLogParseResult,
+    SonicWall, proto_to_u8,
 };
 
 fn get_sonic_regex() -> &'static Regex {
@@ -14,16 +15,18 @@ fn get_sonic_regex() -> &'static Regex {
 
     LOG_REGEX.get_or_init(|| {
         Regex::new(r#"time="(?<datetime>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) .*?src=(?<srcIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(?<srcPort>\d+):.*? dst=(?<dstIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(?<dstPort>\d+).*?proto=(?<proto>\w+)\/"#)
-            .expect("regex")
+            .expect("security log regex literal must compile")
     })
 }
 
-fn parse_sonic_timestamp_ns(datetime: &str) -> Result<i64> {
-    Timestamp::strptime("%Y-%m-%d %H:%M:%S %z", format!("{datetime} +0900"))
-        .map_err(|e| anyhow!("{e:?}"))?
-        .as_nanosecond()
-        .try_into()
-        .map_err(|e| anyhow!("{e:?}"))
+fn parse_sonic_timestamp_ns(datetime: &str) -> SecurityLogParseResult<i64> {
+    Ok(
+        Timestamp::strptime("%Y-%m-%d %H:%M:%S %z", format!("{datetime} +0900"))
+            .map_err(|e| anyhow!("{e:?}"))?
+            .as_nanosecond()
+            .try_into()
+            .map_err(|e| anyhow!("{e:?}"))?,
+    )
 }
 
 impl ParseSecurityLog for SonicWall {
@@ -31,14 +34,14 @@ impl ParseSecurityLog for SonicWall {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(SecuLog, i64)> {
+    ) -> SecurityLogParseResult<(SecuLog, i64)> {
         let caps = get_sonic_regex()
             .captures(line)
             .context("invalid log line")?;
 
         let datetime = match caps.name("datetime") {
             Some(d) => d.as_str(),
-            None => bail!("invalid datetime"),
+            None => return Err(anyhow::anyhow!("invalid datetime").into()),
         };
 
         let orig_addr = match caps.name("srcIp") {

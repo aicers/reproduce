@@ -1,27 +1,32 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::log::SecuLog;
 use jiff::Timestamp;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo, Tg};
+use super::{
+    DEFAULT_IPADDR, DEFAULT_PORT, PROTO_TCP, ParseSecurityLog, SecurityLogInfo,
+    SecurityLogParseResult, Tg,
+};
 
 fn get_tg_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
 
     LOG_REGEX.get_or_init(|| {
         Regex::new(r"`(?P<datetime>\d{8}`\d{2}:\d{2}:\d{2})`.*?`(?P<proto>\d+)`(?P<srcIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`(?P<srcPort>\d+)`(?P<dstIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`(?P<dstPort>\d+)`")
-            .expect("regex")
+            .expect("security log regex literal must compile")
     })
 }
 
-fn parse_tg_timestamp_ns(datetime: &str) -> Result<i64> {
-    Timestamp::strptime("%Y%m%d`%H:%M:%S %z", format!("{datetime} +0900"))
-        .map_err(|e| anyhow!("{e:?}"))?
-        .as_nanosecond()
-        .try_into()
-        .map_err(|e| anyhow!("{e:?}"))
+fn parse_tg_timestamp_ns(datetime: &str) -> SecurityLogParseResult<i64> {
+    Ok(
+        Timestamp::strptime("%Y%m%d`%H:%M:%S %z", format!("{datetime} +0900"))
+            .map_err(|e| anyhow!("{e:?}"))?
+            .as_nanosecond()
+            .try_into()
+            .map_err(|e| anyhow!("{e:?}"))?,
+    )
 }
 
 impl ParseSecurityLog for Tg {
@@ -29,12 +34,12 @@ impl ParseSecurityLog for Tg {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(SecuLog, i64)> {
+    ) -> SecurityLogParseResult<(SecuLog, i64)> {
         let caps = get_tg_regex().captures(line).context("invalid log line")?;
 
         let datetime = match caps.name("datetime") {
             Some(d) => d.as_str(),
-            None => bail!("invalid datetime"),
+            None => return Err(anyhow::anyhow!("invalid datetime").into()),
         };
 
         let orig_addr = match caps.name("srcIp") {

@@ -1,458 +1,151 @@
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-};
+use std::net::SocketAddr;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, de::Error};
 
-const DEFAULT_REPORT_MODE: bool = false;
-const DEFAULT_POLLING_MODE: bool = false;
-const DEFAULT_EXPORT_FROM_GIGANTO: bool = false;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InputType {
-    Log,
-    Dir,
-    Elastic,
-}
+/// Stores the shared Giganto connection settings used by binary entrypoints.
 #[derive(Deserialize, Debug, Clone)]
-pub struct File {
-    pub export_from_giganto: Option<bool>,
-    pub polling_mode: bool,
-    pub transfer_count: Option<u64>,
-    pub transfer_skip_count: Option<u64>,
-    pub last_transfer_line_suffix: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct Directory {
-    pub file_prefix: Option<String>,
-    pub polling_mode: bool,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct ElasticSearch {
-    pub url: String,
-    pub event_codes: Vec<String>,
-    pub indices: Vec<String>,
-    pub start_time: String,
-    pub end_time: String,
-    pub size: usize,
-    pub dump_dir: String,
-    pub elastic_auth: String,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct Config {
+pub struct GigantoConfig {
     pub cert: String,
     pub key: String,
     pub ca_certs: Vec<String>,
-    #[serde(deserialize_with = "deserialize_socket_addr")]
-    pub giganto_ingest_srv_addr: SocketAddr,
-    pub giganto_name: String,
-    pub kind: String,
-    pub input: String,
-    pub report: bool,
-    pub report_dir: Option<PathBuf>,
-    /// Path to the log file. `None` means stdout.
-    pub log_path: Option<PathBuf>,
-
-    pub file: Option<File>,
-    pub directory: Option<Directory>,
-    pub elastic: Option<ElasticSearch>,
+    #[serde(
+        rename = "giganto_ingest_srv_addr",
+        deserialize_with = "deserialize_socket_addr"
+    )]
+    pub ingest_srv_addr: SocketAddr,
+    #[serde(rename = "giganto_name")]
+    pub name: String,
 }
 
-impl Config {
-    /// Creates a new `Config` instance from a configuration file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The configuration file cannot be read or parsed
-    /// - Required fields are missing
-    /// - The `kind` field is missing or empty
-    pub fn new(path: &Path) -> Result<Self> {
-        let config = config::Config::builder()
-            .set_default("report", DEFAULT_REPORT_MODE)
-            .context("cannot set the default report value")?
-            .set_default("file.polling_mode", DEFAULT_POLLING_MODE)
-            .context("cannot set the default file polling mode value")?
-            .set_default("directory.polling_mode", DEFAULT_POLLING_MODE)
-            .context("cannot set the default directory polling mode value")?
-            .set_default("file.export_from_giganto", DEFAULT_EXPORT_FROM_GIGANTO)
-            .context("cannot set the default export_from_giganto value")?
-            .add_source(config::File::from(path))
-            .build()
-            .context("cannot build the config")?;
-        let config: Self = config.try_deserialize()?;
-
-        if config.kind.trim().is_empty() {
-            anyhow::bail!("kind cannot be empty");
-        }
-
-        if config.report && config.report_dir.is_none() {
-            anyhow::bail!(
-                "Configuration error: 'report' is set to true but \
-                 'report_dir' is not configured. Add 'report_dir' \
-                 pointing to the directory where report files should \
-                 be written (absolute or relative path). Example: \
-                 report_dir = \"/var/lib/reproduce/reports\""
-            );
-        }
-
-        Ok(config)
-    }
-}
-
-/// Deserializes a socket address.
+/// Deserializes a socket address written as `IP:PORT`.
 ///
 /// # Errors
 ///
-/// Returns an error if the address is not in the form of 'IP:PORT'.
+/// Returns an error if the address is not in the expected format.
 fn deserialize_socket_addr<'de, D>(deserializer: D) -> Result<SocketAddr, D::Error>
 where
     D: Deserializer<'de>,
 {
     let addr = String::deserialize(deserializer)?;
     addr.parse()
-        .map_err(|e| D::Error::custom(format!("invalid address \"{addr}\": {e}")))
+        .map_err(|error| D::Error::custom(format!("invalid address \"{addr}\": {error}")))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
-    use tempfile::NamedTempFile;
+    use serde::Deserialize;
 
-    use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
+    use super::GigantoConfig;
 
-    /// Creates a temporary TOML config file with the given content.
-    fn create_temp_config(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::with_suffix(".toml").expect("Failed to create temp file");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write config");
-        file.flush().expect("Failed to flush");
-        file
+    #[derive(Deserialize)]
+    struct TestConfig {
+        #[serde(flatten)]
+        giganto: GigantoConfig,
     }
 
-    #[test]
-    fn config_new_missing_kind_returns_error() {
-        let config_content = r#"
-cert = "tests/cert.pem"
-key = "tests/key.pem"
-ca_certs = ["tests/root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "aicers"
-input = "/path/to/file"
-"#;
-        let temp_file = create_temp_config(config_content);
-        let result = Config::new(temp_file.path());
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("kind"),
-            "Error message should mention 'kind': {err_msg}"
-        );
+    fn create_temp_config(content: &str) -> (tempfile::TempDir, PathBuf) {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let config_path = temp_dir.path().join("config.toml");
+        fs::write(&config_path, content).expect("test config should be written");
+        (temp_dir, config_path)
     }
 
-    #[test]
-    fn config_new_empty_kind_returns_error() {
-        let config_content = r#"
-cert = "tests/cert.pem"
-key = "tests/key.pem"
-ca_certs = ["tests/root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "aicers"
-kind = ""
-input = "/path/to/file"
-"#;
-        let temp_file = create_temp_config(config_content);
-        let result = Config::new(temp_file.path());
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("kind cannot be empty"),
-            "Error message should indicate empty kind: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn config_new_whitespace_only_kind_returns_error() {
-        let config_content = r#"
-cert = "tests/cert.pem"
-key = "tests/key.pem"
-ca_certs = ["tests/root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "aicers"
-kind = "   "
-input = "/path/to/file"
-"#;
-        let temp_file = create_temp_config(config_content);
-        let result = Config::new(temp_file.path());
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("kind cannot be empty"),
-            "Error message should indicate empty kind: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn config_new_valid_log_kind_succeeds() {
-        let config_content = r#"
-cert = "tests/cert.pem"
-key = "tests/key.pem"
-ca_certs = ["tests/root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "aicers"
-kind = "valid log"
-input = "/path/to/file"
-"#;
-        let temp_file = create_temp_config(config_content);
-        let result = Config::new(temp_file.path());
-
-        assert!(
-            result.is_ok(),
-            "Config with 'log' kind should load successfully: {result:?}"
-        );
-        let config = result.unwrap();
-        assert_eq!(config.kind, "valid log");
-    }
-
-    #[test]
-    fn default_values_applied() {
-        let toml = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-"#;
-        let file = create_temp_config(toml);
-
-        let config = Config::new(file.path()).expect("should parse minimal TOML");
-
-        // Assert default values are correctly applied
-        assert_eq!(config.report, DEFAULT_REPORT_MODE);
-    }
-
-    #[test]
-    fn default_file_polling_mode() {
-        let toml = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-
-[file]
-"#;
-        let file = create_temp_config(toml);
-
-        let config = Config::new(file.path()).expect("should parse TOML with file section");
-
-        let file_section = config.file.expect("file section should exist");
-        assert_eq!(file_section.polling_mode, DEFAULT_POLLING_MODE);
-        assert_eq!(
-            file_section.export_from_giganto,
-            Some(DEFAULT_EXPORT_FROM_GIGANTO)
-        );
-    }
-
-    #[test]
-    fn default_directory_polling_mode() {
-        let toml = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-
-[directory]
-"#;
-        let file = create_temp_config(toml);
-
-        let config = Config::new(file.path()).expect("should parse TOML with directory section");
-
-        let directory = config.directory.expect("directory section should exist");
-        assert_eq!(directory.polling_mode, DEFAULT_POLLING_MODE);
+    fn load_test_config(path: &Path) -> TestConfig {
+        config::Config::builder()
+            .add_source(config::File::from(path))
+            .build()
+            .expect("test config should load")
+            .try_deserialize()
+            .expect("test config should deserialize")
     }
 
     #[test]
     fn socket_addr_ipv4_parses() {
-        let toml = r#"
+        let (_temp_dir, path) = create_temp_config(
+            r#"
 cert = "test.pem"
 key = "test.key"
 ca_certs = ["root.pem"]
 giganto_ingest_srv_addr = "127.0.0.1:8080"
 giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-"#;
-        let file = create_temp_config(toml);
+"#,
+        );
 
-        let config = Config::new(file.path()).expect("should parse IPv4 socket address");
+        let config = load_test_config(&path);
 
         assert_eq!(
-            config.giganto_ingest_srv_addr,
-            "127.0.0.1:8080".parse().expect("valid socket addr")
+            config.giganto.ingest_srv_addr,
+            "127.0.0.1:8080"
+                .parse()
+                .expect("IPv4 socket address literal should parse")
         );
     }
 
     #[test]
     fn socket_addr_ipv6_parses() {
-        let toml = r#"
+        let (_temp_dir, path) = create_temp_config(
+            r#"
 cert = "test.pem"
 key = "test.key"
 ca_certs = ["root.pem"]
 giganto_ingest_srv_addr = "[::1]:8080"
 giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-"#;
-        let file = create_temp_config(toml);
+"#,
+        );
 
-        let config = Config::new(file.path()).expect("should parse IPv6 socket address");
+        let config = load_test_config(&path);
 
         assert_eq!(
-            config.giganto_ingest_srv_addr,
-            "[::1]:8080".parse().expect("valid socket addr")
+            config.giganto.ingest_srv_addr,
+            "[::1]:8080"
+                .parse()
+                .expect("IPv6 socket address literal should parse")
         );
     }
 
     #[test]
     fn socket_addr_missing_port_fails() {
-        let toml = r#"
+        let (_temp_dir, path) = create_temp_config(
+            r#"
 cert = "test.pem"
 key = "test.key"
 ca_certs = ["root.pem"]
 giganto_ingest_srv_addr = "127.0.0.1"
 giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-"#;
-        let file = create_temp_config(toml);
+"#,
+        );
 
-        let result = Config::new(file.path());
-        assert!(result.is_err(), "missing port should fail to parse");
+        let result = config::Config::builder()
+            .add_source(config::File::from(path.as_path()))
+            .build()
+            .and_then(config::Config::try_deserialize::<TestConfig>);
+        assert!(result.is_err(), "socket addresses without a port must fail");
     }
 
     #[test]
     fn socket_addr_hostname_fails() {
-        let toml = r#"
+        let (_temp_dir, path) = create_temp_config(
+            r#"
 cert = "test.pem"
 key = "test.key"
 ca_certs = ["root.pem"]
 giganto_ingest_srv_addr = "localhost:8080"
 giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-"#;
-        let file = create_temp_config(toml);
+"#,
+        );
 
-        let result = Config::new(file.path());
+        let result = config::Config::builder()
+            .add_source(config::File::from(path.as_path()))
+            .build()
+            .and_then(config::Config::try_deserialize::<TestConfig>);
         assert!(
             result.is_err(),
-            "hostname should fail to parse as socket address"
-        );
-    }
-
-    #[test]
-    fn report_true_without_report_dir_fails() {
-        let toml = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-report = true
-"#;
-        let file = create_temp_config(toml);
-
-        let result = Config::new(file.path());
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("report_dir"),
-            "Error should mention 'report_dir': {err_msg}"
-        );
-    }
-
-    #[test]
-    fn report_true_with_report_dir_succeeds() {
-        let toml = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-report = true
-report_dir = "/tmp/reports"
-"#;
-        let file = create_temp_config(toml);
-
-        let config = Config::new(file.path()).expect("report=true with report_dir should succeed");
-        assert!(config.report);
-        assert_eq!(
-            config.report_dir,
-            Some(std::path::PathBuf::from("/tmp/reports"))
-        );
-    }
-
-    #[test]
-    fn report_false_without_report_dir_succeeds() {
-        let toml = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-report = false
-"#;
-        let file = create_temp_config(toml);
-
-        let config =
-            Config::new(file.path()).expect("report=false without report_dir should succeed");
-        assert!(!config.report);
-        assert!(config.report_dir.is_none());
-    }
-
-    #[test]
-    fn report_false_with_report_dir_succeeds() {
-        let toml = r#"
-cert = "test.pem"
-key = "test.key"
-ca_certs = ["root.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:8080"
-giganto_name = "test"
-kind = "log"
-input = "/path/to/input"
-report = false
-report_dir = "/tmp/reports"
-"#;
-        let file = create_temp_config(toml);
-
-        let config = Config::new(file.path()).expect("report=false with report_dir should succeed");
-        assert!(!config.report);
-        assert_eq!(
-            config.report_dir,
-            Some(std::path::PathBuf::from("/tmp/reports"))
+            "hostnames must not deserialize as SocketAddr values"
         );
     }
 }

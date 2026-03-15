@@ -1,27 +1,32 @@
 use std::{net::IpAddr, str::FromStr, sync::OnceLock};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::log::SecuLog;
 use jiff::Timestamp;
 use regex::Regex;
 
-use super::{DEFAULT_IPADDR, DEFAULT_PORT, Fgt, PROTO_TCP, ParseSecurityLog, SecurityLogInfo};
+use super::{
+    DEFAULT_IPADDR, DEFAULT_PORT, Fgt, PROTO_TCP, ParseSecurityLog, SecurityLogInfo,
+    SecurityLogParseResult,
+};
 
 fn get_fgt_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
 
     LOG_REGEX.get_or_init(|| {
         Regex::new(r#"date=(?<date>\d{4}-\d{2}-\d{2}) time=(?<time>\d{2}:\d{2}:\d{2}).*?tz="(?<tz>\+\d{4})".*? srcip=(?<srcIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*dstip=(?<dstIp>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*proto=(?<proto>\d+).*srcport=(?<srcPort>\d+) dstport=(?<dstPort>\d+)"#)
-            .expect("regex")
+            .expect("security log regex literal must compile")
     })
 }
 
-fn parse_fgt_timestamp_ns(date: &str, time: &str, tz: &str) -> Result<i64> {
-    Timestamp::strptime("%Y-%m-%d %H:%M:%S %z", format!("{date} {time} {tz}"))
-        .map_err(|e| anyhow!("{e:?}"))?
-        .as_nanosecond()
-        .try_into()
-        .map_err(|e| anyhow!("{e:?}"))
+fn parse_fgt_timestamp_ns(date: &str, time: &str, tz: &str) -> SecurityLogParseResult<i64> {
+    Ok(
+        Timestamp::strptime("%Y-%m-%d %H:%M:%S %z", format!("{date} {time} {tz}"))
+            .map_err(|e| anyhow!("{e:?}"))?
+            .as_nanosecond()
+            .try_into()
+            .map_err(|e| anyhow!("{e:?}"))?,
+    )
 }
 
 impl ParseSecurityLog for Fgt {
@@ -29,20 +34,20 @@ impl ParseSecurityLog for Fgt {
         line: &str,
         serial: i64,
         info: SecurityLogInfo,
-    ) -> Result<(SecuLog, i64)> {
+    ) -> SecurityLogParseResult<(SecuLog, i64)> {
         let caps = get_fgt_regex().captures(line).context("invalid log line")?;
 
         let date = match caps.name("date") {
             Some(d) => d.as_str(),
-            None => bail!("invalid date"),
+            None => return Err(anyhow::anyhow!("invalid date").into()),
         };
         let time = match caps.name("time") {
             Some(d) => d.as_str(),
-            None => bail!("invalid time"),
+            None => return Err(anyhow::anyhow!("invalid time").into()),
         };
         let tz = match caps.name("tz") {
             Some(d) => d.as_str(),
-            None => bail!("invalid tz"),
+            None => return Err(anyhow::anyhow!("invalid tz").into()),
         };
 
         let orig_addr = match caps.name("srcIp") {

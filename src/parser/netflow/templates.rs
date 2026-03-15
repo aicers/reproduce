@@ -10,7 +10,7 @@ use super::{
     packet::Netflow9Header,
 };
 
-#[allow(clippy::struct_field_names)]
+#[allow(clippy::struct_field_names)] // Netflow template field names intentionally follow RFC terminology.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Template {
     pub(super) header: Netflow9Header,
@@ -77,7 +77,7 @@ impl std::fmt::Display for Template {
 type TemplateKey = (IpAddr, u32, u16);
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
-#[allow(clippy::module_name_repetitions)]
+#[allow(clippy::module_name_repetitions)] // Netflow type names intentionally mirror protocol terminology.
 pub struct TemplatesBox {
     templates: HashMap<TemplateKey, Template>,
 }
@@ -100,7 +100,7 @@ impl TemplatesBox {
         self.templates.get(key)
     }
 
-    #[allow(unused)]
+    #[allow(unused)] // Template removal is retained for parity with the legacy template cache lifecycle.
     fn remove(&mut self, key: &TemplateKey) -> bool {
         self.templates.remove(key).is_some()
     }

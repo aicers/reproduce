@@ -1,3 +1,4 @@
+pub mod file;
 pub mod log;
 pub mod migration;
 pub mod netflow;
@@ -10,16 +11,57 @@ mod common;
 
 use std::time::Duration;
 
-use anyhow::Result;
 use async_trait::async_trait;
 pub(crate) use common::apply_timestamp_dedup;
 use giganto_client::RawEventKind;
+use thiserror::Error;
+use tokio::sync::watch;
 
 /// Defines how long polling collectors sleep after reaching EOF.
 pub(crate) const POLLING_INTERVAL: Duration = Duration::from_millis(3_000);
 
+/// Encodes a numeric collector position using the legacy decimal format.
+pub(crate) fn position_bytes(position: u64) -> Vec<u8> {
+    position.to_string().into_bytes()
+}
+
+/// Returns whether shutdown was requested on the receiver.
+pub(crate) fn shutdown_requested(shutdown: &watch::Receiver<bool>) -> bool {
+    *shutdown.borrow()
+}
+
+/// Waits for either the next polling interval or a shutdown signal.
+pub(crate) async fn wait_for_poll_or_shutdown(shutdown: &mut watch::Receiver<bool>) -> bool {
+    if shutdown_requested(shutdown) {
+        return true;
+    }
+
+    tokio::select! {
+        () = tokio::time::sleep(POLLING_INTERVAL) => shutdown_requested(shutdown),
+        changed = shutdown.changed() => {
+            changed.is_err() || shutdown_requested(shutdown)
+        }
+    }
+}
+
+/// Describes failures that can occur while collecting records from a source.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct CollectorError(anyhow::Error);
+
+impl From<anyhow::Error> for CollectorError {
+    fn from(error: anyhow::Error) -> Self {
+        Self(error)
+    }
+}
+
+/// Represents the result type used by collector implementations.
+pub type CollectorResult<T> = std::result::Result<T, CollectorError>;
+
 /// Stores a batch of parsed events ready for sending.
 pub struct CollectedBatch {
+    /// Giganto protocol kind for the serialized events in this batch.
+    pub kind: RawEventKind,
     /// Parsed events as `(timestamp_nanos, serialized_record)` pairs.
     pub events: Vec<(i64, Vec<u8>)>,
     /// Per-record source byte sizes (for per-record report accounting).
@@ -29,27 +71,15 @@ pub struct CollectedBatch {
 /// Produces batches of parsed events from a data source.
 #[async_trait]
 pub trait Collector: Send {
-    /// Returns the protocol kind for this collector.
-    fn protocol(&self) -> RawEventKind;
-
     /// Returns the next batch of events, or `None` when the source is
     /// exhausted (not polling or shutdown requested).
     ///
     /// # Errors
     ///
     /// Returns an error if reading or parsing the source data fails.
-    async fn next_batch(&mut self) -> Result<Option<CollectedBatch>>;
+    async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>>;
 
     /// Returns the current position (line number or packet count) for
-    /// checkpointing.
-    fn position(&self) -> u64;
-
-    /// Returns `(success_count, failed_count)` for logging.
-    fn stats(&self) -> (u64, u64);
-
-    /// Returns `true` while the collector should keep running.
-    ///
-    /// When shutdown is requested (e.g. `Ctrl-C`), this returns `false`
-    /// so that the pipeline can exit gracefully.
-    fn is_running(&self) -> bool;
+    /// checkpointing as raw bytes.
+    fn position(&self) -> Vec<u8>;
 }

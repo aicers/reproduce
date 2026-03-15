@@ -1,29 +1,42 @@
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::log::{OpLog, OpLogLevel};
 use jiff::Timestamp;
 use regex::Regex;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct OperationLogError(anyhow::Error);
+
+impl From<anyhow::Error> for OperationLogError {
+    fn from(error: anyhow::Error) -> Self {
+        Self(error)
+    }
+}
+
+pub type OperationLogResult<T> = std::result::Result<T, OperationLogError>;
 
 fn get_log_regex() -> &'static Regex {
     static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
 
     LOG_REGEX.get_or_init(|| {
         Regex::new(r"(?P<datetime>\S+)\s+(?P<level>INFO|WARN|ERROR)\s(?P<contents>.+)$")
-            .expect("regex")
+            .expect("operation log regex literal must compile")
     })
 }
 
-fn parse_oplog_timestamp(datetime: &str) -> Result<Timestamp> {
-    datetime.parse().map_err(|e| anyhow!("{e:?}"))
+fn parse_oplog_timestamp(datetime: &str) -> OperationLogResult<Timestamp> {
+    Ok(datetime.parse().map_err(|e| anyhow!("{e:?}"))?)
 }
 
-fn parse_log_level(level: &str) -> Result<OpLogLevel> {
+fn parse_log_level(level: &str) -> OperationLogResult<OpLogLevel> {
     match level {
         "INFO" => Ok(OpLogLevel::Info),
         "WARN" => Ok(OpLogLevel::Warn),
         "ERROR" => Ok(OpLogLevel::Error),
-        _ => Err(anyhow!("invalid log level")),
+        _ => Err(anyhow!("invalid log level").into()),
     }
 }
 
@@ -32,18 +45,18 @@ fn parse_log_level(level: &str) -> Result<OpLogLevel> {
 /// # Errors
 ///
 /// Returns an error if the line does not match the expected log format.
-pub fn log_regex(line: &str, agent: &str) -> Result<(OpLog, i64)> {
+pub fn log_regex(line: &str, agent: &str) -> OperationLogResult<(OpLog, i64)> {
     let caps = get_log_regex().captures(line).context("invalid log line")?;
 
     let log_level = match caps.name("level") {
         Some(l) => l.as_str(),
-        None => bail!("invalid log level"),
+        None => return Err(anyhow::anyhow!("invalid log level").into()),
     };
     let log_level = parse_log_level(log_level)?;
 
     let datetime = match caps.name("datetime") {
         Some(d) => d.as_str(),
-        None => bail!("invalid datetime"),
+        None => return Err(anyhow::anyhow!("invalid datetime").into()),
     };
     let ts = parse_oplog_timestamp(datetime)?;
     let timestamp = i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")?;

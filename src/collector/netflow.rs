@@ -1,22 +1,12 @@
-use std::{
-    collections::VecDeque,
-    env,
-    fmt::Debug,
-    marker::PhantomData,
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{collections::VecDeque, env, fmt::Debug, marker::PhantomData, path::Path};
 
-use anyhow::{Result, bail};
 use async_trait::async_trait;
 use giganto_client::RawEventKind;
 use serde::Serialize;
+use tokio::sync::watch;
 use tracing::error;
 
-use super::{CollectedBatch, Collector};
+use super::{CollectedBatch, Collector, CollectorResult, position_bytes, shutdown_requested};
 use crate::parser::netflow::{
     NetflowHeader, ParseNetflowDatasets, PktBuf, ProcessStats, Stats, TemplatesBox,
 };
@@ -29,11 +19,13 @@ pub struct NetflowCollector<T> {
     protocol: RawEventKind,
     skip: u64,
     count_sent: u64,
-    running: Arc<AtomicBool>,
+    shutdown: watch::Receiver<bool>,
     templates: TemplatesBox,
     tmpl_path: Option<String>,
     stats: Stats,
     pkt_cnt: u64,
+    committed_pkt_cnt: u64,
+    pending_commit: Option<u64>,
     timestamp_old: u32,
     nanos: u32,
     pending_events: VecDeque<(i64, Vec<u8>, usize)>,
@@ -54,8 +46,8 @@ impl<T> NetflowCollector<T> {
         protocol: RawEventKind,
         skip: u64,
         count_sent: u64,
-        running: Arc<AtomicBool>,
-    ) -> Result<Self> {
+        shutdown: watch::Receiver<bool>,
+    ) -> CollectorResult<Self> {
         let tmpl_path = env::var("NETFLOW_TEMPLATES_PATH").ok();
         let templates = if let Some(ref path) = tmpl_path {
             TemplatesBox::from_path(path).unwrap_or_default()
@@ -63,13 +55,14 @@ impl<T> NetflowCollector<T> {
             TemplatesBox::new()
         };
 
-        let handle = pcap::Capture::from_file(filename)?;
+        let handle = pcap::Capture::from_file(filename).map_err(anyhow::Error::from)?;
         if handle.get_datalink() != pcap::Linktype::ETHERNET {
-            bail!(
+            return Err(anyhow::anyhow!(
                 "Error: unknown datalink {:?} in {}",
                 handle.get_datalink().get_name(),
                 filename.display()
-            );
+            )
+            .into());
         }
 
         Ok(Self {
@@ -77,11 +70,13 @@ impl<T> NetflowCollector<T> {
             protocol,
             skip,
             count_sent,
-            running,
+            shutdown,
             templates,
             tmpl_path,
             stats: Stats::new(),
             pkt_cnt: 0,
+            committed_pkt_cnt: skip,
+            pending_commit: None,
             timestamp_old: 0,
             nanos: 1,
             pending_events: VecDeque::new(),
@@ -110,6 +105,13 @@ impl<T> NetflowCollector<T> {
         }
     }
 
+    /// Returns the number of processed packets for compatibility with legacy
+    /// collector statistics.
+    #[must_use]
+    pub fn stats(&self) -> (u64, u64) {
+        (self.pkt_cnt, 0)
+    }
+
     fn drain_pending_batch(&mut self) -> Option<CollectedBatch> {
         if self.pending_events.is_empty() {
             return None;
@@ -127,6 +129,7 @@ impl<T> NetflowCollector<T> {
         }
 
         Some(CollectedBatch {
+            kind: self.protocol,
             events,
             record_bytes,
         })
@@ -151,12 +154,14 @@ impl<T> Collector for NetflowCollector<T>
 where
     T: Serialize + ParseNetflowDatasets + Unpin + Debug + Send,
 {
-    fn protocol(&self) -> RawEventKind {
-        self.protocol
-    }
-
     #[allow(clippy::too_many_lines)]
-    async fn next_batch(&mut self) -> Result<Option<CollectedBatch>> {
+    async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
+        if self.pending_events.is_empty()
+            && let Some(position) = self.pending_commit.take()
+        {
+            self.committed_pkt_cnt = position;
+        }
+
         if let Some(batch) = self.drain_pending_batch() {
             return Ok(Some(batch));
         }
@@ -210,7 +215,7 @@ where
 
             let mut saw_events = false;
             for (timestamp, event) in events {
-                let record_data = bincode::serialize(&event)?;
+                let record_data = bincode::serialize(&event).map_err(anyhow::Error::from)?;
                 self.pending_events
                     .push_back((timestamp, record_data, pkt.len()));
                 saw_events = true;
@@ -221,7 +226,7 @@ where
                 self.finalize();
             }
 
-            if !self.running.load(Ordering::SeqCst) {
+            if shutdown_requested(&self.shutdown) {
                 self.exhausted = true;
                 self.finalize();
             }
@@ -230,6 +235,7 @@ where
             // returning that packet's pending records across subsequent calls
             // until all of them have been sent.
             if saw_events {
+                self.pending_commit = Some(self.pkt_cnt);
                 return Ok(self.drain_pending_batch());
             }
 
@@ -243,18 +249,8 @@ where
         Ok(self.drain_pending_batch())
     }
 
-    fn position(&self) -> u64 {
-        self.pkt_cnt
-    }
-
-    fn stats(&self) -> (u64, u64) {
-        // Netflow does not track individual success/failed the same way as
-        // CSV-based collectors. Report packet count as success.
-        (self.pkt_cnt, 0)
-    }
-
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+    fn position(&self) -> Vec<u8> {
+        position_bytes(self.committed_pkt_cnt)
     }
 }
 
@@ -265,6 +261,7 @@ mod tests {
     use anyhow::Result;
     use giganto_client::ingest::netflow::{Netflow5, Netflow9};
     use tempfile::tempdir;
+    use tokio::sync::watch;
 
     use super::*;
 
@@ -416,9 +413,15 @@ mod tests {
     fn make_collector_with_options(
         path: &Path,
         count_sent: u64,
-        running: Arc<AtomicBool>,
+        shutdown: watch::Receiver<bool>,
     ) -> Result<NetflowCollector<Netflow5>> {
-        NetflowCollector::<Netflow5>::new(path, RawEventKind::Netflow5, 0, count_sent, running)
+        Ok(NetflowCollector::<Netflow5>::new(
+            path,
+            RawEventKind::Netflow5,
+            0,
+            count_sent,
+            shutdown,
+        )?)
     }
 
     #[tokio::test]
@@ -432,9 +435,9 @@ mod tests {
             )],
         )?;
 
-        let running = Arc::new(AtomicBool::new(true));
+        let (_tx, shutdown) = watch::channel(false);
         let mut collector =
-            NetflowCollector::<Netflow5>::new(&pcap_path, RawEventKind::Netflow5, 0, 0, running)?;
+            NetflowCollector::<Netflow5>::new(&pcap_path, RawEventKind::Netflow5, 0, 0, shutdown)?;
 
         let first = collector
             .next_batch()
@@ -459,9 +462,9 @@ mod tests {
         let pcap_path = temp_dir.path().join("normal.pcap");
         write_pcap(&pcap_path, &[build_v5_packet(2)])?;
 
-        let running = Arc::new(AtomicBool::new(true));
+        let (_tx, shutdown) = watch::channel(false);
         let mut collector =
-            NetflowCollector::<Netflow5>::new(&pcap_path, RawEventKind::Netflow5, 0, 0, running)?;
+            NetflowCollector::<Netflow5>::new(&pcap_path, RawEventKind::Netflow5, 0, 0, shutdown)?;
 
         let batch = collector
             .next_batch()
@@ -485,8 +488,8 @@ mod tests {
             &[non_netflow_payload, truncated_payload, build_v5_packet(1)],
         )?;
 
-        let running = Arc::new(AtomicBool::new(true));
-        let mut collector = make_collector_with_options(&pcap_path, 0, running)?;
+        let (_tx, shutdown) = watch::channel(false);
+        let mut collector = make_collector_with_options(&pcap_path, 0, shutdown)?;
 
         let batch = collector
             .next_batch()
@@ -508,18 +511,17 @@ mod tests {
         let pcap_path = temp_dir.path().join("count-sent.pcap");
         write_pcap(&pcap_path, &[build_v5_packet(1), build_v5_packet(1)])?;
 
-        let running = Arc::new(AtomicBool::new(true));
-        let mut collector = make_collector_with_options(&pcap_path, 1, running)?;
+        let (_tx, shutdown) = watch::channel(false);
+        let mut collector = make_collector_with_options(&pcap_path, 1, shutdown)?;
 
         let batch = collector
             .next_batch()
             .await?
             .expect("collector should emit the first packet before exhausting");
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(collector.position(), 1);
-        assert_eq!(collector.protocol(), RawEventKind::Netflow5);
-        assert!(collector.is_running());
+        assert_eq!(batch.kind, RawEventKind::Netflow5);
         assert!(collector.next_batch().await?.is_none());
+        assert_eq!(collector.position(), b"1".to_vec());
         Ok(())
     }
 
@@ -529,8 +531,8 @@ mod tests {
         let pcap_path = temp_dir.path().join("stopped.pcap");
         write_pcap(&pcap_path, &[build_v5_packet(1)])?;
 
-        let running = Arc::new(AtomicBool::new(false));
-        let mut collector = make_collector_with_options(&pcap_path, 0, running)?;
+        let (_tx, shutdown) = watch::channel(true);
+        let mut collector = make_collector_with_options(&pcap_path, 0, shutdown)?;
 
         let batch = collector
             .next_batch()
@@ -552,7 +554,7 @@ mod tests {
             RawEventKind::Netflow5,
             0,
             0,
-            Arc::new(AtomicBool::new(true)),
+            watch::channel(false).1,
         )
         .err()
         .expect("non-Ethernet captures must be rejected");
@@ -581,7 +583,7 @@ mod tests {
             RawEventKind::Netflow5,
             0,
             0,
-            Arc::new(AtomicBool::new(true)),
+            watch::channel(false).1,
         )?;
         assert!(collector.templates.is_empty());
         Ok(())
@@ -607,7 +609,7 @@ mod tests {
             RawEventKind::Netflow9,
             0,
             0,
-            Arc::new(AtomicBool::new(true)),
+            watch::channel(false).1,
         )?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -643,7 +645,7 @@ mod tests {
             RawEventKind::Netflow9,
             0,
             0,
-            Arc::new(AtomicBool::new(true)),
+            watch::channel(false).1,
         )?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

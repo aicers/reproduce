@@ -7,6 +7,7 @@ use anyhow::{Result, bail};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use jiff::Timestamp;
 #[allow(clippy::module_name_repetitions)]
+// Netflow type names intentionally mirror protocol terminology.
 pub use packet::{NetflowHeader, PktBuf};
 pub use statistics::{ProcessStats, Stats};
 pub use templates::TemplatesBox;

@@ -19,17 +19,17 @@ use std::{
     path::Path,
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use csv::{Reader, ReaderBuilder, StringRecord};
 use jiff::{Timestamp, tz::TimeZone};
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+use thiserror::Error;
 use tracing::{error, info};
 
 use self::{
@@ -43,103 +43,122 @@ use self::{
     registry_key_rename::ElasticRegistryKeyValueRename,
     registry_value_set::ElasticRegistryValueSet,
 };
-use crate::config::ElasticSearch;
+/// Describes a binary-driven Elasticsearch export request.
+#[derive(Clone, Copy)]
+pub struct ElasticDumpOptions<'a> {
+    pub url: &'a str,
+    pub event_codes: &'a [String],
+    pub indices: &'a [String],
+    pub start_time: &'a str,
+    pub end_time: &'a str,
+    pub size: usize,
+    pub dump_dir: &'a str,
+    pub elastic_auth: &'a str,
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct SysmonCsvError(anyhow::Error);
+
+impl From<anyhow::Error> for SysmonCsvError {
+    fn from(error: anyhow::Error) -> Self {
+        Self(error)
+    }
+}
+
+pub type SysmonCsvResult<T> = std::result::Result<T, SysmonCsvError>;
 
 /// Fetches sysmon event data from Elasticsearch and writes CSV files to a dump directory.
 ///
 /// # Errors
 ///
 /// Returns an error if the Elasticsearch query or file I/O fails.
-#[allow(clippy::unused_async)]
-pub async fn fetch_elastic_search(elasticsearch: &ElasticSearch) -> Result<String> {
+pub async fn fetch_elastic_search(
+    elasticsearch: ElasticDumpOptions<'_>,
+) -> SysmonCsvResult<String> {
     let now = Timestamp::now().to_zoned(TimeZone::UTC);
     let exec_time = now.strftime("%F %T").to_string();
 
     let size = elasticsearch.size;
-    let event_codes = elasticsearch
-        .event_codes
-        .iter()
-        .map(std::string::String::as_str)
-        .collect::<Vec<&str>>();
     let dump_dir = format!("{}/{exec_time}", elasticsearch.dump_dir);
-    fs::create_dir_all(&dump_dir)?;
+    fs::create_dir_all(&dump_dir).map_err(anyhow::Error::from)?;
 
-    event_codes.par_iter().for_each(|&event_code| {
-        let Ok(runtime) = tokio::runtime::Runtime::new() else {
-            error!("Failed to init tokio runtime for event_code {event_code}");
-            return;
-        };
-        runtime.block_on(async {
-            match fetch_data_from_es(event_code, elasticsearch).await {
-                Ok(data_vec) => {
-                    let file_name = format!("{dump_dir}/event{event_code}_log.csv",);
-                    info!("Event {event_code}");
-                    for data in &data_vec {
-                        match event_code {
-                            "1" => {
-                                process_event_data::<ElasticProcessCreate>(data, &file_name, size);
-                            }
-                            "2" => process_event_data::<ElasticFileCreationTimeChanged>(
-                                data, &file_name, size,
-                            ),
-                            "3" => process_event_data::<ElasticNetworkConnection>(
-                                data, &file_name, size,
-                            ),
-                            "5" => process_event_data::<ElasticProcessTerminated>(
-                                data, &file_name, size,
-                            ),
-                            "7" => process_event_data::<ElasticImageLoaded>(data, &file_name, size),
-                            "11" => process_event_data::<ElasticFileCreate>(data, &file_name, size),
-                            "13" => process_event_data::<ElasticRegistryValueSet>(
-                                data, &file_name, size,
-                            ),
-                            "14" => process_event_data::<ElasticRegistryKeyValueRename>(
-                                data, &file_name, size,
-                            ),
-                            "15" => process_event_data::<ElasticFileCreateStreamHash>(
-                                data, &file_name, size,
-                            ),
-                            "17" => process_event_data::<ElasticPipeEvent>(data, &file_name, size),
-                            "22" => process_event_data::<ElasticDnsEvent>(data, &file_name, size),
-                            "23" => process_event_data::<ElasticFileDelete>(data, &file_name, size),
-                            "25" => process_event_data::<ElasticProcessTampering>(
-                                data, &file_name, size,
-                            ),
-                            "26" => process_event_data::<ElasticFileDeleteDetected>(
-                                data, &file_name, size,
-                            ),
-                            _ => {}
+    for event_code in elasticsearch.event_codes {
+        match fetch_data_from_es(event_code, elasticsearch).await {
+            Ok(data_vec) => {
+                let file_name = format!("{dump_dir}/event{event_code}_log.csv");
+                info!("Event {event_code}");
+                for data in &data_vec {
+                    match event_code.as_str() {
+                        "1" => process_event_data::<ElasticProcessCreate>(data, &file_name, size),
+                        "2" => process_event_data::<ElasticFileCreationTimeChanged>(
+                            data, &file_name, size,
+                        ),
+                        "3" => {
+                            process_event_data::<ElasticNetworkConnection>(data, &file_name, size);
                         }
+                        "5" => {
+                            process_event_data::<ElasticProcessTerminated>(data, &file_name, size);
+                        }
+                        "7" => process_event_data::<ElasticImageLoaded>(data, &file_name, size),
+                        "11" => process_event_data::<ElasticFileCreate>(data, &file_name, size),
+                        "13" => {
+                            process_event_data::<ElasticRegistryValueSet>(data, &file_name, size);
+                        }
+                        "14" => process_event_data::<ElasticRegistryKeyValueRename>(
+                            data, &file_name, size,
+                        ),
+                        "15" => process_event_data::<ElasticFileCreateStreamHash>(
+                            data, &file_name, size,
+                        ),
+                        "17" => process_event_data::<ElasticPipeEvent>(data, &file_name, size),
+                        "22" => process_event_data::<ElasticDnsEvent>(data, &file_name, size),
+                        "23" => process_event_data::<ElasticFileDelete>(data, &file_name, size),
+                        "25" => {
+                            process_event_data::<ElasticProcessTampering>(data, &file_name, size);
+                        }
+                        "26" => {
+                            process_event_data::<ElasticFileDeleteDetected>(data, &file_name, size);
+                        }
+                        _ => {}
                     }
                 }
-                Err(e) => error!("Error {e:?}"),
             }
-        });
-    });
+            Err(error) => error!("Error {error:?}"),
+        }
+    }
     Ok(dump_dir)
 }
 
 /// Query multiple index with `event_code`
-async fn fetch_data_from_es(event_code: &str, config: &ElasticSearch) -> Result<Vec<Value>> {
+async fn fetch_data_from_es(
+    event_code: &str,
+    config: ElasticDumpOptions<'_>,
+) -> SysmonCsvResult<Vec<Value>> {
     let mut last_ts = 0_u64;
-    let client = build_elastic_client(&config.elastic_auth)?;
+    let client = build_elastic_client(config.elastic_auth)?;
     let mut all_results = Vec::new();
-    for index in &config.indices {
+    for index in config.indices {
         info!("Index: {index}");
         loop {
             let query = build_query(
                 event_code,
-                &config.start_time,
-                &config.end_time,
+                config.start_time,
+                config.end_time,
                 config.size,
                 last_ts,
             );
 
-            let result = send_request(&client, &query, &config.url, index).await?;
+            let result = send_request(&client, &query, config.url, index).await?;
             all_results.push(result.clone());
             if let Some(data) = result["hits"]["hits"].as_array() {
                 if let Some(last) = data.last() {
-                    if let Some(lts) = last["sort"][0].as_u64() {
+                    if let Some(lts) = last
+                        .get("sort")
+                        .and_then(Value::as_array)
+                        .and_then(|sort| sort.first())
+                        .and_then(Value::as_u64)
+                    {
                         if data.len() == config.size {
                             last_ts = lts;
                         } else {
@@ -156,21 +175,24 @@ async fn fetch_data_from_es(event_code: &str, config: &ElasticSearch) -> Result<
     Ok(all_results)
 }
 
-fn build_elastic_client(auth: &str) -> Result<Client> {
+fn build_elastic_client(auth: &str) -> SysmonCsvResult<Client> {
     let encoded = base64_engine.encode(auth.as_bytes());
     let basic_auth = format!("Basic {encoded}");
 
-    Client::builder()
+    Ok(Client::builder()
         // bypass ssl cert
         .danger_accept_invalid_certs(true)
         .default_headers({
             let mut headers = HeaderMap::new();
-            headers.insert(AUTHORIZATION, HeaderValue::from_str(&basic_auth)?);
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&basic_auth).map_err(anyhow::Error::from)?,
+            );
 
             headers
         })
         .build()
-        .map_err(|e| anyhow!("Failed to build elastic client: {e}"))
+        .map_err(|e| anyhow!("Failed to build elastic client: {e}"))?)
 }
 
 fn build_query(event_code: &str, start: &str, end: &str, size: usize, last: u64) -> Value {
@@ -193,15 +215,21 @@ fn build_query(event_code: &str, start: &str, end: &str, size: usize, last: u64)
 }
 
 /// Send a query with `_search` option.
-async fn send_request(client: &Client, query: &Value, url: &str, index: &str) -> Result<Value> {
-    client
+async fn send_request(
+    client: &Client,
+    query: &Value,
+    url: &str,
+    index: &str,
+) -> SysmonCsvResult<Value> {
+    Ok(client
         .post(format!("{url}/{index}/_search"))
         .json(query)
         .send()
-        .await?
+        .await
+        .map_err(anyhow::Error::from)?
         .json()
         .await
-        .map_err(|e| anyhow!({ e }))
+        .map_err(|e| anyhow!({ e }))?)
 }
 
 fn process_event_data<T: EventToCsv + Serialize>(data: &Value, file_name: &str, size: usize) {
@@ -212,7 +240,7 @@ fn process_event_data<T: EventToCsv + Serialize>(data: &Value, file_name: &str, 
     }
 }
 
-fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) -> io::Result<()> {
+fn write_to_csv<T: EventToCsv + Serialize>(entries: &[T], file_name: &str) -> io::Result<()> {
     info!("CSV file name: {file_name}");
     if entries.is_empty() {
         return Ok(());
@@ -243,12 +271,13 @@ fn write_to_csv<T: EventToCsv + Serialize>(entries: &Vec<T>, file_name: &str) ->
 /// # Errors
 ///
 /// Returns an error if the time string is malformed.
-pub fn parse_sysmon_time(time: &str) -> Result<Timestamp> {
+pub fn parse_sysmon_time(time: &str) -> SysmonCsvResult<Timestamp> {
     let dt = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", time)
         .map_err(|_| anyhow!("invalid time: {time}"))?;
-    dt.to_zoned(TimeZone::UTC)
+    Ok(dt
+        .to_zoned(TimeZone::UTC)
         .map_err(|e| anyhow!("failed to create zoned datetime: {e}"))
-        .map(|z| z.timestamp())
+        .map(|z| z.timestamp())?)
 }
 
 /// Parses a Sysmon time string into nanoseconds since the Unix epoch.
@@ -256,9 +285,9 @@ pub fn parse_sysmon_time(time: &str) -> Result<Timestamp> {
 /// # Errors
 ///
 /// Returns an error if the time string is malformed or overflows.
-pub fn parse_sysmon_timestamp_ns(time: &str) -> Result<i64> {
+pub fn parse_sysmon_timestamp_ns(time: &str) -> SysmonCsvResult<i64> {
     let ts = parse_sysmon_time(time)?;
-    i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")
+    Ok(i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")?)
 }
 
 /// Opens a Sysmon CSV file and returns a configured CSV reader.
@@ -266,12 +295,13 @@ pub fn parse_sysmon_timestamp_ns(time: &str) -> Result<i64> {
 /// # Errors
 ///
 /// Returns an error if the file cannot be opened.
-pub fn open_sysmon_csv_file(path: &Path) -> Result<Reader<File>> {
+pub fn open_sysmon_csv_file(path: &Path) -> SysmonCsvResult<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
         .delimiter(b'\t')
         .flexible(true)
-        .from_path(path)?)
+        .from_path(path)
+        .map_err(anyhow::Error::from)?)
 }
 
 /// Converts a Sysmon CSV record into a typed event.
@@ -281,11 +311,16 @@ pub trait TryFromSysmonRecord: Sized {
     /// # Errors
     ///
     /// Returns an error if the record cannot be parsed.
-    fn try_from_sysmon_record(rec: &StringRecord) -> Result<(Self, i64)>;
+    fn try_from_sysmon_record(rec: &StringRecord) -> SysmonCsvResult<(Self, i64)>;
 }
 
 trait EventToCsv: Sized {
     fn parse(data: &Value) -> Vec<Self>;
+}
+
+pub(super) fn split_message_part(part: &str) -> Option<(&str, &str)> {
+    let (key, value) = part.split_once(':')?;
+    Some((key.trim(), value.trim()))
 }
 
 #[cfg(test)]

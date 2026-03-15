@@ -1,50 +1,52 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::sysmon::ProcessTampering;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_timestamp_ns};
+use super::{
+    EventToCsv, SysmonCsvResult, TryFromSysmonRecord, parse_sysmon_timestamp_ns, split_message_part,
+};
 
 impl TryFromSysmonRecord for ProcessTampering {
-    fn try_from_sysmon_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+    fn try_from_sysmon_record(rec: &csv::StringRecord) -> SysmonCsvResult<(Self, i64)> {
         let agent_name = if let Some(agent_name) = rec.get(0) {
             agent_name.to_string()
         } else {
-            return Err(anyhow!("missing agent_name"));
+            return Err(anyhow!("missing agent_name").into());
         };
         let agent_id = if let Some(agent_id) = rec.get(1) {
             agent_id.to_string()
         } else {
-            return Err(anyhow!("missing agent_id"));
+            return Err(anyhow!("missing agent_id").into());
         };
         let time = if let Some(utc_time) = rec.get(3) {
             parse_sysmon_timestamp_ns(utc_time)?
         } else {
-            return Err(anyhow!("missing time"));
+            return Err(anyhow!("missing time").into());
         };
         let process_guid = if let Some(process_guid) = rec.get(4) {
             process_guid.to_string()
         } else {
-            return Err(anyhow!("missing process_guid"));
+            return Err(anyhow!("missing process_guid").into());
         };
         let process_id = if let Some(process_id) = rec.get(5) {
             process_id.parse::<u32>().context("invalid process_id")?
         } else {
-            return Err(anyhow!("missing process_id"));
+            return Err(anyhow!("missing process_id").into());
         };
         let image = if let Some(image) = rec.get(6) {
             image.to_string()
         } else {
-            return Err(anyhow!("missing image"));
+            return Err(anyhow!("missing image").into());
         };
         let tamper_type = if let Some(types) = rec.get(7) {
             types.to_string()
         } else {
-            return Err(anyhow!("missing tamper_type"));
+            return Err(anyhow!("missing tamper_type").into());
         };
         let user = if let Some(user) = rec.get(8) {
             user.to_string()
         } else {
-            return Err(anyhow!("missing user"));
+            return Err(anyhow!("missing user").into());
         };
 
         Ok((
@@ -62,7 +64,7 @@ impl TryFromSysmonRecord for ProcessTampering {
     }
 }
 
-#[allow(clippy::module_name_repetitions)]
+#[allow(clippy::module_name_repetitions)] // Elastic mirror types intentionally keep Sysmon event names.
 #[derive(Serialize)]
 pub struct ElasticProcessTampering {
     agent_name: Option<String>,
@@ -104,10 +106,7 @@ impl EventToCsv for ElasticProcessTampering {
                     }
 
                     for part in message.split('\n') {
-                        let segments: Vec<_> = part.splitn(2, ':').collect();
-                        if segments.len() == 2 {
-                            let key = segments[0].trim();
-                            let value = segments[1].trim();
+                        if let Some((key, value)) = split_message_part(part) {
                             match key {
                                 "UtcTime" => entry.utc_time = Some(value.to_string()),
                                 "ProcessGuid" => entry.process_guid = Some(value.to_string()),

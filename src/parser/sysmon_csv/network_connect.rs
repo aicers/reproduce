@@ -1,53 +1,55 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use giganto_client::ingest::sysmon::NetworkConnection;
 use serde::Serialize;
 
-use super::{EventToCsv, TryFromSysmonRecord, parse_sysmon_timestamp_ns};
+use super::{
+    EventToCsv, SysmonCsvResult, TryFromSysmonRecord, parse_sysmon_timestamp_ns, split_message_part,
+};
 
 impl TryFromSysmonRecord for NetworkConnection {
     #[allow(clippy::too_many_lines)]
-    fn try_from_sysmon_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+    fn try_from_sysmon_record(rec: &csv::StringRecord) -> SysmonCsvResult<(Self, i64)> {
         let agent_name = if let Some(agent_name) = rec.get(0) {
             agent_name.to_string()
         } else {
-            return Err(anyhow!("missing agent_name"));
+            return Err(anyhow!("missing agent_name").into());
         };
         let agent_id = if let Some(agent_id) = rec.get(1) {
             agent_id.to_string()
         } else {
-            return Err(anyhow!("missing agent_id"));
+            return Err(anyhow!("missing agent_id").into());
         };
         let time = if let Some(utc_time) = rec.get(3) {
             parse_sysmon_timestamp_ns(utc_time)?
         } else {
-            return Err(anyhow!("missing time"));
+            return Err(anyhow!("missing time").into());
         };
         let process_guid = if let Some(process_guid) = rec.get(4) {
             process_guid.to_string()
         } else {
-            return Err(anyhow!("missing process_guid"));
+            return Err(anyhow!("missing process_guid").into());
         };
         let process_id = if let Some(process_id) = rec.get(5) {
             process_id.parse::<u32>().context("invalid process_id")?
         } else {
-            return Err(anyhow!("missing process_id"));
+            return Err(anyhow!("missing process_id").into());
         };
         let image = if let Some(image) = rec.get(6) {
             image.to_string()
         } else {
-            return Err(anyhow!("missing image"));
+            return Err(anyhow!("missing image").into());
         };
         let user = if let Some(user) = rec.get(7) {
             user.to_string()
         } else {
-            return Err(anyhow!("missing user"));
+            return Err(anyhow!("missing user").into());
         };
         let protocol = if let Some(protocol) = rec.get(8) {
             protocol.to_string()
         } else {
-            return Err(anyhow!("missing protocol"));
+            return Err(anyhow!("missing protocol").into());
         };
         let initiated = if let Some(initiated) = rec.get(9) {
             if initiated.eq("true") {
@@ -55,10 +57,10 @@ impl TryFromSysmonRecord for NetworkConnection {
             } else if initiated.eq("false") || initiated.eq("-") {
                 false
             } else {
-                return Err(anyhow!("invalid initiated"));
+                return Err(anyhow!("invalid initiated").into());
             }
         } else {
-            return Err(anyhow!("missing initiated"));
+            return Err(anyhow!("missing initiated").into());
         };
         let source_is_ipv6 = if let Some(source_is_ipv6) = rec.get(10) {
             if source_is_ipv6.eq("true") {
@@ -66,10 +68,10 @@ impl TryFromSysmonRecord for NetworkConnection {
             } else if source_is_ipv6.eq("false") || source_is_ipv6.eq("-") {
                 false
             } else {
-                return Err(anyhow!("invalid source_is_ipv6"));
+                return Err(anyhow!("invalid source_is_ipv6").into());
             }
         } else {
-            return Err(anyhow!("missing source_is_ipv6"));
+            return Err(anyhow!("missing source_is_ipv6").into());
         };
         let source_ip = if let Some(source_ip) = rec.get(11) {
             if source_ip.eq("-") {
@@ -78,12 +80,12 @@ impl TryFromSysmonRecord for NetworkConnection {
                 source_ip.parse::<IpAddr>().context("invalid source_ip")?
             }
         } else {
-            return Err(anyhow!("missing source_ip"));
+            return Err(anyhow!("missing source_ip").into());
         };
         let source_hostname = if let Some(source_hostname) = rec.get(12) {
             source_hostname.to_string()
         } else {
-            return Err(anyhow!("missing source_hostname"));
+            return Err(anyhow!("missing source_hostname").into());
         };
         let source_port = if let Some(source_port) = rec.get(13) {
             if source_port.eq("-") {
@@ -92,12 +94,12 @@ impl TryFromSysmonRecord for NetworkConnection {
                 source_port.parse::<u16>().context("invalid source_port")?
             }
         } else {
-            return Err(anyhow!("missing source_port"));
+            return Err(anyhow!("missing source_port").into());
         };
         let source_port_name = if let Some(source_port_name) = rec.get(14) {
             source_port_name.to_string()
         } else {
-            return Err(anyhow!("missing source_port_name"));
+            return Err(anyhow!("missing source_port_name").into());
         };
         let destination_is_ipv6 = if let Some(destination_is_ipv6) = rec.get(15) {
             if destination_is_ipv6.eq("true") {
@@ -105,10 +107,10 @@ impl TryFromSysmonRecord for NetworkConnection {
             } else if destination_is_ipv6.eq("false") || destination_is_ipv6.eq("-") {
                 false
             } else {
-                return Err(anyhow!("invalid destination_is_ipv6"));
+                return Err(anyhow!("invalid destination_is_ipv6").into());
             }
         } else {
-            return Err(anyhow!("missing destination_is_ipv6"));
+            return Err(anyhow!("missing destination_is_ipv6").into());
         };
         let destination_ip = if let Some(destination_ip) = rec.get(16) {
             if destination_ip.eq("-") {
@@ -119,12 +121,12 @@ impl TryFromSysmonRecord for NetworkConnection {
                     .context("invalid destination_ip")?
             }
         } else {
-            return Err(anyhow!("missing destination_ip"));
+            return Err(anyhow!("missing destination_ip").into());
         };
         let destination_hostname = if let Some(destination_hostname) = rec.get(17) {
             destination_hostname.to_string()
         } else {
-            return Err(anyhow!("missing destination_hostname"));
+            return Err(anyhow!("missing destination_hostname").into());
         };
         let destination_port = if let Some(destination_port) = rec.get(18) {
             if destination_port.eq("-") {
@@ -135,12 +137,12 @@ impl TryFromSysmonRecord for NetworkConnection {
                     .context("invalid destination_port")?
             }
         } else {
-            return Err(anyhow!("missing destination_port"));
+            return Err(anyhow!("missing destination_port").into());
         };
         let destination_port_name = if let Some(destination_port_name) = rec.get(19) {
             destination_port_name.to_string()
         } else {
-            return Err(anyhow!("missing destination_port_name"));
+            return Err(anyhow!("missing destination_port_name").into());
         };
 
         Ok((
@@ -232,10 +234,7 @@ impl EventToCsv for ElasticNetworkConnection {
                     }
 
                     for part in message.split('\n') {
-                        let segments: Vec<_> = part.splitn(2, ':').collect();
-                        if segments.len() == 2 {
-                            let key = segments[0].trim();
-                            let value = segments[1].trim();
+                        if let Some((key, value)) = split_message_part(part) {
                             match key {
                                 "UtcTime" => entry.utc_time = Some(value.to_string()),
                                 "ProcessGuid" => entry.process_guid = Some(value.to_string()),
