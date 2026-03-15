@@ -4,13 +4,20 @@ mod tests;
 
 use std::{fs::File, path::Path};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use csv::{Reader, ReaderBuilder, StringRecord};
 use jiff::Timestamp;
+use thiserror::Error;
 
 const PROTO_TCP: u8 = 0x06;
 const PROTO_UDP: u8 = 0x11;
 const PROTO_ICMP: u8 = 0x01;
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct ZeekError(#[from] anyhow::Error);
+
+pub type ZeekResult<T> = std::result::Result<T, ZeekError>;
 
 pub trait TryFromZeekRecord: Sized {
     /// Converts a Zeek TSV record into the implementing type with a timestamp.
@@ -18,7 +25,7 @@ pub trait TryFromZeekRecord: Sized {
     /// # Errors
     ///
     /// Returns an error if the record cannot be parsed.
-    fn try_from_zeek_record(rec: &StringRecord) -> Result<(Self, i64)>;
+    fn try_from_zeek_record(rec: &StringRecord) -> ZeekResult<(Self, i64)>;
 }
 
 /// Parses a Zeek-format timestamp string (`seconds.microseconds`) into a `Timestamp`.
@@ -26,7 +33,7 @@ pub trait TryFromZeekRecord: Sized {
 /// # Errors
 ///
 /// Returns an error if the timestamp string is malformed or out of range.
-pub fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
+pub fn parse_zeek_timestamp(timestamp: &str) -> ZeekResult<Timestamp> {
     let (secs_str, micros_str) = timestamp
         .split_once('.')
         .ok_or_else(|| anyhow!("invalid timestamp: {timestamp}"))?;
@@ -39,7 +46,9 @@ pub fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
         .and_then(|m| m.checked_mul(1000))
         .context("microseconds overflow")?;
 
-    Timestamp::new(secs, nanos).map_err(|e| anyhow!("failed to create Timestamp: {e}"))
+    Timestamp::new(secs, nanos)
+        .map_err(|e| anyhow!("failed to create Timestamp: {e}"))
+        .map_err(ZeekError::from)
 }
 
 /// Parses a Zeek-format timestamp string into nanoseconds since the Unix epoch.
@@ -47,9 +56,11 @@ pub fn parse_zeek_timestamp(timestamp: &str) -> Result<Timestamp> {
 /// # Errors
 ///
 /// Returns an error if the timestamp string is malformed or overflows.
-pub fn parse_zeek_timestamp_ns(timestamp: &str) -> Result<i64> {
+pub fn parse_zeek_timestamp_ns(timestamp: &str) -> ZeekResult<i64> {
     let ts = parse_zeek_timestamp(timestamp)?;
-    i64::try_from(ts.as_nanosecond()).context("timestamp nanoseconds overflow")
+    i64::try_from(ts.as_nanosecond())
+        .context("timestamp nanoseconds overflow")
+        .map_err(ZeekError::from)
 }
 
 /// Opens a Zeek TSV log file and returns a configured CSV reader.
@@ -57,13 +68,14 @@ pub fn parse_zeek_timestamp_ns(timestamp: &str) -> Result<i64> {
 /// # Errors
 ///
 /// Returns an error if the file cannot be opened.
-pub fn open_raw_event_log_file(path: &Path) -> Result<Reader<File>> {
+pub fn open_raw_event_log_file(path: &Path) -> ZeekResult<Reader<File>> {
     Ok(ReaderBuilder::new()
         .comment(Some(b'#'))
         .delimiter(b'\t')
         .has_headers(false)
         .flexible(true)
-        .from_path(path)?)
+        .from_path(path)
+        .map_err(anyhow::Error::from)?)
 }
 
 #[cfg(test)]

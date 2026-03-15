@@ -3,7 +3,6 @@ mod packet;
 mod statistics;
 mod templates;
 
-use anyhow::{Result, bail};
 use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use jiff::Timestamp;
 #[allow(clippy::module_name_repetitions)]
@@ -11,7 +10,20 @@ use jiff::Timestamp;
 pub use packet::{NetflowHeader, PktBuf};
 pub use statistics::{ProcessStats, Stats};
 pub use templates::TemplatesBox;
+use thiserror::Error;
 use tracing::warn;
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct NetflowError(#[from] anyhow::Error);
+
+pub type NetflowResult<T> = std::result::Result<T, NetflowError>;
+
+macro_rules! netflow_error {
+    ($($arg:tt)*) => {
+        NetflowError::from(::anyhow::anyhow!($($arg)*))
+    };
+}
 
 pub trait ParseNetflowDatasets: Sized {
     /// Parses netflow datasets from a packet buffer into typed records.
@@ -26,7 +38,7 @@ pub trait ParseNetflowDatasets: Sized {
         nanos: &mut u32,
         input: &mut PktBuf,
         stats: &mut Stats,
-    ) -> Result<Vec<(i64, Self)>>;
+    ) -> NetflowResult<Vec<(i64, Self)>>;
 }
 
 impl ParseNetflowDatasets for Netflow5 {
@@ -37,9 +49,9 @@ impl ParseNetflowDatasets for Netflow5 {
         nanos: &mut u32,
         input: &mut PktBuf,
         stats: &mut Stats,
-    ) -> Result<Vec<(i64, Self)>> {
+    ) -> NetflowResult<Vec<(i64, Self)>> {
         let NetflowHeader::V5(header) = header else {
-            bail!("invalid netflow v5 header");
+            return Err(netflow_error!("invalid netflow v5 header"));
         };
         let mut events = vec![];
         if let Ok(values) = input.parse_netflow_v5_datasets(header) {
@@ -50,7 +62,7 @@ impl ParseNetflowDatasets for Netflow5 {
             stats.add(ProcessStats::Events, usize::from(header.count));
         } else {
             stats.add(ProcessStats::InvalidNetflowPackets, 1);
-            bail!("invalid netflow v5 pcap");
+            return Err(netflow_error!("invalid netflow v5 pcap"));
         }
         Ok(events)
     }
@@ -64,13 +76,13 @@ impl ParseNetflowDatasets for Netflow9 {
         nanos: &mut u32,
         input: &mut PktBuf,
         stats: &mut Stats,
-    ) -> Result<Vec<(i64, Self)>> {
+    ) -> NetflowResult<Vec<(i64, Self)>> {
         let NetflowHeader::V9(header) = header else {
-            bail!("invalid netflow v9 header");
+            return Err(netflow_error!("invalid netflow v9 header"));
         };
         let Ok((flowset_id, flowset_length)) = input.parse_netflow_v9_flowset_header() else {
             stats.add(ProcessStats::InvalidNetflowPackets, 1);
-            bail!("invalid netflow v9 pcap");
+            return Err(netflow_error!("invalid netflow v9 pcap"));
         };
 
         let mut events = vec![];

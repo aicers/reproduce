@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use csv::StringRecord;
 use giganto_client::ingest::sysmon::{
     DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -8,7 +8,9 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 
-use super::{TryFromGigantoRecord, parse_giganto_timestamp_ns};
+use super::{MigrationResult, TryFromGigantoRecord, parse_giganto_timestamp_ns};
+
+type Result<T> = MigrationResult<T>;
 
 fn record_timestamp(rec: &StringRecord, idx: usize) -> Result<i64> {
     let timestamp = rec.get(idx).ok_or_else(|| anyhow!("missing timestamp"))?;
@@ -16,7 +18,7 @@ fn record_timestamp(rec: &StringRecord, idx: usize) -> Result<i64> {
 }
 
 fn field<'a>(rec: &'a StringRecord, idx: usize, name: &str) -> Result<&'a str> {
-    rec.get(idx).ok_or_else(|| anyhow!("missing {name}"))
+    Ok(rec.get(idx).ok_or_else(|| anyhow!("missing {name}"))?)
 }
 
 fn parse_string(rec: &StringRecord, idx: usize, name: &str) -> Result<String> {
@@ -25,22 +27,22 @@ fn parse_string(rec: &StringRecord, idx: usize, name: &str) -> Result<String> {
 
 fn parse_timestamp_ns(rec: &StringRecord, idx: usize, name: &str) -> Result<i64> {
     let value = field(rec, idx, name)?;
-    parse_giganto_timestamp_ns(value).with_context(|| format!("invalid {name}"))
+    Ok(parse_giganto_timestamp_ns(value).with_context(|| format!("invalid {name}"))?)
 }
 
 fn parse_u32(rec: &StringRecord, idx: usize, name: &str) -> Result<u32> {
     let value = field(rec, idx, name)?;
-    value.parse::<u32>().context(format!("invalid {name}"))
+    Ok(value.parse::<u32>().context(format!("invalid {name}"))?)
 }
 
 fn parse_u16(rec: &StringRecord, idx: usize, name: &str) -> Result<u16> {
     let value = field(rec, idx, name)?;
-    value.parse::<u16>().context(format!("invalid {name}"))
+    Ok(value.parse::<u16>().context(format!("invalid {name}"))?)
 }
 
 fn parse_bool(rec: &StringRecord, idx: usize, name: &str) -> Result<bool> {
     let value = field(rec, idx, name)?;
-    value.parse::<bool>().context(format!("invalid {name}"))
+    Ok(value.parse::<bool>().context(format!("invalid {name}"))?)
 }
 
 fn parse_vec_field(rec: &StringRecord, idx: usize, name: &str, split: char) -> Result<Vec<String>> {

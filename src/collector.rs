@@ -17,6 +17,8 @@ use giganto_client::RawEventKind;
 use thiserror::Error;
 use tokio::sync::watch;
 
+use crate::parser::netflow::NetflowError;
+
 /// Defines how long polling collectors sleep after reaching EOF.
 pub(crate) const POLLING_INTERVAL: Duration = Duration::from_millis(3_000);
 
@@ -55,16 +57,22 @@ impl From<anyhow::Error> for CollectorError {
     }
 }
 
+impl From<NetflowError> for CollectorError {
+    fn from(error: NetflowError) -> Self {
+        Self(anyhow::Error::new(error))
+    }
+}
+
 /// Represents the result type used by collector implementations.
 pub type CollectorResult<T> = std::result::Result<T, CollectorError>;
 
 /// Stores a batch of parsed events ready for sending.
 pub struct CollectedBatch {
-    /// Giganto protocol kind for the serialized events in this batch.
+    /// Stores the Giganto protocol kind for the serialized events in this batch.
     pub kind: RawEventKind,
-    /// Parsed events as `(timestamp_nanos, serialized_record)` pairs.
+    /// Stores parsed events as `(timestamp_nanos, serialized_record)` pairs.
     pub events: Vec<(i64, Vec<u8>)>,
-    /// Per-record source byte sizes (for per-record report accounting).
+    /// Stores per-record source byte sizes for per-record report accounting.
     pub record_bytes: Vec<usize>,
 }
 
