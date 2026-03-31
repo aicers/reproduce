@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn zeek_collector_skip_records() {
-        // skip=1: positions 0 and 1 are skipped (lines ≤ 1), so only 1 record is kept.
+        // skip=1: the first record (line 1) is skipped (lines ≤ 1), so 2 records are kept.
         let lines = [ZEEK_CONN_1, ZEEK_CONN_2, ZEEK_CONN_3];
         let (mut collector, _dir) = make_conn_collector(&lines, 1);
 

@@ -51,19 +51,6 @@ impl PipelineSender for GigantoSender {
     }
 }
 
-/// Runs one collector to completion using a `GigantoSender`.
-///
-/// # Errors
-///
-/// Returns an error if the collector, sender, or reconnection logic fails.
-pub async fn run_pipeline(
-    sender: &mut GigantoSender,
-    collector: &mut dyn Collector,
-    shutdown: watch::Receiver<bool>,
-) -> std::result::Result<(), PipelineError> {
-    run_pipeline_with_sender(sender, collector, shutdown, &mut |_| {}).await
-}
-
 /// Runs one collector to completion using any compatible sender.
 ///
 /// `on_record_bytes` is called once per record with the raw byte size used by

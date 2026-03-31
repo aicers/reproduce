@@ -902,6 +902,40 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
 }
 
 #[tokio::test]
+async fn run_zeek_migration_only_kind_errors_without_migration_flag() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+
+    for kind in ZeekKind::ALL {
+        if !kind.requires_migration() {
+            continue;
+        }
+        let kind_name = kind.as_str();
+        let path = write_text_file(&temp_dir, &format!("{kind_name}.log"), "");
+        let mut sender = MockSender::default();
+
+        let result = run_zeek_kind(
+            &path,
+            kind_name,
+            false,
+            default_run_options(),
+            &mut sender,
+            report_for(&path, kind_name),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "migration-only kind {kind_name} should error when migration=false",
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("is not supported"),
+            "error for {kind_name} should mention unsupported: {err_msg}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn run_sysmon_kind_dispatches_all_supported_kinds_without_records() {
     let temp_dir = tempdir().expect("temporary directory should be created");
 
