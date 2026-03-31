@@ -1,4 +1,10 @@
-use std::{env, fs::OpenOptions, process::exit};
+use std::fmt::Debug;
+use std::fs::{File, OpenOptions};
+use std::io::BufReader;
+use std::path::Path;
+use std::sync::OnceLock;
+use std::time::Duration;
+use std::{env, process::exit};
 
 mod config;
 mod kind_runners;
@@ -7,10 +13,59 @@ mod report;
 #[cfg(test)]
 mod tests;
 
-use anyhow::Context as _;
+use anyhow::{Context as _, Result, anyhow, bail};
+use async_trait::async_trait;
+use giganto_client::{
+    RawEventKind,
+    ingest::{
+        netflow::{Netflow5, Netflow9},
+        network::{
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+            Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+        },
+        sysmon::{
+            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
+            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        },
+    },
+};
+use reproduce::checkpoint::Checkpoint;
+use reproduce::collector::Collector;
+use reproduce::collector::file::files_in_dir;
+use reproduce::collector::log::LogCollector;
+use reproduce::collector::migration::MigrationCollector;
+use reproduce::collector::netflow::NetflowCollector;
+use reproduce::collector::operation_log::OplogCollector;
+use reproduce::collector::security_log::SecurityLogCollector;
+use reproduce::collector::sysmon_csv::SysmonCollector;
+use reproduce::collector::zeek::ZeekCollector;
+use reproduce::controller::{PipelineSender, run_pipeline_with_sender};
+use reproduce::parser::migration::TryFromGigantoRecord;
+use reproduce::parser::security_log::{
+    Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
+    Wapples,
+};
+use reproduce::parser::sysmon_csv::{
+    ElasticDumpOptions, TryFromSysmonRecord, open_sysmon_csv_file,
+};
+use reproduce::parser::zeek::{TryFromZeekRecord, open_raw_event_log_file};
+use reproduce::sender::GigantoSender;
+use serde::Serialize;
+use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
+use tracing::{debug, error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::{
+    config::{Config, File as FileConfig, InputType},
+    kind_runners::{
+        run_log_kind, run_netflow_kind, run_operation_log, run_security_kind, run_sysmon_kind,
+        run_zeek_kind,
+    },
+    report::Report,
+};
 
 const USAGE: &str = "\
 USAGE:
@@ -107,64 +162,6 @@ fn init_tracing(log_path: Option<&std::path::Path>) -> anyhow::Result<WorkerGuar
     tracing::info!("Initialized tracing logger");
     Ok(guard)
 }
-
-use std::fmt::Debug;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
-use std::sync::OnceLock;
-use std::time::Duration;
-
-use anyhow::{Result, anyhow, bail};
-use async_trait::async_trait;
-use giganto_client::{
-    RawEventKind,
-    ingest::{
-        netflow::{Netflow5, Netflow9},
-        network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
-            Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
-        },
-        sysmon::{
-            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
-        },
-    },
-};
-use reproduce::checkpoint::Checkpoint;
-use reproduce::collector::Collector;
-use reproduce::collector::file::files_in_dir;
-use reproduce::collector::log::LogCollector;
-use reproduce::collector::migration::MigrationCollector;
-use reproduce::collector::netflow::NetflowCollector;
-use reproduce::collector::operation_log::OplogCollector;
-use reproduce::collector::security_log::SecurityLogCollector;
-use reproduce::collector::sysmon_csv::SysmonCollector;
-use reproduce::collector::zeek::ZeekCollector;
-use reproduce::controller::{PipelineSender, run_pipeline_with_sender};
-use reproduce::parser::migration::TryFromGigantoRecord;
-use reproduce::parser::security_log::{
-    Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
-    Wapples,
-};
-use reproduce::parser::sysmon_csv::{
-    ElasticDumpOptions, TryFromSysmonRecord, open_sysmon_csv_file,
-};
-use reproduce::parser::zeek::{TryFromZeekRecord, open_raw_event_log_file};
-use reproduce::sender::GigantoSender;
-use serde::Serialize;
-use tokio::sync::watch;
-use tracing::{debug, error, info, warn};
-
-use crate::{
-    config::{Config, File as FileConfig, InputType},
-    kind_runners::{
-        run_log_kind, run_netflow_kind, run_operation_log, run_security_kind, run_sysmon_kind,
-        run_zeek_kind,
-    },
-    report::Report,
-};
 
 const AGENTS_LIST: [&str; 7] = [
     "manager",

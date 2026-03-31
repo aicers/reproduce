@@ -41,7 +41,7 @@ impl<T> SecurityLogCollector<T> {
     /// Creates a new `SecurityLogCollector`.
     ///
     /// `kind` is the Giganto kind string (e.g. `"wapples_waf_1"`) which is
-    /// passed through to [`SecurityLogInfo::new`] for each record.
+    /// passed through to `SecurityLogInfo::try_new` for each record.
     #[must_use]
     pub fn new(
         reader: BufReader<File>,
