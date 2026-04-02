@@ -99,6 +99,7 @@ where
             };
             let next_pos = iter.reader().position().clone();
             if let Some(result) = iter.next() {
+                self.pos = next_pos.clone();
                 if next_pos.line() <= self.skip {
                     continue;
                 }
@@ -167,7 +168,6 @@ where
                         warn!("Invalid record: {e}");
                     }
                 }
-                self.pos = next_pos;
                 if self.count_sent != 0 && self.success_cnt >= self.count_sent {
                     self.exhausted = true;
                     break;
@@ -198,6 +198,7 @@ where
         }
 
         if buf.is_empty() {
+            self.committed_line = self.pos.line();
             return Ok(None);
         }
 
@@ -307,6 +308,70 @@ mod tests {
 
         while collector.next_batch().await.expect("next_batch").is_some() {}
         assert_eq!(collector.stats(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn zeek_collector_commits_checkpoint_after_all_parse_failures() {
+        let invalid_2 = "invalid\tuid005eee\t172.16.0.7\t9002\t1.1.1.3\t55\tudp\tdns\t0.001\t30\t200\tSF\t-\t-\t0\tDd\t1\t58\t1\t228\t-";
+        let invalid_3 = "invalid\tuid006fff\t172.16.0.8\t9003\t1.1.1.4\t56\tudp\tdns\t0.001\t30\t200\tSF\t-\t-\t0\tDd\t1\t58\t1\t228\t-";
+        let (mut collector, _dir) =
+            make_conn_collector(&[ZEEK_CONN_INVALID_TIME, invalid_2, invalid_3], 0);
+
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("invalid rows should not abort the collector")
+                .is_none()
+        );
+        assert_eq!(collector.position(), b"3".to_vec());
+        assert_eq!(collector.stats(), (0, 3));
+    }
+
+    #[tokio::test]
+    async fn zeek_collector_caps_checkpoint_to_actual_rows_when_skip_is_too_large() {
+        let lines = [ZEEK_CONN_1, ZEEK_CONN_2, ZEEK_CONN_3];
+        let (mut collector, _dir) = make_conn_collector(&lines, 10);
+
+        assert!(collector.next_batch().await.expect("next_batch").is_none());
+        assert_eq!(collector.position(), b"3".to_vec());
+        assert_eq!(collector.stats(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn zeek_collector_commits_checkpoint_after_parse_failure_beyond_batch_size() {
+        let mut lines = (0..BATCH_SIZE)
+            .map(|index| {
+                if index % 2 == 0 {
+                    ZEEK_CONN_1
+                } else {
+                    ZEEK_CONN_2
+                }
+            })
+            .collect::<Vec<_>>();
+        lines.push(ZEEK_CONN_INVALID_TIME);
+        let expected_success = u64::try_from(BATCH_SIZE).expect("batch size fits in u64");
+        let (mut collector, _dir) = make_conn_collector(&lines, 0);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should flush the first full batch");
+
+        assert_eq!(batch.events.len(), BATCH_SIZE);
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("invalid tail should not abort the collector")
+                .is_none()
+        );
+        assert_eq!(
+            collector.position(),
+            format!("{}", BATCH_SIZE + 1).into_bytes()
+        );
+        assert_eq!(collector.stats(), (expected_success, 1));
     }
 
     #[tokio::test]

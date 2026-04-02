@@ -104,11 +104,13 @@ impl Collector for LogCollector {
                     if self.file_polling_mode && !self.dir_polling_mode {
                         if wait_for_poll_or_shutdown(&mut self.shutdown).await {
                             self.exhausted = true;
+                            self.committed_cnt = self.conv_cnt;
                             return Ok(None);
                         }
                         continue;
                     }
                     self.exhausted = true;
+                    self.committed_cnt = self.conv_cnt;
                     return Ok(None);
                 }
             };
@@ -145,6 +147,7 @@ impl Collector for LogCollector {
         }
 
         self.exhausted = true;
+        self.committed_cnt = self.conv_cnt;
         Ok(None)
     }
 
@@ -195,7 +198,6 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-
     fn collect_binary_lines(data: &[u8]) -> Vec<Vec<u8>> {
         BinaryLines::new(BufReader::new(data))
             .map(|r| r.expect("io error in BinaryLines"))
@@ -381,6 +383,16 @@ mod tests {
         );
         assert_eq!(collector.position(), b"2".to_vec());
         assert_eq!(collector.stats(), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn log_collector_caps_checkpoint_to_actual_lines_when_skip_is_too_large() {
+        let (_tx, shutdown) = watch::channel(false);
+        let (mut collector, _dir) = make_log_collector(b"one\ntwo\n", 10, 0, shutdown);
+
+        assert!(collector.next_batch().await.expect("next_batch").is_none());
+        assert_eq!(collector.position(), b"2".to_vec());
+        assert_eq!(collector.stats(), (0, 0));
     }
 
     #[tokio::test]

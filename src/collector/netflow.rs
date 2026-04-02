@@ -168,6 +168,7 @@ where
 
         if self.exhausted {
             self.finalize();
+            self.committed_pkt_cnt = self.pkt_cnt;
             return Ok(None);
         }
 
@@ -240,12 +241,16 @@ where
             }
 
             if self.exhausted {
+                self.committed_pkt_cnt = self.pkt_cnt;
                 return Ok(None);
             }
         }
 
         self.exhausted = true;
         self.finalize();
+        if self.pending_events.is_empty() {
+            self.committed_pkt_cnt = self.pkt_cnt;
+        }
         Ok(self.drain_pending_batch())
     }
 
@@ -268,6 +273,7 @@ mod tests {
     const ETHERNET_DATALINK: u32 = 1;
     const RAW_DATALINK: u32 = 101;
     const NETFLOW_TEMPLATES_ENV: &str = "NETFLOW_TEMPLATES_PATH";
+    const NETFLOW_UDP_PORT: u16 = 2055;
     const PROTO_UDP: u8 = 17;
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -388,7 +394,7 @@ mod tests {
             payload.extend_from_slice(&record);
         }
 
-        build_ipv4_udp_packet(&payload, 2055)
+        build_ipv4_udp_packet(&payload, NETFLOW_UDP_PORT)
     }
 
     fn build_v9_template_packet() -> Vec<u8> {
@@ -407,7 +413,7 @@ mod tests {
         payload.extend_from_slice(&4u16.to_be_bytes());
         payload.extend_from_slice(&12u16.to_be_bytes());
         payload.extend_from_slice(&4u16.to_be_bytes());
-        build_ipv4_udp_packet(&payload, 2055)
+        build_ipv4_udp_packet(&payload, NETFLOW_UDP_PORT)
     }
 
     fn make_collector_with_options(
@@ -481,7 +487,7 @@ mod tests {
     async fn invalid_and_non_netflow_packets_are_skipped_before_valid_data() -> Result<()> {
         let temp_dir = tempdir()?;
         let pcap_path = temp_dir.path().join("mixed.pcap");
-        let truncated_payload = build_ipv4_udp_packet(&[0x00, 0x05], 2055);
+        let truncated_payload = build_ipv4_udp_packet(&[0x00, 0x05], NETFLOW_UDP_PORT);
         let non_netflow_payload = build_ipv4_udp_packet(&v5_header_bytes(1), 9999);
         write_pcap(
             &pcap_path,
@@ -502,6 +508,72 @@ mod tests {
         assert!(rendered.contains("NoNetflowPackets = 1"));
         assert!(rendered.contains("InvalidNetflowPackets = 1"));
         assert!(rendered.contains("Packets = 3"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_netflow_packets_advance_checkpoint() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("invalid-only.pcap");
+        let truncated_payload = build_ipv4_udp_packet(&[0x00, 0x05], NETFLOW_UDP_PORT);
+        let non_netflow_payload = build_ipv4_udp_packet(&v5_header_bytes(1), 9999);
+        let packets = (0..=BATCH_SIZE)
+            .map(|index| {
+                if index % 2 == 0 {
+                    non_netflow_payload.clone()
+                } else {
+                    truncated_payload.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        write_pcap(&pcap_path, &packets)?;
+
+        let (_tx, shutdown) = watch::channel(false);
+        let mut collector = make_collector_with_options(&pcap_path, 0, shutdown)?;
+
+        assert!(collector.next_batch().await?.is_none());
+        assert_eq!(
+            collector.position(),
+            format!("{}", BATCH_SIZE + 1).into_bytes()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_beyond_packet_count_caps_checkpoint_to_actual_packets() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("skip-too-large.pcap");
+        write_pcap(&pcap_path, &[build_v5_packet(1), build_v5_packet(1)])?;
+
+        let (_tx, shutdown) = watch::channel(false);
+        let mut collector =
+            NetflowCollector::<Netflow5>::new(&pcap_path, RawEventKind::Netflow5, 10, 0, shutdown)?;
+
+        assert!(collector.next_batch().await?.is_none());
+        assert_eq!(collector.position(), b"2".to_vec());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_netflow_packets_after_full_batch_advance_checkpoint() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let pcap_path = temp_dir.path().join("invalid-tail.pcap");
+        let mut packets = vec![build_v5_packet(
+            u16::try_from(BATCH_SIZE).expect("batch size fits in u16"),
+        )];
+        packets.push(build_ipv4_udp_packet(&[0x00, 0x05], NETFLOW_UDP_PORT));
+        write_pcap(&pcap_path, &packets)?;
+
+        let (_tx, shutdown) = watch::channel(false);
+        let mut collector = make_collector_with_options(&pcap_path, 0, shutdown)?;
+
+        let batch = collector
+            .next_batch()
+            .await?
+            .expect("collector should flush the first full batch");
+        assert_eq!(batch.events.len(), BATCH_SIZE);
+        assert!(collector.next_batch().await?.is_none());
+        assert_eq!(collector.position(), b"2".to_vec());
         Ok(())
     }
 
