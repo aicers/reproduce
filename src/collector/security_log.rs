@@ -152,6 +152,7 @@ where
         }
 
         if buf.is_empty() {
+            self.committed_cnt = self.cnt;
             return Ok(None);
         }
 
@@ -249,6 +250,69 @@ mod tests {
         let (mut collector, _dir) = make_collector(b"", 0);
         let result = collector.next_batch().await.expect("next_batch");
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn security_log_collector_commits_checkpoint_after_all_parse_failures() {
+        let content = b"not-a-log-line\nstill-not-a-log-line\nthird-invalid-line\n";
+        let (mut collector, _dir) = make_collector(content, 0);
+
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("invalid lines should not abort the collector")
+                .is_none()
+        );
+        assert_eq!(collector.position(), b"3".to_vec());
+        assert_eq!(collector.stats(), (0, 3));
+    }
+
+    #[tokio::test]
+    async fn security_log_collector_caps_checkpoint_to_actual_lines_when_skip_is_too_large() {
+        let content = format!("{WAPPLES_LINE_1}\n{WAPPLES_LINE_2}\n");
+        let (mut collector, _dir) = make_collector(content.as_bytes(), 10);
+
+        assert!(collector.next_batch().await.expect("next_batch").is_none());
+        assert_eq!(collector.position(), b"2".to_vec());
+        assert_eq!(collector.stats(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn security_log_collector_commits_checkpoint_after_parse_failure_beyond_batch_size() {
+        let valid_lines = (0..BATCH_SIZE)
+            .map(|index| {
+                if index % 2 == 0 {
+                    WAPPLES_LINE_1
+                } else {
+                    WAPPLES_LINE_2
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content = format!("{valid_lines}\nnot-a-log-line\n");
+        let expected_success = u64::try_from(BATCH_SIZE).expect("batch size fits in u64");
+        let (mut collector, _dir) = make_collector(content.as_bytes(), 0);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should flush the first full batch");
+
+        assert_eq!(batch.events.len(), BATCH_SIZE);
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("invalid tail should not abort the collector")
+                .is_none()
+        );
+        assert_eq!(
+            collector.position(),
+            format!("{}", BATCH_SIZE + 1).into_bytes()
+        );
+        assert_eq!(collector.stats(), (expected_success, 1));
     }
 
     #[tokio::test]

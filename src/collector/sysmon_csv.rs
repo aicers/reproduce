@@ -113,6 +113,7 @@ where
             };
             let next_pos = iter.reader().position().clone();
             if let Some(result) = iter.next() {
+                self.pos = next_pos.clone();
                 if next_pos.line() <= self.skip {
                     continue;
                 }
@@ -184,7 +185,6 @@ where
                         warn!("Invalid record: {e}");
                     }
                 }
-                self.pos = next_pos;
                 if self.count_sent != 0 && self.success_cnt >= self.count_sent {
                     self.exhausted = true;
                     break;
@@ -213,6 +213,7 @@ where
         }
 
         if buf.is_empty() {
+            self.committed_line = self.pos.line();
             return Ok(None);
         }
 
@@ -321,6 +322,78 @@ mod tests {
 
         while collector.next_batch().await.expect("next_batch").is_some() {}
         assert_eq!(collector.stats(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_commits_checkpoint_after_all_parse_failures() {
+        let invalid_2 = "sensor\tagent001\tProcess Create\tinvalid-time\t{AAAA-0004}\t4567\tC:\\calc.exe\t4.0\tdesc4\tprod4\tco4\torig4.exe\tcalc.exe\tC:\\Temp\\\tUSER\t{BBBB-0004}\t0x1236\t1\tMedium\tSHA256=jkl012\t{CCCC-0004}\t6791\tC:\\svchost.exe\tsvchost.exe\tSYSTEM";
+        let invalid_3 = "sensor\tagent001\tProcess Create\tinvalid-time\t{AAAA-0005}\t5678\tC:\\calc.exe\t5.0\tdesc5\tprod5\tco5\torig5.exe\tcalc.exe\tC:\\Temp\\\tUSER\t{BBBB-0005}\t0x1237\t1\tMedium\tSHA256=mno345\t{CCCC-0005}\t6792\tC:\\svchost.exe\tsvchost.exe\tSYSTEM";
+        let (_tx, shutdown) = watch::channel(false);
+        let (mut collector, _dir) = make_sysmon_collector_with_options(
+            &[SYSMON_PC_INVALID_TIME, invalid_2, invalid_3],
+            0,
+            0,
+            shutdown,
+        );
+
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("invalid rows should not abort the collector")
+                .is_none()
+        );
+        assert_eq!(collector.position(), b"4".to_vec());
+        assert_eq!(collector.stats(), (0, 3));
+        assert!(collector.needs_header_reset());
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_caps_checkpoint_to_actual_rows_when_skip_is_too_large() {
+        let lines = [SYSMON_PC_1, SYSMON_PC_2];
+        let (mut collector, _dir) = make_sysmon_collector(&lines, 10);
+
+        assert!(collector.next_batch().await.expect("next_batch").is_none());
+        assert_eq!(collector.position(), b"3".to_vec());
+        assert_eq!(collector.stats(), (0, 0));
+        assert!(collector.needs_header_reset());
+    }
+
+    #[tokio::test]
+    async fn sysmon_collector_commits_checkpoint_after_parse_failure_beyond_batch_size() {
+        let mut lines = (0..BATCH_SIZE)
+            .map(|index| {
+                if index % 2 == 0 {
+                    SYSMON_PC_1
+                } else {
+                    SYSMON_PC_2
+                }
+            })
+            .collect::<Vec<_>>();
+        lines.push(SYSMON_PC_INVALID_TIME);
+        let expected_success = u64::try_from(BATCH_SIZE).expect("batch size fits in u64");
+        let (mut collector, _dir) = make_sysmon_collector(&lines, 0);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should flush the first full batch");
+
+        assert_eq!(batch.events.len(), BATCH_SIZE);
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("invalid tail should not abort the collector")
+                .is_none()
+        );
+        assert_eq!(
+            collector.position(),
+            format!("{}", BATCH_SIZE + 2).into_bytes()
+        );
+        assert_eq!(collector.stats(), (expected_success, 1));
+        assert!(collector.needs_header_reset());
     }
 
     #[tokio::test]
