@@ -15,7 +15,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- Bumped `giganto-client` dependency to `a84d792`.
+- Bumped `giganto-client` to 0.26.0, updating `DceRpc` to use
+  the new `context` and `request` fields.
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.26.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.

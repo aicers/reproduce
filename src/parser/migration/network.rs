@@ -1479,21 +1479,6 @@ impl TryFromGigantoRecord for DceRpc {
         } else {
             return Err(migration_error!("missing destination l2 bytes"));
         };
-        let rtt = if let Some(rtt) = rec.get(13) {
-            rtt.parse::<i64>().context("invalid rtt")?
-        } else {
-            return Err(migration_error!("missing rtt"));
-        };
-        let named_pipe = if let Some(named_pipe) = rec.get(14) {
-            named_pipe.to_string()
-        } else {
-            return Err(migration_error!("missing named_pipe"));
-        };
-        let endpoint = if let Some(endpoint) = rec.get(15) {
-            endpoint.to_string()
-        } else {
-            return Err(migration_error!("missing endpoint"));
-        };
         let operation = if let Some(operation) = rec.get(16) {
             operation.to_string()
         } else {
@@ -1509,14 +1494,12 @@ impl TryFromGigantoRecord for DceRpc {
                 proto,
                 start_time,
                 duration,
-                rtt,
-                named_pipe,
-                endpoint,
-                operation,
                 orig_pkts,
                 resp_pkts,
                 orig_l2_bytes,
                 resp_l2_bytes,
+                context: Vec::new(),
+                request: vec![operation],
             },
             time,
         ))
