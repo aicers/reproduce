@@ -11,13 +11,13 @@ use super::{
     CollectedBatch, Collector, CollectorResult, position_bytes, shutdown_requested,
     wait_for_poll_or_shutdown,
 };
-use crate::parser::migration::TryFromGigantoRecord;
+use crate::parser::giganto_import::TryFromGigantoRecord;
 use crate::sender::BATCH_SIZE;
 
-/// Collects Giganto migration CSV records, parsing and batching them for
+/// Collects Giganto-exported CSV records, parsing and batching them for
 /// sending.
 #[allow(clippy::struct_excessive_bools)]
-pub struct MigrationCollector<T> {
+pub struct GigantoImportCollector<T> {
     iter: Option<StringRecordsIntoIter<File>>,
     protocol: RawEventKind,
     skip: u64,
@@ -36,8 +36,8 @@ pub struct MigrationCollector<T> {
     _marker: PhantomData<T>,
 }
 
-impl<T> MigrationCollector<T> {
-    /// Creates a new `MigrationCollector` from a CSV record iterator.
+impl<T> GigantoImportCollector<T> {
+    /// Creates a new `GigantoImportCollector` from a CSV record iterator.
     #[must_use]
     pub fn new(
         iter: StringRecordsIntoIter<File>,
@@ -76,7 +76,7 @@ impl<T> MigrationCollector<T> {
 }
 
 #[async_trait]
-impl<T> Collector for MigrationCollector<T>
+impl<T> Collector for GigantoImportCollector<T>
 where
     T: Serialize + TryFromGigantoRecord + Unpin + Debug + Send,
 {
@@ -195,7 +195,7 @@ mod tests {
 
     use super::*;
 
-    // Two distinct Conn migration records (tab-separated, 17 fields each).
+    // Two distinct Conn Giganto-exported records (tab-separated, 17 fields each).
     // Fields: timestamp, skipped, orig_addr, orig_port, resp_addr, resp_port,
     // proto, conn_state, start_time, duration, service, orig_bytes, resp_bytes,
     // orig_pkts, resp_pkts, orig_l2_bytes, resp_l2_bytes
@@ -205,7 +205,7 @@ mod tests {
     fn make_conn_collector(
         lines: &[&str],
         skip: u64,
-    ) -> (MigrationCollector<Conn>, tempfile::TempDir) {
+    ) -> (GigantoImportCollector<Conn>, tempfile::TempDir) {
         let (_tx, shutdown) = watch::channel(false);
         make_conn_collector_with_options(lines, skip, 0, shutdown)
     }
@@ -215,7 +215,7 @@ mod tests {
         skip: u64,
         count_sent: u64,
         shutdown: watch::Receiver<bool>,
-    ) -> (MigrationCollector<Conn>, tempfile::TempDir) {
+    ) -> (GigantoImportCollector<Conn>, tempfile::TempDir) {
         let dir = tempdir().expect("temp dir");
         let path = dir.path().join("conn.log");
         let mut f = std::fs::File::create(&path).expect("create conn.log");
@@ -232,7 +232,7 @@ mod tests {
             .from_path(&path)
             .expect("open csv");
         let iter = reader.into_records();
-        let collector = MigrationCollector::<Conn>::new(
+        let collector = GigantoImportCollector::<Conn>::new(
             iter,
             RawEventKind::Conn,
             skip,
@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_batches_valid_conn_records() {
+    async fn giganto_import_collector_batches_valid_conn_records() {
         let lines = [MIGR_CONN_1, MIGR_CONN_2];
         let (mut collector, _dir) = make_conn_collector(&lines, 0);
 
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_stats_after_exhaustion() {
+    async fn giganto_import_collector_stats_after_exhaustion() {
         let lines = [MIGR_CONN_1, MIGR_CONN_2];
         let (mut collector, _dir) = make_conn_collector(&lines, 0);
 
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_commits_checkpoint_after_all_parse_failures() {
+    async fn giganto_import_collector_commits_checkpoint_after_all_parse_failures() {
         let (mut collector, _dir) =
             make_conn_collector(&["invalid\trow", "bad\trow\t2", "bad\trow\t3"], 0);
 
@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_caps_checkpoint_to_actual_rows_when_skip_is_too_large() {
+    async fn giganto_import_collector_caps_checkpoint_to_actual_rows_when_skip_is_too_large() {
         let lines = [MIGR_CONN_1, MIGR_CONN_2];
         let (mut collector, _dir) = make_conn_collector(&lines, 10);
 
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_commits_checkpoint_after_parse_failure_beyond_batch_size() {
+    async fn giganto_import_collector_commits_checkpoint_after_parse_failure_beyond_batch_size() {
         let mut lines = (0..BATCH_SIZE)
             .map(|index| {
                 if index % 2 == 0 {
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_returns_none_on_empty_input() {
+    async fn giganto_import_collector_returns_none_on_empty_input() {
         let (mut collector, _dir) = make_conn_collector(&[], 0);
         let result = collector.next_batch().await.expect("next_batch");
         assert!(result.is_none());
@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_respects_count_sent() {
+    async fn giganto_import_collector_respects_count_sent() {
         let (_tx, shutdown) = watch::channel(false);
         let (mut collector, _dir) =
             make_conn_collector_with_options(&[MIGR_CONN_1, MIGR_CONN_2], 0, 1, shutdown);
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_skips_duplicates_and_counts_invalid_rows() {
+    async fn giganto_import_collector_skips_duplicates_and_counts_invalid_rows() {
         let lines = [MIGR_CONN_1, MIGR_CONN_1, "invalid\trow"];
         let (mut collector, _dir) = make_conn_collector(&lines, 0);
 
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_returns_none_when_running_flag_is_false() {
+    async fn giganto_import_collector_returns_none_when_running_flag_is_false() {
         let (_tx, shutdown) = watch::channel(true);
         let (mut collector, _dir) =
             make_conn_collector_with_options(&[MIGR_CONN_1], 0, 0, shutdown);
@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_collector_flushes_at_batch_size_boundary() {
+    async fn giganto_import_collector_flushes_at_batch_size_boundary() {
         let lines = (0..=BATCH_SIZE)
             .map(|index| {
                 if index % 2 == 0 {

@@ -6,7 +6,7 @@ use super::*;
 pub(super) async fn run_zeek_kind<S>(
     filename: &Path,
     kind: &str,
-    migration: bool,
+    giganto_import: bool,
     options: CollectorRunOptions,
     sender: &mut S,
     report: Report,
@@ -14,13 +14,13 @@ pub(super) async fn run_zeek_kind<S>(
 where
     S: PipelineSender + ?Sized,
 {
-    let kind = ZeekKind::parse(kind).ok_or_else(|| anyhow!("unknown zeek/migration kind"))?;
+    let kind = ZeekKind::parse(kind).ok_or_else(|| anyhow!("unknown zeek/giganto-import kind"))?;
     match kind {
         ZeekKind::Conn => {
-            run_zeek_or_migration_collector::<Conn, _>(
+            run_zeek_or_giganto_import_collector::<Conn, _>(
                 filename,
                 RawEventKind::Conn,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -28,10 +28,10 @@ where
             .await
         }
         ZeekKind::Http => {
-            run_zeek_or_migration_collector::<Http, _>(
+            run_zeek_or_giganto_import_collector::<Http, _>(
                 filename,
                 RawEventKind::Http,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -39,10 +39,10 @@ where
             .await
         }
         ZeekKind::Rdp => {
-            run_zeek_or_migration_collector::<Rdp, _>(
+            run_zeek_or_giganto_import_collector::<Rdp, _>(
                 filename,
                 RawEventKind::Rdp,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -50,10 +50,10 @@ where
             .await
         }
         ZeekKind::Smtp => {
-            run_zeek_or_migration_collector::<Smtp, _>(
+            run_zeek_or_giganto_import_collector::<Smtp, _>(
                 filename,
                 RawEventKind::Smtp,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -61,10 +61,10 @@ where
             .await
         }
         ZeekKind::Dns => {
-            run_zeek_or_migration_collector::<Dns, _>(
+            run_zeek_or_giganto_import_collector::<Dns, _>(
                 filename,
                 RawEventKind::Dns,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -72,10 +72,10 @@ where
             .await
         }
         ZeekKind::Ntlm => {
-            run_zeek_or_migration_collector::<Ntlm, _>(
+            run_zeek_or_giganto_import_collector::<Ntlm, _>(
                 filename,
                 RawEventKind::Ntlm,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -83,10 +83,10 @@ where
             .await
         }
         ZeekKind::Kerberos => {
-            run_zeek_or_migration_collector::<Kerberos, _>(
+            run_zeek_or_giganto_import_collector::<Kerberos, _>(
                 filename,
                 RawEventKind::Kerberos,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -94,10 +94,10 @@ where
             .await
         }
         ZeekKind::Ssh => {
-            run_zeek_or_migration_collector::<Ssh, _>(
+            run_zeek_or_giganto_import_collector::<Ssh, _>(
                 filename,
                 RawEventKind::Ssh,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -105,10 +105,10 @@ where
             .await
         }
         ZeekKind::DceRpc => {
-            run_zeek_or_migration_collector::<DceRpc, _>(
+            run_zeek_or_giganto_import_collector::<DceRpc, _>(
                 filename,
                 RawEventKind::DceRpc,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -116,10 +116,10 @@ where
             .await
         }
         ZeekKind::Ftp => {
-            run_zeek_or_migration_collector::<Ftp, _>(
+            run_zeek_or_giganto_import_collector::<Ftp, _>(
                 filename,
                 RawEventKind::Ftp,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -127,10 +127,10 @@ where
             .await
         }
         ZeekKind::Ldap => {
-            run_zeek_or_migration_collector::<Ldap, _>(
+            run_zeek_or_giganto_import_collector::<Ldap, _>(
                 filename,
                 RawEventKind::Ldap,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -138,10 +138,10 @@ where
             .await
         }
         ZeekKind::Tls => {
-            run_zeek_or_migration_collector::<Tls, _>(
+            run_zeek_or_giganto_import_collector::<Tls, _>(
                 filename,
                 RawEventKind::Tls,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -149,10 +149,10 @@ where
             .await
         }
         ZeekKind::Mqtt => {
-            run_migration_only_collector::<Mqtt, _>(
+            run_giganto_import_only_collector::<Mqtt, _>(
                 filename,
                 RawEventKind::Mqtt,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -161,10 +161,10 @@ where
             .await
         }
         ZeekKind::Smb => {
-            run_migration_only_collector::<Smb, _>(
+            run_giganto_import_only_collector::<Smb, _>(
                 filename,
                 RawEventKind::Smb,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -173,10 +173,10 @@ where
             .await
         }
         ZeekKind::Nfs => {
-            run_migration_only_collector::<Nfs, _>(
+            run_giganto_import_only_collector::<Nfs, _>(
                 filename,
                 RawEventKind::Nfs,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -185,10 +185,10 @@ where
             .await
         }
         ZeekKind::Bootp => {
-            run_migration_only_collector::<Bootp, _>(
+            run_giganto_import_only_collector::<Bootp, _>(
                 filename,
                 RawEventKind::Bootp,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -197,10 +197,10 @@ where
             .await
         }
         ZeekKind::Dhcp => {
-            run_migration_only_collector::<Dhcp, _>(
+            run_giganto_import_only_collector::<Dhcp, _>(
                 filename,
                 RawEventKind::Dhcp,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -209,10 +209,10 @@ where
             .await
         }
         ZeekKind::Radius => {
-            run_migration_only_collector::<Radius, _>(
+            run_giganto_import_only_collector::<Radius, _>(
                 filename,
                 RawEventKind::Radius,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -221,10 +221,10 @@ where
             .await
         }
         ZeekKind::MalformedDns => {
-            run_migration_only_collector::<MalformedDns, _>(
+            run_giganto_import_only_collector::<MalformedDns, _>(
                 filename,
                 RawEventKind::MalformedDns,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -233,10 +233,10 @@ where
             .await
         }
         ZeekKind::Icmp => {
-            run_migration_only_collector::<Icmp, _>(
+            run_giganto_import_only_collector::<Icmp, _>(
                 filename,
                 RawEventKind::Icmp,
-                migration,
+                giganto_import,
                 kind.as_str(),
                 options,
                 sender,
@@ -289,7 +289,7 @@ where
 pub(super) async fn run_sysmon_kind<S>(
     filename: &Path,
     kind: &str,
-    migration: bool,
+    giganto_import: bool,
     options: CollectorRunOptions,
     sender: &mut S,
     report: Report,
@@ -300,10 +300,10 @@ where
     let kind = SysmonKind::parse(kind).ok_or_else(|| anyhow!("unknown sysmon kind"))?;
     match kind {
         SysmonKind::ProcessCreate => {
-            run_sysmon_or_migration_collector::<ProcessCreate, _>(
+            run_sysmon_or_giganto_import_collector::<ProcessCreate, _>(
                 filename,
                 RawEventKind::ProcessCreate,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -311,10 +311,10 @@ where
             .await
         }
         SysmonKind::FileCreateTime => {
-            run_sysmon_or_migration_collector::<FileCreationTimeChanged, _>(
+            run_sysmon_or_giganto_import_collector::<FileCreationTimeChanged, _>(
                 filename,
                 RawEventKind::FileCreateTime,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -322,10 +322,10 @@ where
             .await
         }
         SysmonKind::NetworkConnect => {
-            run_sysmon_or_migration_collector::<NetworkConnection, _>(
+            run_sysmon_or_giganto_import_collector::<NetworkConnection, _>(
                 filename,
                 RawEventKind::NetworkConnect,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -333,10 +333,10 @@ where
             .await
         }
         SysmonKind::ProcessTerminate => {
-            run_sysmon_or_migration_collector::<ProcessTerminated, _>(
+            run_sysmon_or_giganto_import_collector::<ProcessTerminated, _>(
                 filename,
                 RawEventKind::ProcessTerminate,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -344,10 +344,10 @@ where
             .await
         }
         SysmonKind::ImageLoad => {
-            run_sysmon_or_migration_collector::<ImageLoaded, _>(
+            run_sysmon_or_giganto_import_collector::<ImageLoaded, _>(
                 filename,
                 RawEventKind::ImageLoad,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -355,10 +355,10 @@ where
             .await
         }
         SysmonKind::FileCreate => {
-            run_sysmon_or_migration_collector::<FileCreate, _>(
+            run_sysmon_or_giganto_import_collector::<FileCreate, _>(
                 filename,
                 RawEventKind::FileCreate,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -366,10 +366,10 @@ where
             .await
         }
         SysmonKind::RegistryValueSet => {
-            run_sysmon_or_migration_collector::<RegistryValueSet, _>(
+            run_sysmon_or_giganto_import_collector::<RegistryValueSet, _>(
                 filename,
                 RawEventKind::RegistryValueSet,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -377,10 +377,10 @@ where
             .await
         }
         SysmonKind::RegistryKeyRename => {
-            run_sysmon_or_migration_collector::<RegistryKeyValueRename, _>(
+            run_sysmon_or_giganto_import_collector::<RegistryKeyValueRename, _>(
                 filename,
                 RawEventKind::RegistryKeyRename,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -388,10 +388,10 @@ where
             .await
         }
         SysmonKind::FileCreateStreamHash => {
-            run_sysmon_or_migration_collector::<FileCreateStreamHash, _>(
+            run_sysmon_or_giganto_import_collector::<FileCreateStreamHash, _>(
                 filename,
                 RawEventKind::FileCreateStreamHash,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -399,10 +399,10 @@ where
             .await
         }
         SysmonKind::PipeEvent => {
-            run_sysmon_or_migration_collector::<PipeEvent, _>(
+            run_sysmon_or_giganto_import_collector::<PipeEvent, _>(
                 filename,
                 RawEventKind::PipeEvent,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -410,10 +410,10 @@ where
             .await
         }
         SysmonKind::DnsQuery => {
-            run_sysmon_or_migration_collector::<DnsEvent, _>(
+            run_sysmon_or_giganto_import_collector::<DnsEvent, _>(
                 filename,
                 RawEventKind::DnsQuery,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -421,10 +421,10 @@ where
             .await
         }
         SysmonKind::FileDelete => {
-            run_sysmon_or_migration_collector::<FileDelete, _>(
+            run_sysmon_or_giganto_import_collector::<FileDelete, _>(
                 filename,
                 RawEventKind::FileDelete,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -432,10 +432,10 @@ where
             .await
         }
         SysmonKind::ProcessTamper => {
-            run_sysmon_or_migration_collector::<ProcessTampering, _>(
+            run_sysmon_or_giganto_import_collector::<ProcessTampering, _>(
                 filename,
                 RawEventKind::ProcessTamper,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,
@@ -443,10 +443,10 @@ where
             .await
         }
         SysmonKind::FileDeleteDetected => {
-            run_sysmon_or_migration_collector::<FileDeleteDetected, _>(
+            run_sysmon_or_giganto_import_collector::<FileDeleteDetected, _>(
                 filename,
                 RawEventKind::FileDeleteDetected,
-                migration,
+                giganto_import,
                 options,
                 sender,
                 report,

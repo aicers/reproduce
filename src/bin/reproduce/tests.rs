@@ -719,7 +719,7 @@ async fn run_single_processes_zeek_input() {
 }
 
 #[tokio::test]
-async fn run_single_processes_migration_input() {
+async fn run_single_processes_giganto_import_input() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(&temp_dir, "conn.log", &format!("{MIGR_CONN_1}\n"));
     let controller = controller_for_file(&path, "conn", Some(true), None);
@@ -728,7 +728,7 @@ async fn run_single_processes_migration_input() {
     controller
         .run_single(&path, &mut sender, "conn", false)
         .await
-        .expect("migration input should be processed");
+        .expect("giganto import input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
     assert_eq!(sender.ensured_protocols, vec![RawEventKind::Conn]);
@@ -846,7 +846,7 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
     let temp_dir = tempdir().expect("temporary directory should be created");
 
     for kind in ZeekKind::ALL {
-        if kind.requires_migration() {
+        if kind.requires_giganto_import() {
             continue;
         }
         let kind_name = kind.as_str();
@@ -880,7 +880,7 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
     }
 
     for kind in ZeekKind::ALL {
-        if !kind.requires_migration() {
+        if !kind.requires_giganto_import() {
             continue;
         }
         let kind_name = kind.as_str();
@@ -896,26 +896,26 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
             report_for(&path, kind_name),
         )
         .await
-        .expect("migration-only kind should dispatch in export mode");
+        .expect("giganto-import-only kind should dispatch in export mode");
 
         assert_eq!(
             pos,
             b"0".to_vec(),
-            "empty migration input should preserve zero-progress checkpoint",
+            "empty giganto import input should preserve zero-progress checkpoint",
         );
         assert!(
             sender.batch_sizes.is_empty(),
-            "empty migration input should not send any batches",
+            "empty giganto import input should not send any batches",
         );
     }
 }
 
 #[tokio::test]
-async fn run_zeek_migration_only_kind_errors_without_migration_flag() {
+async fn run_zeek_giganto_import_only_kind_errors_without_flag() {
     let temp_dir = tempdir().expect("temporary directory should be created");
 
     for kind in ZeekKind::ALL {
-        if !kind.requires_migration() {
+        if !kind.requires_giganto_import() {
             continue;
         }
         let kind_name = kind.as_str();
@@ -934,7 +934,7 @@ async fn run_zeek_migration_only_kind_errors_without_migration_flag() {
 
         assert!(
             result.is_err(),
-            "migration-only kind {kind_name} should error when migration=false",
+            "giganto-import-only kind {kind_name} should error when giganto_import=false",
         );
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -1064,7 +1064,7 @@ async fn run_zeek_kind_rejects_unknown_kind() {
     )
     .await
     .expect_err("unknown zeek kind must be rejected");
-    assert!(err.to_string().contains("unknown zeek/migration kind"));
+    assert!(err.to_string().contains("unknown zeek/giganto-import kind"));
 }
 
 #[tokio::test]
@@ -1263,7 +1263,7 @@ async fn run_single_ignores_checkpoint_write_failures() {
 }
 
 #[test]
-fn migration_enabled_requires_export_setting() {
+fn giganto_import_enabled_requires_export_setting() {
     let missing = FileConfig {
         export_from_giganto: None,
         polling_mode: false,
@@ -1279,14 +1279,14 @@ fn migration_enabled_requires_export_setting() {
         last_transfer_line_suffix: None,
     };
 
-    let err = migration_enabled(missing.export_from_giganto)
+    let err = giganto_import_enabled(missing.export_from_giganto)
         .expect_err("missing export_from_giganto must be rejected");
     assert!(
         err.to_string()
             .contains("export_from_giganto parameter is required")
     );
     assert!(
-        migration_enabled(enabled.export_from_giganto)
+        giganto_import_enabled(enabled.export_from_giganto)
             .expect("configured export flag should be returned")
     );
 }

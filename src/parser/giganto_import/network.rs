@@ -7,15 +7,15 @@ use giganto_client::ingest::network::{
 };
 
 use super::{
-    MigrationResult, TryFromGigantoRecord, parse_comma_separated, parse_giganto_timestamp_ns,
+    GigantoImportResult, TryFromGigantoRecord, parse_comma_separated, parse_giganto_timestamp_ns,
     parse_parenthesized_tuples, parse_post_body,
 };
 
-type Result<T> = MigrationResult<T>;
+type Result<T> = GigantoImportResult<T>;
 
-macro_rules! migration_error {
+macro_rules! giganto_import_error {
     ($($arg:tt)*) => {
-        super::MigrationError::from(::anyhow::anyhow!($($arg)*))
+        super::GigantoImportError::from(::anyhow::anyhow!($($arg)*))
     };
 }
 
@@ -25,96 +25,96 @@ impl TryFromGigantoRecord for Conn {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let conn_state = if let Some(conn_state) = rec.get(7) {
             conn_state.to_string()
         } else {
-            return Err(migration_error!("missing conn state"));
+            return Err(giganto_import_error!("missing conn state"));
         };
         let start_time = if let Some(start_time) = rec.get(8) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(9) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let service = if let Some(service) = rec.get(10) {
             service.to_string()
         } else {
-            return Err(migration_error!("missing service"));
+            return Err(giganto_import_error!("missing service"));
         };
         let orig_bytes = if let Some(orig_bytes) = rec.get(11) {
             orig_bytes.parse::<u64>().context("invalid source bytes")?
         } else {
-            return Err(migration_error!("missing source bytes"));
+            return Err(giganto_import_error!("missing source bytes"));
         };
         let resp_bytes = if let Some(resp_bytes) = rec.get(12) {
             resp_bytes
                 .parse::<u64>()
                 .context("invalid destination bytes")?
         } else {
-            return Err(migration_error!("missing destination bytes"));
+            return Err(giganto_import_error!("missing destination bytes"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(13) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(14) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(15) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(16) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
 
         Ok((
@@ -152,79 +152,79 @@ impl TryFromGigantoRecord for Dns {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let query = if let Some(query) = rec.get(13) {
             query.to_string()
         } else {
-            return Err(migration_error!("missing query"));
+            return Err(giganto_import_error!("missing query"));
         };
         let answer = if let Some(answer) = rec.get(14) {
             answer
@@ -232,17 +232,17 @@ impl TryFromGigantoRecord for Dns {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing answer"));
+            return Err(giganto_import_error!("missing answer"));
         };
         let trans_id = if let Some(trans_id) = rec.get(15) {
             trans_id.parse::<u16>().context("invalid trans_id")?
         } else {
-            return Err(migration_error!("missing trans_id"));
+            return Err(giganto_import_error!("missing trans_id"));
         };
         let rtt = if let Some(rtt) = rec.get(16) {
             rtt.parse::<i64>().context("invalid rtt")?
         } else {
-            return Err(migration_error!("missing rtt"));
+            return Err(giganto_import_error!("missing rtt"));
         };
         let qclass = if let Some(qclass) = rec.get(17) {
             match qclass {
@@ -250,17 +250,17 @@ impl TryFromGigantoRecord for Dns {
                 _ => 0,
             }
         } else {
-            return Err(migration_error!("missing qclass"));
+            return Err(giganto_import_error!("missing qclass"));
         };
         let qtype = if let Some(qtype) = rec.get(18) {
             parse_qtype(qtype)
         } else {
-            return Err(migration_error!("missing qtype"));
+            return Err(giganto_import_error!("missing qtype"));
         };
         let rcode = if let Some(rcode) = rec.get(19) {
             rcode.parse::<u16>().context("rcode")?
         } else {
-            return Err(migration_error!("missing rcode"));
+            return Err(giganto_import_error!("missing rcode"));
         };
         let aa_flag = if let Some(aa) = rec.get(20) {
             if aa.eq("true") {
@@ -268,10 +268,10 @@ impl TryFromGigantoRecord for Dns {
             } else if aa.eq("false") {
                 false
             } else {
-                return Err(migration_error!("invalid aa_flag"));
+                return Err(giganto_import_error!("invalid aa_flag"));
             }
         } else {
-            return Err(migration_error!("missing aa_flag"));
+            return Err(giganto_import_error!("missing aa_flag"));
         };
         let tc_flag = if let Some(tc) = rec.get(21) {
             if tc.eq("true") {
@@ -279,10 +279,10 @@ impl TryFromGigantoRecord for Dns {
             } else if tc.eq("false") {
                 false
             } else {
-                return Err(migration_error!("invalid tc_flag"));
+                return Err(giganto_import_error!("invalid tc_flag"));
             }
         } else {
-            return Err(migration_error!("missing tc_flag"));
+            return Err(giganto_import_error!("missing tc_flag"));
         };
         let rd_flag = if let Some(rd) = rec.get(22) {
             if rd.eq("true") {
@@ -290,10 +290,10 @@ impl TryFromGigantoRecord for Dns {
             } else if rd.eq("false") {
                 false
             } else {
-                return Err(migration_error!("invalid rd_flag"));
+                return Err(giganto_import_error!("invalid rd_flag"));
             }
         } else {
-            return Err(migration_error!("missing rd_flag"));
+            return Err(giganto_import_error!("missing rd_flag"));
         };
         let ra_flag = if let Some(ra) = rec.get(23) {
             if ra.eq("true") {
@@ -301,10 +301,10 @@ impl TryFromGigantoRecord for Dns {
             } else if ra.eq("false") {
                 false
             } else {
-                return Err(migration_error!("invalid ra_flag"));
+                return Err(giganto_import_error!("invalid ra_flag"));
             }
         } else {
-            return Err(migration_error!("missing ra_flag"));
+            return Err(giganto_import_error!("missing ra_flag"));
         };
 
         let mut ttl = Vec::new();
@@ -353,7 +353,7 @@ impl TryFromGigantoRecord for MalformedDns {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = rec
             .get(2)
@@ -496,158 +496,158 @@ impl TryFromGigantoRecord for Http {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let method = if let Some(method) = rec.get(13) {
             method.to_string()
         } else {
-            return Err(migration_error!("missing method"));
+            return Err(giganto_import_error!("missing method"));
         };
         let host = if let Some(host) = rec.get(14) {
             host.to_string()
         } else {
-            return Err(migration_error!("missing host"));
+            return Err(giganto_import_error!("missing host"));
         };
         let uri = if let Some(uri) = rec.get(15) {
             uri.to_string()
         } else {
-            return Err(migration_error!("missing uri"));
+            return Err(giganto_import_error!("missing uri"));
         };
         let referer = if let Some(referer) = rec.get(16) {
             referer.to_string()
         } else {
-            return Err(migration_error!("missing referer"));
+            return Err(giganto_import_error!("missing referer"));
         };
         let version = if let Some(version) = rec.get(17) {
             version.to_string()
         } else {
-            return Err(migration_error!("missing version"));
+            return Err(giganto_import_error!("missing version"));
         };
         let user_agent = if let Some(user_agent) = rec.get(18) {
             user_agent.to_string()
         } else {
-            return Err(migration_error!("missing user_agent"));
+            return Err(giganto_import_error!("missing user_agent"));
         };
         let request_len = if let Some(request_len) = rec.get(19) {
             request_len
                 .parse::<usize>()
                 .context("invalid request_len")?
         } else {
-            return Err(migration_error!("missing request_len"));
+            return Err(giganto_import_error!("missing request_len"));
         };
         let response_len = if let Some(response_len) = rec.get(20) {
             response_len
                 .parse::<usize>()
                 .context("invalid response_len")?
         } else {
-            return Err(migration_error!("missing response_len"));
+            return Err(giganto_import_error!("missing response_len"));
         };
         let status_code = if let Some(status_code) = rec.get(21) {
             status_code.parse::<u16>().context("invalid status code")?
         } else {
-            return Err(migration_error!("missing status code"));
+            return Err(giganto_import_error!("missing status code"));
         };
         let status_msg = if let Some(status_msg) = rec.get(22) {
             status_msg.to_string()
         } else {
-            return Err(migration_error!("missing status_msg"));
+            return Err(giganto_import_error!("missing status_msg"));
         };
         let username = if let Some(username) = rec.get(23) {
             username.to_string()
         } else {
-            return Err(migration_error!("missing username"));
+            return Err(giganto_import_error!("missing username"));
         };
         let password = if let Some(password) = rec.get(24) {
             password.to_string()
         } else {
-            return Err(migration_error!("missing password"));
+            return Err(giganto_import_error!("missing password"));
         };
         let cookie = if let Some(cookie) = rec.get(25) {
             cookie.to_string()
         } else {
-            return Err(migration_error!("missing cookie"));
+            return Err(giganto_import_error!("missing cookie"));
         };
         let content_encoding = if let Some(content_encoding) = rec.get(26) {
             content_encoding.to_string()
         } else {
-            return Err(migration_error!("missing content_encoding"));
+            return Err(giganto_import_error!("missing content_encoding"));
         };
         let content_type = if let Some(content_type) = rec.get(27) {
             content_type.to_string()
         } else {
-            return Err(migration_error!("missing content_type"));
+            return Err(giganto_import_error!("missing content_type"));
         };
         let cache_control = if let Some(cache_control) = rec.get(28) {
             cache_control.to_string()
         } else {
-            return Err(migration_error!("missing cache_control"));
+            return Err(giganto_import_error!("missing cache_control"));
         };
         let filenames = if let Some(filenames) = rec.get(29) {
             filenames
@@ -655,7 +655,7 @@ impl TryFromGigantoRecord for Http {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing filenames"));
+            return Err(giganto_import_error!("missing filenames"));
         };
         let mime_types = if let Some(mime_types) = rec.get(30) {
             mime_types
@@ -663,13 +663,13 @@ impl TryFromGigantoRecord for Http {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing mime_types"));
+            return Err(giganto_import_error!("missing mime_types"));
         };
         let body = parse_post_body(rec.get(31).context("missing body")?);
         let state = if let Some(state) = rec.get(32) {
             state.to_string()
         } else {
-            return Err(migration_error!("missing state"));
+            return Err(giganto_import_error!("missing state"));
         };
 
         Ok((
@@ -717,80 +717,80 @@ impl TryFromGigantoRecord for Rdp {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
 
         let cookie = if let Some(cookie) = rec.get(13) {
             cookie.to_string()
         } else {
-            return Err(migration_error!("missing cookie"));
+            return Err(giganto_import_error!("missing cookie"));
         };
 
         Ok((
@@ -819,109 +819,109 @@ impl TryFromGigantoRecord for Smtp {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let mailfrom = if let Some(mailfrom) = rec.get(13) {
             mailfrom.to_string()
         } else {
-            return Err(migration_error!("missing mailfrom"));
+            return Err(giganto_import_error!("missing mailfrom"));
         };
         let date = if let Some(date) = rec.get(14) {
             date.to_string()
         } else {
-            return Err(migration_error!("missing date"));
+            return Err(giganto_import_error!("missing date"));
         };
         let from = if let Some(from) = rec.get(15) {
             from.to_string()
         } else {
-            return Err(migration_error!("missing from"));
+            return Err(giganto_import_error!("missing from"));
         };
         let to = if let Some(to) = rec.get(16) {
             to.to_string()
         } else {
-            return Err(migration_error!("missing to"));
+            return Err(giganto_import_error!("missing to"));
         };
         let subject = if let Some(subject) = rec.get(17) {
             subject.to_string()
         } else {
-            return Err(migration_error!("missing subject"));
+            return Err(giganto_import_error!("missing subject"));
         };
         let agent = if let Some(agent) = rec.get(18) {
             agent.to_string()
         } else {
-            return Err(migration_error!("missing agent"));
+            return Err(giganto_import_error!("missing agent"));
         };
         let state = if let Some(state) = rec.get(19) {
             state.to_string()
         } else {
-            return Err(migration_error!("missing state"));
+            return Err(giganto_import_error!("missing state"));
         };
 
         Ok((
@@ -956,99 +956,99 @@ impl TryFromGigantoRecord for Ntlm {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let protocol = if let Some(protocol) = rec.get(13) {
             protocol.to_string()
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let username = if let Some(username) = rec.get(14) {
             username.to_string()
         } else {
-            return Err(migration_error!("missing username"));
+            return Err(giganto_import_error!("missing username"));
         };
         let hostname = if let Some(hostname) = rec.get(15) {
             hostname.to_string()
         } else {
-            return Err(migration_error!("missing hostname"));
+            return Err(giganto_import_error!("missing hostname"));
         };
         let domainname = if let Some(domainname) = rec.get(16) {
             domainname.to_string()
         } else {
-            return Err(migration_error!("missing domainname"));
+            return Err(giganto_import_error!("missing domainname"));
         };
         let success = if let Some(success) = rec.get(17) {
             success.to_string()
         } else {
-            return Err(migration_error!("missing success"));
+            return Err(giganto_import_error!("missing success"));
         };
 
         Ok((
@@ -1082,99 +1082,99 @@ impl TryFromGigantoRecord for Kerberos {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let client_time: i64 = if let Some(client_time) = rec.get(13) {
             parse_giganto_timestamp_ns(client_time)?
         } else {
-            return Err(migration_error!("missing client_time"));
+            return Err(giganto_import_error!("missing client_time"));
         };
         let server_time: i64 = if let Some(server_time) = rec.get(14) {
             parse_giganto_timestamp_ns(server_time)?
         } else {
-            return Err(migration_error!("missing server_time"));
+            return Err(giganto_import_error!("missing server_time"));
         };
         let error_code = if let Some(error_code) = rec.get(15) {
             error_code.parse::<u32>().context("invalid error_code")?
         } else {
-            return Err(migration_error!("missing error_code"));
+            return Err(giganto_import_error!("missing error_code"));
         };
         let client_realm = if let Some(client_realm) = rec.get(16) {
             client_realm.to_string()
         } else {
-            return Err(migration_error!("missing client_realm"));
+            return Err(giganto_import_error!("missing client_realm"));
         };
         let cname_type = if let Some(cname_type) = rec.get(17) {
             cname_type.parse::<u8>().context("invalid cname_type")?
         } else {
-            return Err(migration_error!("missing cname_type"));
+            return Err(giganto_import_error!("missing cname_type"));
         };
         let client_name = if let Some(client_name) = rec.get(18) {
             client_name
@@ -1182,17 +1182,17 @@ impl TryFromGigantoRecord for Kerberos {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing client_name"));
+            return Err(giganto_import_error!("missing client_name"));
         };
         let realm = if let Some(realm) = rec.get(19) {
             realm.to_string()
         } else {
-            return Err(migration_error!("missing realm"));
+            return Err(giganto_import_error!("missing realm"));
         };
         let sname_type = if let Some(sname_type) = rec.get(20) {
             sname_type.parse::<u8>().context("invalid sname_type")?
         } else {
-            return Err(migration_error!("missing sname_type"));
+            return Err(giganto_import_error!("missing sname_type"));
         };
         let service_name = if let Some(service_name) = rec.get(21) {
             service_name
@@ -1200,7 +1200,7 @@ impl TryFromGigantoRecord for Kerberos {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing service_name"));
+            return Err(giganto_import_error!("missing service_name"));
         };
 
         Ok((
@@ -1237,139 +1237,139 @@ impl TryFromGigantoRecord for Ssh {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let client = if let Some(client) = rec.get(13) {
             client.to_string()
         } else {
-            return Err(migration_error!("missing client"));
+            return Err(giganto_import_error!("missing client"));
         };
         let server = if let Some(server) = rec.get(14) {
             server.to_string()
         } else {
-            return Err(migration_error!("missing server"));
+            return Err(giganto_import_error!("missing server"));
         };
         let cipher_alg = if let Some(cipher_alg) = rec.get(15) {
             cipher_alg.to_string()
         } else {
-            return Err(migration_error!("missing cipher_alg"));
+            return Err(giganto_import_error!("missing cipher_alg"));
         };
         let mac_alg = if let Some(mac_alg) = rec.get(16) {
             mac_alg.to_string()
         } else {
-            return Err(migration_error!("missing mac_alg"));
+            return Err(giganto_import_error!("missing mac_alg"));
         };
         let compression_alg = if let Some(compression_alg) = rec.get(17) {
             compression_alg.to_string()
         } else {
-            return Err(migration_error!("missing compression_alg"));
+            return Err(giganto_import_error!("missing compression_alg"));
         };
         let kex_alg = if let Some(kex_alg) = rec.get(18) {
             kex_alg.to_string()
         } else {
-            return Err(migration_error!("missing kex_alg"));
+            return Err(giganto_import_error!("missing kex_alg"));
         };
         let host_key_alg = if let Some(host_key_alg) = rec.get(19) {
             host_key_alg.to_string()
         } else {
-            return Err(migration_error!("missing host_key_alg"));
+            return Err(giganto_import_error!("missing host_key_alg"));
         };
         let hassh_algorithms = if let Some(hassh_algorithms) = rec.get(20) {
             hassh_algorithms.to_string()
         } else {
-            return Err(migration_error!("missing hassh_algorithms"));
+            return Err(giganto_import_error!("missing hassh_algorithms"));
         };
         let hassh = if let Some(hassh) = rec.get(21) {
             hassh.to_string()
         } else {
-            return Err(migration_error!("missing hassh"));
+            return Err(giganto_import_error!("missing hassh"));
         };
         let hassh_server_algorithms = if let Some(hassh_server_algorithms) = rec.get(22) {
             hassh_server_algorithms.to_string()
         } else {
-            return Err(migration_error!("missing hassh_server_algorithms"));
+            return Err(giganto_import_error!("missing hassh_server_algorithms"));
         };
         let hassh_server = if let Some(hassh_server) = rec.get(23) {
             hassh_server.to_string()
         } else {
-            return Err(migration_error!("missing hassh_server"));
+            return Err(giganto_import_error!("missing hassh_server"));
         };
         let client_shka = if let Some(client_shka) = rec.get(24) {
             client_shka.to_string()
         } else {
-            return Err(migration_error!("missing client_shka"));
+            return Err(giganto_import_error!("missing client_shka"));
         };
         let server_shka = if let Some(server_shka) = rec.get(25) {
             server_shka.to_string()
         } else {
-            return Err(migration_error!("missing server_shka"));
+            return Err(giganto_import_error!("missing server_shka"));
         };
 
         Ok((
@@ -1410,74 +1410,74 @@ impl TryFromGigantoRecord for DceRpc {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let context = if let Some(ctx_str) = rec.get(13) {
             parse_parenthesized_tuples(ctx_str, |inner| {
@@ -1504,7 +1504,7 @@ impl TryFromGigantoRecord for DceRpc {
                 })
             })?
         } else {
-            return Err(migration_error!("missing context"));
+            return Err(giganto_import_error!("missing context"));
         };
         let request = parse_comma_separated(rec.get(14).context("missing request")?)
             .context("invalid request")?;
@@ -1536,84 +1536,84 @@ impl TryFromGigantoRecord for Ftp {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let user = if let Some(user) = rec.get(13) {
             user.to_string()
         } else {
-            return Err(migration_error!("missing user"));
+            return Err(giganto_import_error!("missing user"));
         };
         let password = if let Some(password) = rec.get(14) {
             password.to_string()
         } else {
-            return Err(migration_error!("missing password"));
+            return Err(giganto_import_error!("missing password"));
         };
 
         let commands = if let Some(commands_str) = rec.get(15) {
@@ -1622,55 +1622,55 @@ impl TryFromGigantoRecord for Ftp {
                 let front_parts: Vec<&str> = inner.splitn(3, ',').collect();
                 let command = (*front_parts
                     .first()
-                    .ok_or_else(|| migration_error!("missing command"))?)
+                    .ok_or_else(|| giganto_import_error!("missing command"))?)
                 .to_string();
                 let reply_code = (*front_parts
                     .get(1)
-                    .ok_or_else(|| migration_error!("missing reply code"))?)
+                    .ok_or_else(|| giganto_import_error!("missing reply code"))?)
                 .to_string();
                 let rest = front_parts
                     .get(2)
-                    .ok_or_else(|| migration_error!("missing remaining fields"))?;
+                    .ok_or_else(|| giganto_import_error!("missing remaining fields"))?;
 
                 // Split last 7 fields from the back, leaving reply_msg in the middle
                 let back_parts: Vec<&str> = rest.rsplitn(8, ',').collect();
 
                 let reply_msg = (*back_parts
                     .get(7)
-                    .ok_or_else(|| migration_error!("missing reply message"))?)
+                    .ok_or_else(|| giganto_import_error!("missing reply message"))?)
                 .to_string();
                 let data_passive = back_parts
                     .get(6)
-                    .ok_or_else(|| migration_error!("missing data passive"))?
+                    .ok_or_else(|| giganto_import_error!("missing data passive"))?
                     .parse::<bool>()
                     .context("invalid data passive")?;
                 let data_orig_addr = back_parts
                     .get(5)
-                    .ok_or_else(|| migration_error!("missing data source address"))?
+                    .ok_or_else(|| giganto_import_error!("missing data source address"))?
                     .parse::<IpAddr>()
                     .context("invalid data source address")?;
                 let data_resp_addr = back_parts
                     .get(4)
-                    .ok_or_else(|| migration_error!("missing data response address"))?
+                    .ok_or_else(|| giganto_import_error!("missing data response address"))?
                     .parse::<IpAddr>()
                     .context("invalid data response address")?;
                 let data_resp_port = back_parts
                     .get(3)
-                    .ok_or_else(|| migration_error!("missing data response port"))?
+                    .ok_or_else(|| giganto_import_error!("missing data response port"))?
                     .parse::<u16>()
                     .context("invalid data response port")?;
                 let file = (*back_parts
                     .get(2)
-                    .ok_or_else(|| migration_error!("missing file"))?)
+                    .ok_or_else(|| giganto_import_error!("missing file"))?)
                 .to_string();
                 let file_size = back_parts
                     .get(1)
-                    .ok_or_else(|| migration_error!("missing file size"))?
+                    .ok_or_else(|| giganto_import_error!("missing file size"))?
                     .parse::<u64>()
                     .context("invalid file size")?;
                 let file_id = (*back_parts
                     .first()
-                    .ok_or_else(|| migration_error!("missing file ID"))?)
+                    .ok_or_else(|| giganto_import_error!("missing file ID"))?)
                 .to_string();
 
                 Ok(FtpCommand {
@@ -1687,7 +1687,7 @@ impl TryFromGigantoRecord for Ftp {
                 })
             })?
         } else {
-            return Err(migration_error!("missing commands"));
+            return Err(giganto_import_error!("missing commands"));
         };
 
         Ok((
@@ -1718,96 +1718,96 @@ impl TryFromGigantoRecord for Mqtt {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let protocol = if let Some(protocol) = rec.get(13) {
             protocol.to_string()
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let version = if let Some(version) = rec.get(14) {
             version.parse::<u8>().context("invalid version")?
         } else {
-            return Err(migration_error!("missing version"));
+            return Err(giganto_import_error!("missing version"));
         };
         let client_id = if let Some(client_id) = rec.get(15) {
             client_id.to_string()
         } else {
-            return Err(migration_error!("missing client_id"));
+            return Err(giganto_import_error!("missing client_id"));
         };
         let connack_reason = if let Some(connack_reason) = rec.get(16) {
             connack_reason
                 .parse::<u8>()
                 .context("invalid connack_reason")?
         } else {
-            return Err(migration_error!("missing connack_reason"));
+            return Err(giganto_import_error!("missing connack_reason"));
         };
         let subscribe = if let Some(subscribe) = rec.get(17) {
             subscribe
@@ -1815,7 +1815,7 @@ impl TryFromGigantoRecord for Mqtt {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing subscribe"));
+            return Err(giganto_import_error!("missing subscribe"));
         };
         let suback_reason = parse_comma_separated(rec.get(18).context("missing suback_reason")?)
             .context("invalid suback_reason")?;
@@ -1851,84 +1851,84 @@ impl TryFromGigantoRecord for Ldap {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let message_id = if let Some(message_id) = rec.get(13) {
             message_id.parse::<u32>().context("invalid message_id")?
         } else {
-            return Err(migration_error!("missing message_id"));
+            return Err(giganto_import_error!("missing message_id"));
         };
         let version = if let Some(version) = rec.get(14) {
             version.parse::<u8>().context("invalid version")?
         } else {
-            return Err(migration_error!("missing version"));
+            return Err(giganto_import_error!("missing version"));
         };
         let opcode = if let Some(opcode) = rec.get(15) {
             opcode
@@ -1936,7 +1936,7 @@ impl TryFromGigantoRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing opcode"));
+            return Err(giganto_import_error!("missing opcode"));
         };
         let result = if let Some(result) = rec.get(16) {
             result
@@ -1944,7 +1944,7 @@ impl TryFromGigantoRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing result"));
+            return Err(giganto_import_error!("missing result"));
         };
         let diagnostic_message = if let Some(diagnostic_message) = rec.get(17) {
             diagnostic_message
@@ -1952,7 +1952,7 @@ impl TryFromGigantoRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing diagnostic_message"));
+            return Err(giganto_import_error!("missing diagnostic_message"));
         };
         let object = if let Some(object) = rec.get(18) {
             object
@@ -1960,7 +1960,7 @@ impl TryFromGigantoRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing object"));
+            return Err(giganto_import_error!("missing object"));
         };
         let argument = if let Some(argument) = rec.get(19) {
             argument
@@ -1968,7 +1968,7 @@ impl TryFromGigantoRecord for Ldap {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing argument"));
+            return Err(giganto_import_error!("missing argument"));
         };
 
         Ok((
@@ -2003,94 +2003,94 @@ impl TryFromGigantoRecord for Tls {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let server_name = if let Some(server_name) = rec.get(13) {
             server_name.to_string()
         } else {
-            return Err(migration_error!("missing server_name"));
+            return Err(giganto_import_error!("missing server_name"));
         };
         let alpn_protocol = if let Some(alpn_protocol) = rec.get(14) {
             alpn_protocol.to_string()
         } else {
-            return Err(migration_error!("missing alpn_protocol"));
+            return Err(giganto_import_error!("missing alpn_protocol"));
         };
         let ja3 = if let Some(ja3) = rec.get(15) {
             ja3.to_string()
         } else {
-            return Err(migration_error!("missing ja3"));
+            return Err(giganto_import_error!("missing ja3"));
         };
         let version = if let Some(version) = rec.get(16) {
             version.to_string()
         } else {
-            return Err(migration_error!("missing version"));
+            return Err(giganto_import_error!("missing version"));
         };
 
         let client_cipher_suites =
@@ -2104,7 +2104,7 @@ impl TryFromGigantoRecord for Tls {
         let cipher = if let Some(cipher) = rec.get(19) {
             cipher.parse::<u16>().context("invalid cipher")?
         } else {
-            return Err(migration_error!("missing cipher"));
+            return Err(giganto_import_error!("missing cipher"));
         };
 
         let extensions = parse_comma_separated(rec.get(20).context("missing extensions")?)
@@ -2113,71 +2113,71 @@ impl TryFromGigantoRecord for Tls {
         let ja3s = if let Some(ja3s) = rec.get(21) {
             ja3s.to_string()
         } else {
-            return Err(migration_error!("missing ja3s"));
+            return Err(giganto_import_error!("missing ja3s"));
         };
         let serial = if let Some(serial) = rec.get(22) {
             serial.to_string()
         } else {
-            return Err(migration_error!("missing serial"));
+            return Err(giganto_import_error!("missing serial"));
         };
         let subject_country = if let Some(subject_country) = rec.get(23) {
             subject_country.to_string()
         } else {
-            return Err(migration_error!("missing subject_country"));
+            return Err(giganto_import_error!("missing subject_country"));
         };
         let subject_org_name = if let Some(subject_org_name) = rec.get(24) {
             subject_org_name.to_string()
         } else {
-            return Err(migration_error!("missing subject_org_name"));
+            return Err(giganto_import_error!("missing subject_org_name"));
         };
         let subject_common_name = if let Some(subject_common_name) = rec.get(25) {
             subject_common_name.to_string()
         } else {
-            return Err(migration_error!("missing subject_common_name"));
+            return Err(giganto_import_error!("missing subject_common_name"));
         };
         let validity_not_before = if let Some(validity_not_before) = rec.get(26) {
             validity_not_before
                 .parse::<i64>()
                 .context("invalid validity_not_before")?
         } else {
-            return Err(migration_error!("missing validity_not_before"));
+            return Err(giganto_import_error!("missing validity_not_before"));
         };
         let validity_not_after = if let Some(validity_not_after) = rec.get(27) {
             validity_not_after
                 .parse::<i64>()
                 .context("invalid validity_not_after")?
         } else {
-            return Err(migration_error!("missing validity_not_after"));
+            return Err(giganto_import_error!("missing validity_not_after"));
         };
         let subject_alt_name = if let Some(subject_alt_name) = rec.get(28) {
             subject_alt_name.to_string()
         } else {
-            return Err(migration_error!("missing subject_alt_name"));
+            return Err(giganto_import_error!("missing subject_alt_name"));
         };
         let issuer_country = if let Some(issuer_country) = rec.get(29) {
             issuer_country.to_string()
         } else {
-            return Err(migration_error!("missing issuer_country"));
+            return Err(giganto_import_error!("missing issuer_country"));
         };
         let issuer_org_name = if let Some(issuer_org_name) = rec.get(30) {
             issuer_org_name.to_string()
         } else {
-            return Err(migration_error!("missing issuer_org_name"));
+            return Err(giganto_import_error!("missing issuer_org_name"));
         };
         let issuer_org_unit_name = if let Some(issuer_org_unit_name) = rec.get(31) {
             issuer_org_unit_name.to_string()
         } else {
-            return Err(migration_error!("missing issuer_org_unit_name"));
+            return Err(giganto_import_error!("missing issuer_org_unit_name"));
         };
         let issuer_common_name = if let Some(issuer_common_name) = rec.get(32) {
             issuer_common_name.to_string()
         } else {
-            return Err(migration_error!("missing issuer_common_name"));
+            return Err(giganto_import_error!("missing issuer_common_name"));
         };
         let last_alert = if let Some(last_alert) = rec.get(33) {
             last_alert.parse::<u8>().context("invalid last_alert")?
         } else {
-            return Err(migration_error!("missing last_alert"));
+            return Err(giganto_import_error!("missing last_alert"));
         };
 
         Ok((
@@ -2226,131 +2226,131 @@ impl TryFromGigantoRecord for Smb {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let command = if let Some(command) = rec.get(13) {
             command.parse::<u8>().context("invalid command")?
         } else {
-            return Err(migration_error!("missing command"));
+            return Err(giganto_import_error!("missing command"));
         };
         let path = if let Some(path) = rec.get(14) {
             path.to_string()
         } else {
-            return Err(migration_error!("missing path"));
+            return Err(giganto_import_error!("missing path"));
         };
         let service = if let Some(service) = rec.get(15) {
             service.to_string()
         } else {
-            return Err(migration_error!("missing service"));
+            return Err(giganto_import_error!("missing service"));
         };
         let file_name = if let Some(file_name) = rec.get(16) {
             file_name.to_string()
         } else {
-            return Err(migration_error!("missing file_name"));
+            return Err(giganto_import_error!("missing file_name"));
         };
         let file_size = if let Some(file_size) = rec.get(17) {
             file_size.parse::<u64>().context("invalid file_size")?
         } else {
-            return Err(migration_error!("missing file_size"));
+            return Err(giganto_import_error!("missing file_size"));
         };
         let resource_type = if let Some(resource_type) = rec.get(18) {
             resource_type
                 .parse::<u16>()
                 .context("invalid resource_type")?
         } else {
-            return Err(migration_error!("missing resource_type"));
+            return Err(giganto_import_error!("missing resource_type"));
         };
         let fid = if let Some(fid) = rec.get(19) {
             fid.parse::<u16>().context("invalid fid")?
         } else {
-            return Err(migration_error!("missing fid"));
+            return Err(giganto_import_error!("missing fid"));
         };
         let create_time = if let Some(create_time) = rec.get(20) {
             create_time.parse::<i64>().context("invalid create_time")?
         } else {
-            return Err(migration_error!("missing create_time"));
+            return Err(giganto_import_error!("missing create_time"));
         };
         let access_time = if let Some(access_time) = rec.get(21) {
             access_time.parse::<i64>().context("invalid access_time")?
         } else {
-            return Err(migration_error!("missing access_time"));
+            return Err(giganto_import_error!("missing access_time"));
         };
         let write_time = if let Some(write_time) = rec.get(22) {
             write_time.parse::<i64>().context("invalid write_time")?
         } else {
-            return Err(migration_error!("missing write_time"));
+            return Err(giganto_import_error!("missing write_time"));
         };
         let change_time = if let Some(change_time) = rec.get(23) {
             change_time.parse::<i64>().context("invalid change_time")?
         } else {
-            return Err(migration_error!("missing change_time"));
+            return Err(giganto_import_error!("missing change_time"));
         };
         Ok((
             Self {
@@ -2388,74 +2388,74 @@ impl TryFromGigantoRecord for Nfs {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let read_files = if let Some(read_files) = rec.get(13) {
             read_files
@@ -2463,7 +2463,7 @@ impl TryFromGigantoRecord for Nfs {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing read_files"));
+            return Err(giganto_import_error!("missing read_files"));
         };
         let write_files = if let Some(write_files) = rec.get(14) {
             write_files
@@ -2471,7 +2471,7 @@ impl TryFromGigantoRecord for Nfs {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(migration_error!("missing write_files"));
+            return Err(giganto_import_error!("missing write_files"));
         };
 
         Ok((
@@ -2502,114 +2502,114 @@ impl TryFromGigantoRecord for Bootp {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let op = if let Some(op) = rec.get(13) {
             op.parse::<u8>().context("invalid op")?
         } else {
-            return Err(migration_error!("missing op"));
+            return Err(giganto_import_error!("missing op"));
         };
         let htype = if let Some(htype) = rec.get(14) {
             htype.parse::<u8>().context("invalid htype")?
         } else {
-            return Err(migration_error!("missing htype"));
+            return Err(giganto_import_error!("missing htype"));
         };
         let hops = if let Some(hops) = rec.get(15) {
             hops.parse::<u8>().context("invalid hops")?
         } else {
-            return Err(migration_error!("missing hops"));
+            return Err(giganto_import_error!("missing hops"));
         };
         let xid = if let Some(xid) = rec.get(16) {
             xid.parse::<u32>().context("invalid xid")?
         } else {
-            return Err(migration_error!("missing xid"));
+            return Err(giganto_import_error!("missing xid"));
         };
         let ciaddr = if let Some(ciaddr) = rec.get(17) {
             ciaddr.parse::<IpAddr>().context("invalid ciaddr")?
         } else {
-            return Err(migration_error!("missing ciaddr"));
+            return Err(giganto_import_error!("missing ciaddr"));
         };
         let yiaddr = if let Some(yiaddr) = rec.get(18) {
             yiaddr.parse::<IpAddr>().context("invalid yiaddr")?
         } else {
-            return Err(migration_error!("missing yiaddr"));
+            return Err(giganto_import_error!("missing yiaddr"));
         };
         let siaddr = if let Some(siaddr) = rec.get(19) {
             siaddr.parse::<IpAddr>().context("invalid siaddr")?
         } else {
-            return Err(migration_error!("missing siaddr"));
+            return Err(giganto_import_error!("missing siaddr"));
         };
         let giaddr = if let Some(giaddr) = rec.get(20) {
             giaddr.parse::<IpAddr>().context("invalid giaddr")?
         } else {
-            return Err(migration_error!("missing giaddr"));
+            return Err(giganto_import_error!("missing giaddr"));
         };
 
         let chaddr = parse_comma_separated(rec.get(21).context("missing chaddr")?)
@@ -2618,12 +2618,12 @@ impl TryFromGigantoRecord for Bootp {
         let sname = if let Some(sname) = rec.get(22) {
             sname.to_string()
         } else {
-            return Err(migration_error!("missing sname"));
+            return Err(giganto_import_error!("missing sname"));
         };
         let file = if let Some(file) = rec.get(23) {
             file.to_string()
         } else {
-            return Err(migration_error!("missing file"));
+            return Err(giganto_import_error!("missing file"));
         };
 
         Ok((
@@ -2662,107 +2662,107 @@ impl TryFromGigantoRecord for Dhcp {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let msg_type = if let Some(msg_type) = rec.get(13) {
             msg_type.parse::<u8>().context("invalid msg_type")?
         } else {
-            return Err(migration_error!("missing msg_type"));
+            return Err(giganto_import_error!("missing msg_type"));
         };
 
         let ciaddr = if let Some(ciaddr) = rec.get(14) {
             ciaddr.parse::<IpAddr>().context("invalid ciaddr")?
         } else {
-            return Err(migration_error!("missing ciaddr"));
+            return Err(giganto_import_error!("missing ciaddr"));
         };
         let yiaddr = if let Some(yiaddr) = rec.get(15) {
             yiaddr.parse::<IpAddr>().context("invalid yiaddr")?
         } else {
-            return Err(migration_error!("missing yiaddr"));
+            return Err(giganto_import_error!("missing yiaddr"));
         };
         let siaddr = if let Some(siaddr) = rec.get(16) {
             siaddr.parse::<IpAddr>().context("invalid siaddr")?
         } else {
-            return Err(migration_error!("missing siaddr"));
+            return Err(giganto_import_error!("missing siaddr"));
         };
         let giaddr = if let Some(giaddr) = rec.get(17) {
             giaddr.parse::<IpAddr>().context("invalid giaddr")?
         } else {
-            return Err(migration_error!("missing giaddr"));
+            return Err(giganto_import_error!("missing giaddr"));
         };
         let subnet_mask = if let Some(subnet_mask) = rec.get(18) {
             subnet_mask
                 .parse::<IpAddr>()
                 .context("invalid subnet_mask")?
         } else {
-            return Err(migration_error!("missing subnet_mask"));
+            return Err(giganto_import_error!("missing subnet_mask"));
         };
 
         let router = parse_comma_separated(rec.get(19).context("missing router")?)
@@ -2777,17 +2777,17 @@ impl TryFromGigantoRecord for Dhcp {
                 .parse::<IpAddr>()
                 .context("invalid req_ip_addr")?
         } else {
-            return Err(migration_error!("missing req_ip_addr"));
+            return Err(giganto_import_error!("missing req_ip_addr"));
         };
         let lease_time = if let Some(lease_time) = rec.get(22) {
             lease_time.parse::<u32>().context("invalid lease_time")?
         } else {
-            return Err(migration_error!("missing lease_time"));
+            return Err(giganto_import_error!("missing lease_time"));
         };
         let server_id = if let Some(server_id) = rec.get(23) {
             server_id.parse::<IpAddr>().context("invalid server_id")?
         } else {
-            return Err(migration_error!("missing server_id"));
+            return Err(giganto_import_error!("missing server_id"));
         };
 
         let param_req_list = parse_comma_separated(rec.get(24).context("missing param_req_list")?)
@@ -2796,21 +2796,21 @@ impl TryFromGigantoRecord for Dhcp {
         let message = if let Some(message) = rec.get(25) {
             message.to_string()
         } else {
-            return Err(migration_error!("missing message"));
+            return Err(giganto_import_error!("missing message"));
         };
         let renewal_time = if let Some(renewal_time) = rec.get(26) {
             renewal_time
                 .parse::<u32>()
                 .context("invalid renewal_time")?
         } else {
-            return Err(migration_error!("missing renewal_time"));
+            return Err(giganto_import_error!("missing renewal_time"));
         };
         let rebinding_time = if let Some(rebinding_time) = rec.get(27) {
             rebinding_time
                 .parse::<u32>()
                 .context("invalid rebinding_time")?
         } else {
-            return Err(migration_error!("missing rebinding_time"));
+            return Err(giganto_import_error!("missing rebinding_time"));
         };
 
         let class_id = parse_comma_separated(rec.get(28).context("missing class_id")?)
@@ -2821,7 +2821,7 @@ impl TryFromGigantoRecord for Dhcp {
                 .parse::<u8>()
                 .context("invalid client_id_type")?
         } else {
-            return Err(migration_error!("missing client_id_type"));
+            return Err(giganto_import_error!("missing client_id_type"));
         };
         let client_id = parse_comma_separated(rec.get(30).context("missing client_id")?)
             .context("invalid client_id")?;
@@ -2941,99 +2941,99 @@ impl TryFromGigantoRecord for Radius {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let orig_port = if let Some(orig_port) = rec.get(3) {
             orig_port.parse::<u16>().context("invalid source port")?
         } else {
-            return Err(migration_error!("missing source port"));
+            return Err(giganto_import_error!("missing source port"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(4) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let resp_port = if let Some(resp_port) = rec.get(5) {
             resp_port
                 .parse::<u16>()
                 .context("invalid destination port")?
         } else {
-            return Err(migration_error!("missing destination port"));
+            return Err(giganto_import_error!("missing destination port"));
         };
         let proto = if let Some(proto) = rec.get(6) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(8) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(9) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(10) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(11) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(12) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let id = if let Some(id) = rec.get(13) {
             id.parse::<u8>().context("invalid id")?
         } else {
-            return Err(migration_error!("missing id"));
+            return Err(giganto_import_error!("missing id"));
         };
         let code = if let Some(code) = rec.get(14) {
             code.parse::<u8>().context("invalid code")?
         } else {
-            return Err(migration_error!("missing code"));
+            return Err(giganto_import_error!("missing code"));
         };
         let resp_code = if let Some(resp_code) = rec.get(15) {
             resp_code.parse::<u8>().context("invalid resp_code")?
         } else {
-            return Err(migration_error!("missing resp_code"));
+            return Err(giganto_import_error!("missing resp_code"));
         };
         let auth = if let Some(auth) = rec.get(16) {
             auth.to_string()
         } else {
-            return Err(migration_error!("missing auth"));
+            return Err(giganto_import_error!("missing auth"));
         };
         let resp_auth = if let Some(resp_auth) = rec.get(17) {
             resp_auth.to_string()
         } else {
-            return Err(migration_error!("missing resp_auth"));
+            return Err(giganto_import_error!("missing resp_auth"));
         };
         let user_name = parse_comma_separated(rec.get(18).context("missing user_name")?)
             .context("invalid user_name")?;
@@ -3044,12 +3044,12 @@ impl TryFromGigantoRecord for Radius {
         let nas_ip = if let Some(nas_ip) = rec.get(21) {
             nas_ip.parse::<IpAddr>().context("invalid nas_ip")?
         } else {
-            return Err(migration_error!("missing nas_ip"));
+            return Err(giganto_import_error!("missing nas_ip"));
         };
         let nas_port = if let Some(nas_port) = rec.get(22) {
             nas_port.parse::<u32>().context("invalid nas_port")?
         } else {
-            return Err(migration_error!("missing nas_port"));
+            return Err(giganto_import_error!("missing nas_port"));
         };
         let state = parse_comma_separated(rec.get(23).context("missing state")?)
             .context("invalid state")?;
@@ -3060,12 +3060,12 @@ impl TryFromGigantoRecord for Radius {
                 .parse::<u32>()
                 .context("invalid nas_port_type")?
         } else {
-            return Err(migration_error!("missing nas_port_type"));
+            return Err(giganto_import_error!("missing nas_port_type"));
         };
         let message = if let Some(message) = rec.get(26) {
             message.to_string()
         } else {
-            return Err(migration_error!("missing message"));
+            return Err(giganto_import_error!("missing message"));
         };
 
         Ok((
@@ -3107,87 +3107,87 @@ impl TryFromGigantoRecord for Icmp {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_timestamp_ns(timestamp)?
         } else {
-            return Err(migration_error!("missing timestamp"));
+            return Err(giganto_import_error!("missing timestamp"));
         };
         let orig_addr = if let Some(orig_addr) = rec.get(2) {
             orig_addr
                 .parse::<IpAddr>()
                 .context("invalid source address")?
         } else {
-            return Err(migration_error!("missing source address"));
+            return Err(giganto_import_error!("missing source address"));
         };
         let resp_addr = if let Some(resp_addr) = rec.get(3) {
             resp_addr
                 .parse::<IpAddr>()
                 .context("invalid destination address")?
         } else {
-            return Err(migration_error!("missing destination address"));
+            return Err(giganto_import_error!("missing destination address"));
         };
         let proto = if let Some(proto) = rec.get(4) {
             proto.parse::<u8>().context("invalid proto")?
         } else {
-            return Err(migration_error!("missing protocol"));
+            return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(5) {
             parse_giganto_timestamp_ns(start_time)?
         } else {
-            return Err(migration_error!("missing start_time"));
+            return Err(giganto_import_error!("missing start_time"));
         };
         let duration = if let Some(duration) = rec.get(6) {
             duration.parse::<i64>().context("invalid duration")?
         } else {
-            return Err(migration_error!("missing duration"));
+            return Err(giganto_import_error!("missing duration"));
         };
         let orig_pkts = if let Some(orig_pkts) = rec.get(7) {
             orig_pkts.parse::<u64>().context("invalid source packets")?
         } else {
-            return Err(migration_error!("missing source packets"));
+            return Err(giganto_import_error!("missing source packets"));
         };
         let resp_pkts = if let Some(resp_pkts) = rec.get(8) {
             resp_pkts
                 .parse::<u64>()
                 .context("invalid destination packets")?
         } else {
-            return Err(migration_error!("missing destination packets"));
+            return Err(giganto_import_error!("missing destination packets"));
         };
         let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(9) {
             orig_l2_bytes
                 .parse::<u64>()
                 .context("invalid source l2 bytes")?
         } else {
-            return Err(migration_error!("missing source l2 bytes"));
+            return Err(giganto_import_error!("missing source l2 bytes"));
         };
         let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(10) {
             resp_l2_bytes
                 .parse::<u64>()
                 .context("invalid destination l2 bytes")?
         } else {
-            return Err(migration_error!("missing destination l2 bytes"));
+            return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let icmp_type = if let Some(icmp_type) = rec.get(11) {
             icmp_type.parse::<u8>().context("invalid icmp_type")?
         } else {
-            return Err(migration_error!("missing icmp_type"));
+            return Err(giganto_import_error!("missing icmp_type"));
         };
         let icmp_code = if let Some(icmp_code) = rec.get(12) {
             icmp_code.parse::<u8>().context("invalid icmp_code")?
         } else {
-            return Err(migration_error!("missing icmp_code"));
+            return Err(giganto_import_error!("missing icmp_code"));
         };
         let id = if let Some(id) = rec.get(13) {
             id.parse::<u16>().context("invalid id")?
         } else {
-            return Err(migration_error!("missing id"));
+            return Err(giganto_import_error!("missing id"));
         };
         let seq_num = if let Some(seq_num) = rec.get(14) {
             seq_num.parse::<u16>().context("invalid seq_num")?
         } else {
-            return Err(migration_error!("missing seq_num"));
+            return Err(giganto_import_error!("missing seq_num"));
         };
         let data_len = if let Some(data_len) = rec.get(15) {
             data_len.parse::<u16>().context("invalid data_len")?
         } else {
-            return Err(migration_error!("missing data_len"));
+            return Err(giganto_import_error!("missing data_len"));
         };
         let payload = parse_hex_payload(rec.get(16).context("missing payload")?)
             .context("invalid payload")?;
@@ -3222,7 +3222,7 @@ fn parse_hex_tokens(tokens: &str, field: &str) -> Result<Vec<u8>> {
     for token in tokens.split(',') {
         let token = token.trim();
         if token.is_empty() {
-            return Err(migration_error!("empty hex token in `{field}`"));
+            return Err(giganto_import_error!("empty hex token in `{field}`"));
         }
         let value = u8::from_str_radix(token, 16)
             .with_context(|| format!("invalid hex byte `{token}` in `{field}`"))?;
@@ -3237,7 +3237,7 @@ fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
         return Ok(vec![Vec::new()]);
     }
     if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
-        return Err(migration_error!("invalid hex body: {field}"));
+        return Err(giganto_import_error!("invalid hex body: {field}"));
     }
 
     let inner = &trimmed[1..trimmed.len() - 1];
@@ -3246,7 +3246,7 @@ fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
         return Ok(vec![Vec::new()]);
     }
     if !normalized.starts_with('[') || !normalized.ends_with(']') {
-        return Err(migration_error!("invalid hex body: {field}"));
+        return Err(giganto_import_error!("invalid hex body: {field}"));
     }
 
     let content = &normalized[1..normalized.len() - 1];
@@ -3270,7 +3270,7 @@ fn parse_hex_payload(field: &str) -> Result<Vec<u8>> {
         return Ok(Vec::new());
     }
     if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
-        return Err(migration_error!("invalid hex payload: {field}"));
+        return Err(giganto_import_error!("invalid hex payload: {field}"));
     }
     let inner = &trimmed[1..trimmed.len() - 1];
     parse_hex_tokens(inner, field)
