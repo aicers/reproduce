@@ -855,12 +855,10 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
         .await
         .expect("supported zeek kind should dispatch even when there are no records");
 
-        // Known bug: CSV-backed collectors still surface `line() == 1` when
-        // no record was consumed from an empty file.
         assert_eq!(
             pos,
-            b"1".to_vec(),
-            "empty zeek input currently reports the CSV default line position",
+            b"0".to_vec(),
+            "empty zeek input should preserve zero-progress checkpoint",
         );
         assert!(
             sender.batch_sizes.is_empty(),
