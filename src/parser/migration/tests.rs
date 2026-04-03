@@ -2,8 +2,8 @@ use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::{
     network::{
-        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
-        Radius, Rdp, Smb, Smtp, Ssh, Tls,
+        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+        Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
     },
     sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -97,7 +97,7 @@ fn giganto_ssh() {
 
 #[test]
 fn giganto_dce_rpc() {
-    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0	1	0	21515	27889	547000	49670	netlogon	NetrLogonSamLogonEx";
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0	1	0	21515	27889	(0,E1AF8308EB2C5F11A9390800200C9A66,3,0,8A885D0411C91A4E9E0800200C9A66,2,0,0,0)	NetrLogonSamLogonEx";
 
     let rec = stringrecord(data);
 
@@ -192,6 +192,15 @@ fn giganto_radius() {
     let rec = stringrecord(data);
 
     assert!(Radius::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_icmp() {
+    let data = "1756197618.963374000	localhost	192.168.1.1	192.168.1.2	1	1000000000.000000000	0	1	1	100	100	8	0	1234	1	56	[8, 0, ff, ff]";
+
+    let rec = stringrecord(data);
+
+    assert!(Icmp::try_from_giganto_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {

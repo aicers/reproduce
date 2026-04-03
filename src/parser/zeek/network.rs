@@ -936,7 +936,7 @@ impl TryFromZeekRecord for DceRpc {
         } else {
             return Err(zeek_error!("missing destination port"));
         };
-        let rtt: i64 = if let Some(rtt) = rec.get(6) {
+        let duration: i64 = if let Some(rtt) = rec.get(6) {
             if rtt.eq("-") {
                 0
             } else {
@@ -944,21 +944,6 @@ impl TryFromZeekRecord for DceRpc {
             }
         } else {
             return Err(zeek_error!("missing rtt"));
-        };
-        let named_pipe = if let Some(named_pipe) = rec.get(7) {
-            named_pipe.to_string()
-        } else {
-            return Err(zeek_error!("missing named_pipe"));
-        };
-        let endpoint = if let Some(endpoint) = rec.get(8) {
-            endpoint.to_string()
-        } else {
-            return Err(zeek_error!("missing endpoint"));
-        };
-        let operation = if let Some(operation) = rec.get(9) {
-            operation.to_string()
-        } else {
-            return Err(zeek_error!("missing operation"));
         };
 
         Ok((
@@ -969,15 +954,13 @@ impl TryFromZeekRecord for DceRpc {
                 resp_port,
                 start_time: time,
                 proto: 0,
-                duration: rtt,
-                rtt,
-                named_pipe,
-                endpoint,
-                operation,
+                duration,
                 orig_pkts: 0,
                 resp_pkts: 0,
                 orig_l2_bytes: 0,
                 resp_l2_bytes: 0,
+                context: Vec::new(),
+                request: Vec::new(),
             },
             time,
         ))
