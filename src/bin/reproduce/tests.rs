@@ -1296,3 +1296,141 @@ fn resolve_offset_defaults_to_zero_without_skip_count_or_checkpoint() {
     let file = file_config(None, None);
     assert_eq!(resolve_offset(&file, None), 0);
 }
+
+#[tokio::test]
+async fn dir_polling_creates_per_file_checkpoints() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    write_text_file(&temp_dir, "a.log", "line_a\n");
+    write_text_file(&temp_dir, "b.log", "line_b\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig {
+        export_from_giganto: Some(false),
+        polling_mode: false,
+        transfer_count: None,
+        transfer_skip_count: None,
+        last_transfer_line_suffix: Some("offset".to_string()),
+    });
+    config.directory = Some(Directory {
+        file_prefix: None,
+        polling_mode: false,
+    });
+    let controller = Controller::new(config);
+    let mut sender = MockSender::default();
+
+    controller
+        .run_split(&mut sender)
+        .await
+        .expect("directory processing should succeed");
+
+    // Each file should have its own checkpoint, not a single directory one.
+    let cp_a = Checkpoint::from_input_and_suffix(
+        &temp_dir.path().join("a.log").to_string_lossy(),
+        "offset",
+    );
+    let cp_b = Checkpoint::from_input_and_suffix(
+        &temp_dir.path().join("b.log").to_string_lossy(),
+        "offset",
+    );
+    assert!(
+        cp_a.load()
+            .expect("checkpoint a should be readable")
+            .is_some(),
+        "per-file checkpoint for a.log should exist"
+    );
+    assert!(
+        cp_b.load()
+            .expect("checkpoint b should be readable")
+            .is_some(),
+        "per-file checkpoint for b.log should exist"
+    );
+
+    // The old directory-level checkpoint should NOT be created.
+    let cp_dir = Checkpoint::from_input_and_suffix(&temp_dir.path().to_string_lossy(), "offset");
+    assert!(
+        cp_dir
+            .load()
+            .expect("directory checkpoint should be readable")
+            .is_none(),
+        "directory-level checkpoint should not be created"
+    );
+}
+
+#[test]
+fn resolve_offset_with_fallback_uses_per_file_checkpoint() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let file_path = temp_dir.path().join("data.log");
+    let file_input = file_path
+        .to_str()
+        .expect("temporary path must be valid UTF-8");
+    let file = file_config(None, Some("offset"));
+    let checkpoint = checkpoint_for_input(file_input, file.last_transfer_line_suffix.as_deref());
+    checkpoint
+        .as_ref()
+        .expect("checkpoint should exist")
+        .save(b"50")
+        .expect("per-file checkpoint should be written");
+
+    let offset = resolve_offset_with_fallback(
+        &file,
+        checkpoint.as_ref(),
+        &temp_dir.path().to_string_lossy(),
+    );
+    assert_eq!(offset, 50);
+}
+
+#[test]
+fn resolve_offset_with_fallback_falls_back_to_directory_checkpoint() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let file_path = temp_dir.path().join("data.log");
+    let file_input = file_path
+        .to_str()
+        .expect("temporary path must be valid UTF-8");
+    let file = file_config(None, Some("offset"));
+
+    // Create directory-level checkpoint (old format).
+    let dir_checkpoint = checkpoint_for_input(
+        &temp_dir.path().to_string_lossy(),
+        file.last_transfer_line_suffix.as_deref(),
+    );
+    dir_checkpoint
+        .as_ref()
+        .expect("dir checkpoint should exist")
+        .save(b"100")
+        .expect("directory checkpoint should be written");
+
+    // Per-file checkpoint does not exist yet.
+    let checkpoint = checkpoint_for_input(file_input, file.last_transfer_line_suffix.as_deref());
+
+    let offset = resolve_offset_with_fallback(
+        &file,
+        checkpoint.as_ref(),
+        &temp_dir.path().to_string_lossy(),
+    );
+    assert_eq!(
+        offset, 100,
+        "should fall back to directory-level checkpoint"
+    );
+}
+
+#[test]
+fn resolve_offset_with_fallback_prefers_skip_count() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let file_path = temp_dir.path().join("data.log");
+    let file_input = file_path
+        .to_str()
+        .expect("temporary path must be valid UTF-8");
+    let file = file_config(Some(5), Some("offset"));
+    let checkpoint = checkpoint_for_input(file_input, file.last_transfer_line_suffix.as_deref());
+    checkpoint
+        .as_ref()
+        .expect("checkpoint should exist")
+        .save(b"99")
+        .expect("checkpoint should be written");
+
+    let offset = resolve_offset_with_fallback(
+        &file,
+        checkpoint.as_ref(),
+        &temp_dir.path().to_string_lossy(),
+    );
+    assert_eq!(offset, 5, "transfer_skip_count should take precedence");
+}

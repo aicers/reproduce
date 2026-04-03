@@ -31,6 +31,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed `ca_certs` to load all certificates from bundled PEM files,
   not just the first one. Files containing multiple CA certificates
   (e.g., root + intermediate) are now fully trusted.
+- Separated checkpoint state per file in `dir_polling_mode` so that
+  progress in one file no longer affects the checkpoint of another.
+  Existing directory-level checkpoints are used as a fallback for
+  backward compatibility.
 - Switched reqwest TLS backend to `native-tls` to avoid rustls provider
   conflicts with the 0.13 defaults and prevent runtime panics.
 - Fixed configuration so that the `kind` field is now mandatory; startup fails
