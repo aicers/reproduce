@@ -32,7 +32,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | ------------------------- | -------------------------------------------------------------------------- | ----------- | ------- |
 | `cert`                    | Path to the private key file                                               | Yes         | -       |
 | `key`                     | Path to the certificate file                                               | Yes         | -       |
-| `ca_certs`                | List of paths to CA certificate files                                      | Yes         | -       |
+| `ca_certs`                | List of paths to CA certificate files (each file may contain multiple PEM certificates) | Yes         | -       |
 | `giganto_ingest_srv_addr` | IP address and port of the Giganto ingest server                           | Yes         | -       |
 | `giganto_name`            | Name of Giganto server                                                     | Yes         | -       |
 | `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | Yes         | -       |
