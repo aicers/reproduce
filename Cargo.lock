@@ -505,8 +505,8 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.25.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.25.0#17379bdc1ffda7287cdc95508e23438c2fc8d414"
+version = "0.27.0"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.27.0#f809faa005548e6957e30402e3e45600abf6e9c1"
 dependencies = [
  "anyhow",
  "bincode",
