@@ -32,7 +32,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | ------------------------- | -------------------------------------------------------------------------- | ----------- | ------- |
 | `cert`                    | Path to the private key file                                               | Yes         | -       |
 | `key`                     | Path to the certificate file                                               | Yes         | -       |
-| `ca_certs`                | List of paths to CA certificate files (each file may contain multiple PEM certificates) | Yes         | -       |
+| `ca_certs`                | List of paths to CA certificate files                                      | Yes         | -       |
 | `giganto_ingest_srv_addr` | IP address and port of the Giganto ingest server                           | Yes         | -       |
 | `giganto_name`            | Name of Giganto server                                                     | Yes         | -       |
 | `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | Yes         | -       |
@@ -42,6 +42,9 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | `log_path`                | Path to the log file. If not specified, logs are sent to stdout.           | No          | -       |
 
 <!-- markdownlint-enable MD013 -->
+
+Each file listed in `ca_certs` may contain one or more PEM-encoded certificates
+(e.g., a CA bundle or full-chain file).
 
 ### [File]
 
