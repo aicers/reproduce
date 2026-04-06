@@ -2,8 +2,8 @@ use std::net::IpAddr;
 
 use anyhow::Context;
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, DceRpcContext, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap,
-    MalformedDns, Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, MalformedDns,
+    Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 use super::{
@@ -1479,10 +1479,26 @@ impl TryFromGigantoRecord for DceRpc {
         } else {
             return Err(migration_error!("missing destination l2 bytes"));
         };
-        let context = parse_dce_rpc_context(rec.get(13).context("missing context")?)
-            .context("invalid context")?;
-        let request = parse_comma_separated(rec.get(14).context("missing request")?)
-            .context("invalid request")?;
+        let rtt = if let Some(rtt) = rec.get(13) {
+            rtt.parse::<i64>().context("invalid rtt")?
+        } else {
+            return Err(migration_error!("missing rtt"));
+        };
+        let named_pipe = if let Some(named_pipe) = rec.get(14) {
+            named_pipe.to_string()
+        } else {
+            return Err(migration_error!("missing named_pipe"));
+        };
+        let endpoint = if let Some(endpoint) = rec.get(15) {
+            endpoint.to_string()
+        } else {
+            return Err(migration_error!("missing endpoint"));
+        };
+        let operation = if let Some(operation) = rec.get(16) {
+            operation.to_string()
+        } else {
+            return Err(migration_error!("missing operation"));
+        };
 
         Ok((
             Self {
@@ -1493,12 +1509,14 @@ impl TryFromGigantoRecord for DceRpc {
                 proto,
                 start_time,
                 duration,
+                rtt,
+                named_pipe,
+                endpoint,
+                operation,
                 orig_pkts,
                 resp_pkts,
                 orig_l2_bytes,
                 resp_l2_bytes,
-                context,
-                request,
             },
             time,
         ))
@@ -3200,6 +3218,22 @@ impl TryFromGigantoRecord for Icmp {
     }
 }
 
+/// Parses a comma-separated string of hex byte tokens (e.g. `"8,0,ff,ff"`)
+/// into a `Vec<u8>`.  Empty tokens are rejected.
+fn parse_hex_tokens(tokens: &str, field: &str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for token in tokens.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(migration_error!("empty hex token in `{field}`"));
+        }
+        let value = u8::from_str_radix(token, 16)
+            .with_context(|| format!("invalid hex byte `{token}` in `{field}`"))?;
+        bytes.push(value);
+    }
+    Ok(bytes)
+}
+
 fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
     let trimmed = field.trim();
     if trimmed.is_empty() || trimmed == "[]" {
@@ -3225,17 +3259,7 @@ fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
             groups.push(Vec::new());
             continue;
         }
-
-        let mut bytes = Vec::new();
-        for token in group.split(',') {
-            if token.is_empty() {
-                return Err(migration_error!("invalid hex body: {field}"));
-            }
-            let value = u8::from_str_radix(token, 16)
-                .with_context(|| format!("invalid hex byte `{token}` in `{field}`"))?;
-            bytes.push(value);
-        }
-        groups.push(bytes);
+        groups.push(parse_hex_tokens(group, field)?);
     }
 
     Ok(groups)
@@ -3252,60 +3276,7 @@ fn parse_hex_payload(field: &str) -> Result<Vec<u8>> {
         return Err(migration_error!("invalid hex payload: {field}"));
     }
     let inner = &trimmed[1..trimmed.len() - 1];
-    let mut bytes = Vec::new();
-    for token in inner.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
-            continue;
-        }
-        let value = u8::from_str_radix(token, 16)
-            .with_context(|| format!("invalid hex byte `{token}` in `{field}`"))?;
-        bytes.push(value);
-    }
-    Ok(bytes)
-}
-
-/// Parses a `DceRpc` context list formatted by `vec_to_string_or_default`.
-/// Each context entry is `(id,abstract_syntax,...)` and entries are
-/// comma-separated at the top level.
-fn parse_dce_rpc_context(field: &str) -> Result<Vec<DceRpcContext>> {
-    let trimmed = field.trim();
-    if trimmed.is_empty() || trimmed == "-" {
-        return Ok(Vec::new());
-    }
-
-    let mut contexts = Vec::new();
-    // Each context is enclosed in parentheses: (id,...,reason)
-    let mut rest = trimmed;
-    while let Some(start) = rest.find('(') {
-        let end = rest[start..]
-            .find(')')
-            .ok_or_else(|| migration_error!("unmatched paren in context"))?
-            + start;
-        let entry = &rest[start + 1..end];
-        let parts: Vec<&str> = entry.split(',').collect();
-        if parts.len() != 9 {
-            return Err(migration_error!(
-                "expected 9 fields in DceRpcContext, got {}",
-                parts.len()
-            ));
-        }
-        contexts.push(DceRpcContext {
-            id: parts[0].parse().context("invalid context id")?,
-            abstract_syntax: u128::from_str_radix(parts[1], 16)
-                .context("invalid abstract_syntax")?,
-            abstract_major: parts[2].parse().context("invalid abstract_major")?,
-            abstract_minor: parts[3].parse().context("invalid abstract_minor")?,
-            transfer_syntax: u128::from_str_radix(parts[4], 16)
-                .context("invalid transfer_syntax")?,
-            transfer_major: parts[5].parse().context("invalid transfer_major")?,
-            transfer_minor: parts[6].parse().context("invalid transfer_minor")?,
-            acceptance: parts[7].parse().context("invalid acceptance")?,
-            reason: parts[8].parse().context("invalid reason")?,
-        });
-        rest = &rest[end + 1..];
-    }
-    Ok(contexts)
+    parse_hex_tokens(inner, field)
 }
 
 #[cfg(test)]
@@ -3344,5 +3315,39 @@ mod parse_hex_body_tests {
         assert!(parse_hex_body(" - ").is_err());
         assert!(parse_hex_body("invalid").is_err());
         assert!(parse_hex_body("[[0a,,3d]]").is_err());
+    }
+}
+
+#[cfg(test)]
+mod parse_hex_payload_tests {
+    use super::parse_hex_payload;
+
+    #[test]
+    fn empty_inputs() {
+        assert_eq!(parse_hex_payload("[]").unwrap(), Vec::<u8>::new());
+        assert_eq!(parse_hex_payload("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn parses_valid_payload() {
+        assert_eq!(
+            parse_hex_payload("[8, 0, ff, ff]").unwrap(),
+            vec![0x08, 0x00, 0xff, 0xff]
+        );
+        assert_eq!(parse_hex_payload("[0a]").unwrap(), vec![0x0a]);
+    }
+
+    #[test]
+    fn rejects_empty_tokens() {
+        assert!(parse_hex_payload("[8,,ff]").is_err());
+        assert!(parse_hex_payload("[8,]").is_err());
+        assert!(parse_hex_payload("[,8]").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_inputs() {
+        assert!(parse_hex_payload("8, 0, ff").is_err());
+        assert!(parse_hex_payload("[zz]").is_err());
+        assert!(parse_hex_payload("invalid").is_err());
     }
 }

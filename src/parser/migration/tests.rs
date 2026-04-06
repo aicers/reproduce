@@ -97,7 +97,7 @@ fn giganto_ssh() {
 
 #[test]
 fn giganto_dce_rpc() {
-    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0	1	0	21515	27889	(0,E1AF8308EB2C5F11A9390800200C9A66,3,0,8A885D0411C91A4E9E0800200C9A66,2,0,0,0)	NetrLogonSamLogonEx";
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0	1	0	21515	27889	547000	49670	netlogon	NetrLogonSamLogonEx";
 
     let rec = stringrecord(data);
 
