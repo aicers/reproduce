@@ -945,12 +945,6 @@ impl TryFromZeekRecord for DceRpc {
         } else {
             return Err(zeek_error!("missing rtt"));
         };
-        let operation = if let Some(operation) = rec.get(9) {
-            operation.to_string()
-        } else {
-            return Err(zeek_error!("missing operation"));
-        };
-
         Ok((
             Self {
                 orig_addr,
@@ -965,7 +959,7 @@ impl TryFromZeekRecord for DceRpc {
                 orig_l2_bytes: 0,
                 resp_l2_bytes: 0,
                 context: Vec::new(),
-                request: vec![operation],
+                request: Vec::new(),
             },
             time,
         ))

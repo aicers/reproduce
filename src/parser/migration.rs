@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
 use csv::StringRecord;
+use giganto_client::ingest::network::DceRpcContext;
 use jiff::Timestamp;
 use thiserror::Error;
 
@@ -62,6 +63,38 @@ fn parse_post_body(s: &str) -> Vec<u8> {
     } else {
         Vec::new()
     }
+}
+
+fn parse_dce_rpc_contexts(s: &str) -> MigrationResult<Vec<DceRpcContext>> {
+    if s == "-" || s.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut contexts = Vec::new();
+    for tuple_str in s.split("),(") {
+        let inner = tuple_str.trim_start_matches('(').trim_end_matches(')');
+        let fields: Vec<&str> = inner.split(',').collect();
+        if fields.len() != 9 {
+            return Err(anyhow!(
+                "invalid DceRpcContext: expected 9 fields, got {}",
+                fields.len()
+            )
+            .into());
+        }
+        contexts.push(DceRpcContext {
+            id: fields[0].parse().context("invalid context id")?,
+            abstract_syntax: u128::from_str_radix(fields[1], 16)
+                .context("invalid abstract_syntax")?,
+            abstract_major: fields[2].parse().context("invalid abstract_major")?,
+            abstract_minor: fields[3].parse().context("invalid abstract_minor")?,
+            transfer_syntax: u128::from_str_radix(fields[4], 16)
+                .context("invalid transfer_syntax")?,
+            transfer_major: fields[5].parse().context("invalid transfer_major")?,
+            transfer_minor: fields[6].parse().context("invalid transfer_minor")?,
+            acceptance: fields[7].parse().context("invalid acceptance")?,
+            reason: fields[8].parse().context("invalid reason")?,
+        });
+    }
+    Ok(contexts)
 }
 #[cfg(test)]
 mod giganto_timestamp_tests {

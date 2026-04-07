@@ -7,8 +7,8 @@ use giganto_client::ingest::network::{
 };
 
 use super::{
-    MigrationResult, TryFromGigantoRecord, parse_comma_separated, parse_giganto_timestamp_ns,
-    parse_post_body,
+    MigrationResult, TryFromGigantoRecord, parse_comma_separated, parse_dce_rpc_contexts,
+    parse_giganto_timestamp_ns, parse_post_body,
 };
 
 type Result<T> = MigrationResult<T>;
@@ -1479,11 +1479,13 @@ impl TryFromGigantoRecord for DceRpc {
         } else {
             return Err(migration_error!("missing destination l2 bytes"));
         };
-        let operation = if let Some(operation) = rec.get(16) {
-            operation.to_string()
+        let context = if let Some(ctx_str) = rec.get(13) {
+            parse_dce_rpc_contexts(ctx_str)?
         } else {
-            return Err(migration_error!("missing operation"));
+            return Err(migration_error!("missing context"));
         };
+        let request = parse_comma_separated(rec.get(14).context("missing request")?)
+            .context("invalid request")?;
 
         Ok((
             Self {
@@ -1498,8 +1500,8 @@ impl TryFromGigantoRecord for DceRpc {
                 resp_pkts,
                 orig_l2_bytes,
                 resp_l2_bytes,
-                context: Vec::new(),
-                request: vec![operation],
+                context,
+                request,
             },
             time,
         ))
