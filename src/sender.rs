@@ -440,16 +440,16 @@ fn to_root_cert(
         let root_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*file)
             .collect::<std::result::Result<_, _>>()
             .map_err(|source| SenderError::context("invalid PEM-encoded certificate", source))?;
-        let cert =
-            root_certs
-                .first()
-                .cloned()
-                .ok_or_else(|| SenderError::MissingRootCertificate {
-                    path: ca_cert.clone(),
-                })?;
-        root_cert
-            .add(cert)
-            .map_err(|source| SenderError::context("failed to add root cert", source))?;
+        if root_certs.is_empty() {
+            return Err(SenderError::MissingRootCertificate {
+                path: ca_cert.clone(),
+            });
+        }
+        for cert in root_certs {
+            root_cert
+                .add(cert)
+                .map_err(|source| SenderError::context("failed to add root cert", source))?;
+        }
     }
 
     Ok(root_cert)
@@ -736,6 +736,21 @@ mod tests {
             err.to_string()
                 .contains("no certificates found in root certificate file")
         );
+    }
+
+    #[test]
+    fn to_root_cert_loads_bundled_pem_with_multiple_certificates() {
+        let root_pem = fs::read(fixture_path(TEST_ROOT_PEM))
+            .expect("fixture root certificate should be readable");
+        let dir = tempdir().expect("tempdir should be created");
+        let bundled_path = dir.path().join("bundled-roots.pem");
+        let mut bundled = root_pem.clone();
+        bundled.extend_from_slice(&root_pem);
+        fs::write(&bundled_path, &bundled).expect("bundled PEM fixture should be written");
+
+        let store = to_root_cert(&[bundled_path.to_string_lossy().into_owned()])
+            .expect("bundled PEM with multiple certificates should load");
+        assert_eq!(store.len(), 2);
     }
 
     #[test]

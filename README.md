@@ -43,6 +43,9 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 
 <!-- markdownlint-enable MD013 -->
 
+Each file listed in `ca_certs` may contain one or more PEM-encoded certificates
+(e.g., a CA bundle or full-chain file).
+
 ### [File]
 
 - This section is required only if you are using file-based input.

@@ -26,6 +26,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed `ca_certs` to load all certificates from bundled PEM files,
+  not just the first one. Files containing multiple CA certificates
+  (e.g., root + intermediate) are now fully trusted.
 - Switched reqwest TLS backend to `native-tls` to avoid rustls provider
   conflicts with the 0.13 defaults and prevent runtime panics.
 - Fixed configuration so that the `kind` field is now mandatory; startup fails
