@@ -108,13 +108,13 @@ fn file_config(
     transfer_skip_count: Option<u64>,
     last_transfer_line_suffix: Option<&str>,
 ) -> FileConfig {
-    FileConfig {
-        export_from_giganto: Some(false),
-        polling_mode: false,
-        transfer_count: None,
+    FileConfig::new(
+        Some(false),
+        false,
+        None,
         transfer_skip_count,
-        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
-    }
+        last_transfer_line_suffix.map(str::to_string),
+    )
 }
 
 fn test_config(input: &Path, kind: &str) -> Config {
@@ -131,13 +131,7 @@ fn test_config(input: &Path, kind: &str) -> Config {
         report: false,
         report_dir: None,
         log_path: None,
-        file: Some(FileConfig {
-            export_from_giganto: Some(false),
-            polling_mode: false,
-            transfer_count: None,
-            transfer_skip_count: None,
-            last_transfer_line_suffix: None,
-        }),
+        file: Some(FileConfig::new(Some(false), false, None, None, None)),
         directory: None,
         elastic: None,
     }
@@ -146,17 +140,17 @@ fn test_config(input: &Path, kind: &str) -> Config {
 fn controller_for_file(
     input: &Path,
     kind: &str,
-    export_from_giganto: Option<bool>,
+    import_from_giganto: Option<bool>,
     last_transfer_line_suffix: Option<&str>,
 ) -> Controller {
     let mut config = test_config(input, kind);
-    config.file = Some(FileConfig {
-        export_from_giganto,
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
-    });
+    config.file = Some(FileConfig::new(
+        import_from_giganto,
+        false,
+        None,
+        None,
+        last_transfer_line_suffix.map(str::to_string),
+    ));
     Controller::new(config)
 }
 
@@ -1137,7 +1131,7 @@ async fn run_single_requires_export_flag_for_zeek_kinds() {
         .expect_err("missing export flag must be rejected");
     assert!(
         err.to_string()
-            .contains("export_from_giganto parameter is required")
+            .contains("import_from_giganto parameter is required")
     );
 }
 
@@ -1264,30 +1258,18 @@ async fn run_single_ignores_checkpoint_write_failures() {
 
 #[test]
 fn giganto_import_enabled_requires_export_setting() {
-    let missing = FileConfig {
-        export_from_giganto: None,
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: None,
-    };
-    let enabled = FileConfig {
-        export_from_giganto: Some(true),
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: None,
-    };
+    let missing = FileConfig::new(None, false, None, None, None);
+    let enabled = FileConfig::new(Some(true), false, None, None, None);
 
-    let err = giganto_import_enabled(missing.export_from_giganto)
-        .expect_err("missing export_from_giganto must be rejected");
+    let err = giganto_import_enabled(missing.import_from_giganto)
+        .expect_err("missing import_from_giganto must be rejected");
     assert!(
         err.to_string()
-            .contains("export_from_giganto parameter is required")
+            .contains("import_from_giganto parameter is required")
     );
     assert!(
-        giganto_import_enabled(enabled.export_from_giganto)
-            .expect("configured export flag should be returned")
+        giganto_import_enabled(enabled.import_from_giganto)
+            .expect("configured import flag should be returned")
     );
 }
 

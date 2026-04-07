@@ -8,7 +8,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Added sysmon file Giganto import support.
+- Added support for sysmon files exported from Giganto.
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.
 - Added `ICMP` protocol support for Giganto import-only events.
@@ -24,6 +24,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `MigrationError` is now `GigantoImportError`, and related
   functions follow the same convention. The user-facing
   `export_from_giganto` config key is unchanged.
+- Renamed the `export_from_giganto` config key to `import_from_giganto`.
+  The old key is still accepted but emits a deprecation warning and will
+  be removed in a future release.
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.27.0-alpha.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.

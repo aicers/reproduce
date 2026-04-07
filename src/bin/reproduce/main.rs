@@ -505,7 +505,7 @@ enum ClassifiedKind<'a> {
 
 struct FileRunPlan<'a> {
     kind: ClassifiedKind<'a>,
-    export_from_giganto: Option<bool>,
+    import_from_giganto: Option<bool>,
     checkpoint: Option<Checkpoint>,
     options: CollectorRunOptions,
     report: Report,
@@ -946,7 +946,7 @@ impl Controller {
 
         Ok(FileRunPlan {
             kind: classify_kind(kind),
-            export_from_giganto: file.export_from_giganto,
+            import_from_giganto: file.import_from_giganto,
             checkpoint,
             options,
             report: Report::new(self.config.clone()),
@@ -964,13 +964,13 @@ impl Controller {
     {
         let FileRunPlan {
             kind,
-            export_from_giganto,
+            import_from_giganto,
             checkpoint,
             options,
             report,
         } = plan;
         let result =
-            run_classified_kind(filename, kind, export_from_giganto, options, sender, report)
+            run_classified_kind(filename, kind, import_from_giganto, options, sender, report)
                 .await?;
         if result.reset_header {
             sender.reset_header();
@@ -980,14 +980,14 @@ impl Controller {
     }
 }
 
-fn giganto_import_enabled(export_from_giganto: Option<bool>) -> Result<bool> {
-    export_from_giganto.context("export_from_giganto parameter is required")
+fn giganto_import_enabled(import_from_giganto: Option<bool>) -> Result<bool> {
+    import_from_giganto.context("import_from_giganto parameter is required")
 }
 
 async fn run_classified_kind<S>(
     filename: &Path,
     kind: ClassifiedKind<'_>,
-    export_from_giganto: Option<bool>,
+    import_from_giganto: Option<bool>,
     options: CollectorRunOptions,
     sender: &mut S,
     report: Report,
@@ -1000,7 +1000,7 @@ where
             run_zeek_kind(
                 filename,
                 kind.as_str(),
-                giganto_import_enabled(export_from_giganto)?,
+                giganto_import_enabled(import_from_giganto)?,
                 options,
                 sender,
                 report,
@@ -1016,7 +1016,7 @@ where
             run_sysmon_kind(
                 filename,
                 kind.as_str(),
-                giganto_import_enabled(export_from_giganto)?,
+                giganto_import_enabled(import_from_giganto)?,
                 options,
                 sender,
                 report,

@@ -54,7 +54,7 @@ Each file listed in `ca_certs` may contain one or more PEM-encoded certificates
 
 | Field                       | Description                                                | Required | Default |
 | --------------------------- | ---------------------------------------------------------- | -------- | ------- |
-| `export_from_giganto`       | Enables processing of files exported from Giganto          | No       | false   |
+| `import_from_giganto`       | Enables processing of files exported from Giganto          | No       | false   |
 | `polling_mode`              | Enables or disables file polling mode                      | No       | false   |
 | `transfer_count`            | Number of lines or packets to send                         | No       | -       |
 | `transfer_skip_count`       | Number of lines or packets to skip before sending          | No       | -       |
@@ -158,7 +158,7 @@ report_dir = "/var/lib/reproduce/reports"
   input = "/path/to/giganto_export_file"
 
   [file]
-  export_from_giganto = true
+  import_from_giganto = true
   ```
 
 ### Send a Sysmon CSV file to a Giganto server
