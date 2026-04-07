@@ -232,6 +232,18 @@ where
             )
             .await
         }
+        ZeekKind::Icmp => {
+            run_migration_only_collector::<Icmp, _>(
+                filename,
+                RawEventKind::Icmp,
+                migration,
+                kind.as_str(),
+                options,
+                sender,
+                report,
+            )
+            .await
+        }
     }
 }
 

@@ -2,8 +2,8 @@ use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::{
     network::{
-        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
-        Radius, Rdp, Smb, Smtp, Ssh, Tls,
+        Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
+        Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
     },
     sysmon::{
         DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -192,6 +192,15 @@ fn giganto_radius() {
     let rec = stringrecord(data);
 
     assert!(Radius::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_icmp() {
+    let data = "1756197618.963374000	localhost	192.168.1.1	192.168.1.2	1	1000000000.000000000	0	1	1	100	100	8	0	1234	1	56	[8, 0, ff, ff]";
+
+    let rec = stringrecord(data);
+
+    assert!(Icmp::try_from_giganto_record(&rec).is_ok());
 }
 
 fn stringrecord(data: &str) -> StringRecord {

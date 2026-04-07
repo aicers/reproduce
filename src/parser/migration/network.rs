@@ -2,8 +2,8 @@ use std::net::IpAddr;
 
 use anyhow::Context;
 use giganto_client::ingest::network::{
-    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
-    Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, MalformedDns,
+    Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 use super::{
@@ -3104,6 +3104,136 @@ impl TryFromGigantoRecord for Radius {
     }
 }
 
+impl TryFromGigantoRecord for Icmp {
+    #[allow(clippy::too_many_lines)]
+    fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
+        let time: i64 = if let Some(timestamp) = rec.get(0) {
+            parse_giganto_timestamp_ns(timestamp)?
+        } else {
+            return Err(migration_error!("missing timestamp"));
+        };
+        let orig_addr = if let Some(orig_addr) = rec.get(2) {
+            orig_addr
+                .parse::<IpAddr>()
+                .context("invalid source address")?
+        } else {
+            return Err(migration_error!("missing source address"));
+        };
+        let resp_addr = if let Some(resp_addr) = rec.get(3) {
+            resp_addr
+                .parse::<IpAddr>()
+                .context("invalid destination address")?
+        } else {
+            return Err(migration_error!("missing destination address"));
+        };
+        let proto = if let Some(proto) = rec.get(4) {
+            proto.parse::<u8>().context("invalid proto")?
+        } else {
+            return Err(migration_error!("missing protocol"));
+        };
+        let start_time = if let Some(start_time) = rec.get(5) {
+            parse_giganto_timestamp_ns(start_time)?
+        } else {
+            return Err(migration_error!("missing start_time"));
+        };
+        let duration = if let Some(duration) = rec.get(6) {
+            duration.parse::<i64>().context("invalid duration")?
+        } else {
+            return Err(migration_error!("missing duration"));
+        };
+        let orig_pkts = if let Some(orig_pkts) = rec.get(7) {
+            orig_pkts.parse::<u64>().context("invalid source packets")?
+        } else {
+            return Err(migration_error!("missing source packets"));
+        };
+        let resp_pkts = if let Some(resp_pkts) = rec.get(8) {
+            resp_pkts
+                .parse::<u64>()
+                .context("invalid destination packets")?
+        } else {
+            return Err(migration_error!("missing destination packets"));
+        };
+        let orig_l2_bytes = if let Some(orig_l2_bytes) = rec.get(9) {
+            orig_l2_bytes
+                .parse::<u64>()
+                .context("invalid source l2 bytes")?
+        } else {
+            return Err(migration_error!("missing source l2 bytes"));
+        };
+        let resp_l2_bytes = if let Some(resp_l2_bytes) = rec.get(10) {
+            resp_l2_bytes
+                .parse::<u64>()
+                .context("invalid destination l2 bytes")?
+        } else {
+            return Err(migration_error!("missing destination l2 bytes"));
+        };
+        let icmp_type = if let Some(icmp_type) = rec.get(11) {
+            icmp_type.parse::<u8>().context("invalid icmp_type")?
+        } else {
+            return Err(migration_error!("missing icmp_type"));
+        };
+        let icmp_code = if let Some(icmp_code) = rec.get(12) {
+            icmp_code.parse::<u8>().context("invalid icmp_code")?
+        } else {
+            return Err(migration_error!("missing icmp_code"));
+        };
+        let id = if let Some(id) = rec.get(13) {
+            id.parse::<u16>().context("invalid id")?
+        } else {
+            return Err(migration_error!("missing id"));
+        };
+        let seq_num = if let Some(seq_num) = rec.get(14) {
+            seq_num.parse::<u16>().context("invalid seq_num")?
+        } else {
+            return Err(migration_error!("missing seq_num"));
+        };
+        let data_len = if let Some(data_len) = rec.get(15) {
+            data_len.parse::<u16>().context("invalid data_len")?
+        } else {
+            return Err(migration_error!("missing data_len"));
+        };
+        let payload = parse_hex_payload(rec.get(16).context("missing payload")?)
+            .context("invalid payload")?;
+
+        Ok((
+            Self {
+                orig_addr,
+                resp_addr,
+                proto,
+                start_time,
+                duration,
+                orig_pkts,
+                resp_pkts,
+                orig_l2_bytes,
+                resp_l2_bytes,
+                icmp_type,
+                icmp_code,
+                id,
+                seq_num,
+                data_len,
+                payload,
+            },
+            time,
+        ))
+    }
+}
+
+/// Parses a comma-separated string of hex byte tokens (e.g. `"8,0,ff,ff"`)
+/// into a `Vec<u8>`.  Empty tokens are rejected.
+fn parse_hex_tokens(tokens: &str, field: &str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for token in tokens.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(migration_error!("empty hex token in `{field}`"));
+        }
+        let value = u8::from_str_radix(token, 16)
+            .with_context(|| format!("invalid hex byte `{token}` in `{field}`"))?;
+        bytes.push(value);
+    }
+    Ok(bytes)
+}
+
 fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
     let trimmed = field.trim();
     if trimmed.is_empty() || trimmed == "[]" {
@@ -3129,20 +3259,24 @@ fn parse_hex_body(field: &str) -> Result<Vec<Vec<u8>>> {
             groups.push(Vec::new());
             continue;
         }
-
-        let mut bytes = Vec::new();
-        for token in group.split(',') {
-            if token.is_empty() {
-                return Err(migration_error!("invalid hex body: {field}"));
-            }
-            let value = u8::from_str_radix(token, 16)
-                .with_context(|| format!("invalid hex byte `{token}` in `{field}`"))?;
-            bytes.push(value);
-        }
-        groups.push(bytes);
+        groups.push(parse_hex_tokens(group, field)?);
     }
 
     Ok(groups)
+}
+
+/// Parses a hex payload formatted as `[xx, yy, zz]` (the output of
+/// `format_args!("{:x?}", vec)`) into a `Vec<u8>`.
+fn parse_hex_payload(field: &str) -> Result<Vec<u8>> {
+    let trimmed = field.trim();
+    if trimmed.is_empty() || trimmed == "[]" {
+        return Ok(Vec::new());
+    }
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return Err(migration_error!("invalid hex payload: {field}"));
+    }
+    let inner = &trimmed[1..trimmed.len() - 1];
+    parse_hex_tokens(inner, field)
 }
 
 #[cfg(test)]
@@ -3181,5 +3315,39 @@ mod parse_hex_body_tests {
         assert!(parse_hex_body(" - ").is_err());
         assert!(parse_hex_body("invalid").is_err());
         assert!(parse_hex_body("[[0a,,3d]]").is_err());
+    }
+}
+
+#[cfg(test)]
+mod parse_hex_payload_tests {
+    use super::parse_hex_payload;
+
+    #[test]
+    fn empty_inputs() {
+        assert_eq!(parse_hex_payload("[]").unwrap(), Vec::<u8>::new());
+        assert_eq!(parse_hex_payload("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn parses_valid_payload() {
+        assert_eq!(
+            parse_hex_payload("[8, 0, ff, ff]").unwrap(),
+            vec![0x08, 0x00, 0xff, 0xff]
+        );
+        assert_eq!(parse_hex_payload("[0a]").unwrap(), vec![0x0a]);
+    }
+
+    #[test]
+    fn rejects_empty_tokens() {
+        assert!(parse_hex_payload("[8,,ff]").is_err());
+        assert!(parse_hex_payload("[8,]").is_err());
+        assert!(parse_hex_payload("[,8]").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_inputs() {
+        assert!(parse_hex_payload("8, 0, ff").is_err());
+        assert!(parse_hex_payload("[zz]").is_err());
+        assert!(parse_hex_payload("invalid").is_err());
     }
 }

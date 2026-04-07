@@ -20,8 +20,8 @@ use giganto_client::{
     ingest::{
         netflow::{Netflow5, Netflow9},
         network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
-            Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
+            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt,
+            Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
         },
         sysmon::{
             DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
@@ -196,11 +196,12 @@ enum ZeekKind {
     Dhcp,
     Radius,
     MalformedDns,
+    Icmp,
 }
 
 impl ZeekKind {
     #[cfg(test)]
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 20] = [
         Self::Conn,
         Self::Http,
         Self::Rdp,
@@ -220,6 +221,7 @@ impl ZeekKind {
         Self::Dhcp,
         Self::Radius,
         Self::MalformedDns,
+        Self::Icmp,
     ];
 
     fn parse(kind: &str) -> Option<Self> {
@@ -243,6 +245,7 @@ impl ZeekKind {
             "dhcp" => Self::Dhcp,
             "radius" => Self::Radius,
             "malformed_dns" => Self::MalformedDns,
+            "icmp" => Self::Icmp,
             _ => return None,
         })
     }
@@ -268,6 +271,7 @@ impl ZeekKind {
             Self::Dhcp => "dhcp",
             Self::Radius => "radius",
             Self::MalformedDns => "malformed_dns",
+            Self::Icmp => "icmp",
         }
     }
 
@@ -282,6 +286,7 @@ impl ZeekKind {
                 | Self::Dhcp
                 | Self::Radius
                 | Self::MalformedDns
+                | Self::Icmp
         )
     }
 }
