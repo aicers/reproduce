@@ -22,11 +22,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   records exported from Giganto, not a schema migration.
   `MigrationCollector` is now `GigantoImportCollector`,
   `MigrationError` is now `GigantoImportError`, and related
-  functions follow the same convention. The user-facing
-  `export_from_giganto` config key is unchanged.
+  functions follow the same convention.
 - Renamed the `export_from_giganto` config key to `import_from_giganto`.
-  The old key is still accepted but emits a deprecation warning and will
-  be removed in a future release.
+  The old key is no longer accepted; update configuration files to use
+  `import_from_giganto`.
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.27.0-alpha.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.

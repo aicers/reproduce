@@ -108,13 +108,13 @@ fn file_config(
     transfer_skip_count: Option<u64>,
     last_transfer_line_suffix: Option<&str>,
 ) -> FileConfig {
-    FileConfig::new(
-        Some(false),
-        false,
-        None,
+    FileConfig {
+        import_from_giganto: Some(false),
+        polling_mode: false,
+        transfer_count: None,
         transfer_skip_count,
-        last_transfer_line_suffix.map(str::to_string),
-    )
+        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
+    }
 }
 
 fn test_config(input: &Path, kind: &str) -> Config {
@@ -131,7 +131,13 @@ fn test_config(input: &Path, kind: &str) -> Config {
         report: false,
         report_dir: None,
         log_path: None,
-        file: Some(FileConfig::new(Some(false), false, None, None, None)),
+        file: Some(FileConfig {
+            import_from_giganto: Some(false),
+            polling_mode: false,
+            transfer_count: None,
+            transfer_skip_count: None,
+            last_transfer_line_suffix: None,
+        }),
         directory: None,
         elastic: None,
     }
@@ -144,13 +150,13 @@ fn controller_for_file(
     last_transfer_line_suffix: Option<&str>,
 ) -> Controller {
     let mut config = test_config(input, kind);
-    config.file = Some(FileConfig::new(
+    config.file = Some(FileConfig {
         import_from_giganto,
-        false,
-        None,
-        None,
-        last_transfer_line_suffix.map(str::to_string),
-    ));
+        polling_mode: false,
+        transfer_count: None,
+        transfer_skip_count: None,
+        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
+    });
     Controller::new(config)
 }
 
@@ -890,7 +896,7 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
             report_for(&path, kind_name),
         )
         .await
-        .expect("giganto-import-only kind should dispatch in export mode");
+        .expect("giganto-import-only kind should dispatch in giganto import mode");
 
         assert_eq!(
             pos,
@@ -1119,7 +1125,7 @@ async fn run_netflow_kind_rejects_unknown_kind() {
 }
 
 #[tokio::test]
-async fn run_single_requires_export_flag_for_zeek_kinds() {
+async fn run_single_requires_import_flag_for_zeek_kinds() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(&temp_dir, "conn.log", &format!("{ZEEK_CONN_1}\n"));
     let controller = controller_for_file(&path, "conn", None, None);
@@ -1128,7 +1134,7 @@ async fn run_single_requires_export_flag_for_zeek_kinds() {
     let err = controller
         .run_single(&path, &mut sender, "conn", false)
         .await
-        .expect_err("missing export flag must be rejected");
+        .expect_err("missing import flag must be rejected");
     assert!(
         err.to_string()
             .contains("import_from_giganto parameter is required")
@@ -1257,9 +1263,21 @@ async fn run_single_ignores_checkpoint_write_failures() {
 }
 
 #[test]
-fn giganto_import_enabled_requires_export_setting() {
-    let missing = FileConfig::new(None, false, None, None, None);
-    let enabled = FileConfig::new(Some(true), false, None, None, None);
+fn giganto_import_enabled_requires_import_setting() {
+    let missing = FileConfig {
+        import_from_giganto: None,
+        polling_mode: false,
+        transfer_count: None,
+        transfer_skip_count: None,
+        last_transfer_line_suffix: None,
+    };
+    let enabled = FileConfig {
+        import_from_giganto: Some(true),
+        polling_mode: false,
+        transfer_count: None,
+        transfer_skip_count: None,
+        last_transfer_line_suffix: None,
+    };
 
     let err = giganto_import_enabled(missing.import_from_giganto)
         .expect_err("missing import_from_giganto must be rejected");
