@@ -20,6 +20,7 @@ use crate::sender::BATCH_SIZE;
 /// [`SysmonCollector::needs_header_reset`] to determine whether the transport
 /// header needs to be reset (matching the original `Producer::send_sysmon`
 /// behaviour).
+#[allow(clippy::struct_excessive_bools)]
 pub struct SysmonCollector<T> {
     iter: Option<StringRecordsIntoIter<File>>,
     protocol: RawEventKind,
@@ -34,7 +35,7 @@ pub struct SysmonCollector<T> {
     last_record: StringRecord,
     reference_timestamp: Option<i64>,
     timestamp_offset: i64,
-    rows_consumed: u64,
+    has_consumed_rows: bool,
     success_cnt: u64,
     failed_cnt: u64,
     exhausted: bool,
@@ -67,7 +68,7 @@ impl<T> SysmonCollector<T> {
             last_record: StringRecord::new(),
             reference_timestamp: None,
             timestamp_offset: 0,
-            rows_consumed: 0,
+            has_consumed_rows: false,
             success_cnt: 0,
             failed_cnt: 0,
             exhausted: false,
@@ -116,7 +117,7 @@ where
             let next_pos = iter.reader().position().clone();
             if let Some(result) = iter.next() {
                 self.pos = next_pos.clone();
-                self.rows_consumed += 1;
+                self.has_consumed_rows = true;
                 if next_pos.line() <= self.skip {
                     continue;
                 }
@@ -216,7 +217,7 @@ where
         }
 
         if buf.is_empty() {
-            if self.rows_consumed > 0 {
+            if self.has_consumed_rows {
                 self.committed_line = self.pos.line();
             }
             return Ok(None);
@@ -318,6 +319,8 @@ mod tests {
 
         let none = collector.next_batch().await.expect("second call");
         assert!(none.is_none());
+        // Position is 3 because the CSV header row counts as line 1, so the
+        // two data rows end at line 3.
         assert_eq!(collector.position(), b"3".to_vec());
     }
 

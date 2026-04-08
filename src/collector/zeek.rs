@@ -15,6 +15,7 @@ use crate::parser::zeek::TryFromZeekRecord;
 use crate::sender::BATCH_SIZE;
 
 /// Collects Zeek TSV log records, parsing and batching them for sending.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ZeekCollector<T> {
     iter: Option<StringRecordsIntoIter<File>>,
     protocol: RawEventKind,
@@ -29,7 +30,7 @@ pub struct ZeekCollector<T> {
     last_record: StringRecord,
     reference_timestamp: Option<i64>,
     timestamp_offset: i64,
-    rows_consumed: u64,
+    has_consumed_rows: bool,
     success_cnt: u64,
     failed_cnt: u64,
     exhausted: bool,
@@ -62,7 +63,7 @@ impl<T> ZeekCollector<T> {
             last_record: StringRecord::new(),
             reference_timestamp: None,
             timestamp_offset: 0,
-            rows_consumed: 0,
+            has_consumed_rows: false,
             success_cnt: 0,
             failed_cnt: 0,
             exhausted: false,
@@ -102,7 +103,7 @@ where
             let next_pos = iter.reader().position().clone();
             if let Some(result) = iter.next() {
                 self.pos = next_pos.clone();
-                self.rows_consumed += 1;
+                self.has_consumed_rows = true;
                 if next_pos.line() <= self.skip {
                     continue;
                 }
@@ -201,7 +202,7 @@ where
         }
 
         if buf.is_empty() {
-            if self.rows_consumed > 0 {
+            if self.has_consumed_rows {
                 self.committed_line = self.pos.line();
             }
             return Ok(None);
