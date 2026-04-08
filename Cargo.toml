@@ -13,7 +13,7 @@ path = "src/bin/reproduce/main.rs"
 
 [features]
 default = ["netflow"]
-netflow = ["pcap"]
+netflow = ["dep:pcap"]
 
 [dependencies]
 async-trait = "0.1"
