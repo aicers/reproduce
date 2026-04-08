@@ -1,14 +1,15 @@
 use std::net::IpAddr;
 
 use anyhow::Context;
+use giganto_client::ingest::network::DceRpcContext;
 use giganto_client::ingest::network::{
     Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, FtpCommand, Http, Icmp, Kerberos, Ldap, MalformedDns,
     Mqtt, Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
 };
 
 use super::{
-    MigrationResult, TryFromGigantoRecord, parse_comma_separated, parse_dce_rpc_contexts,
-    parse_giganto_timestamp_ns, parse_post_body,
+    MigrationResult, TryFromGigantoRecord, parse_comma_separated, parse_giganto_timestamp_ns,
+    parse_parenthesized_tuples, parse_post_body,
 };
 
 type Result<T> = MigrationResult<T>;
@@ -1480,7 +1481,29 @@ impl TryFromGigantoRecord for DceRpc {
             return Err(migration_error!("missing destination l2 bytes"));
         };
         let context = if let Some(ctx_str) = rec.get(13) {
-            parse_dce_rpc_contexts(ctx_str)?
+            parse_parenthesized_tuples(ctx_str, |inner| {
+                let fields: Vec<&str> = inner.split(',').collect();
+                if fields.len() != 9 {
+                    return Err(anyhow::anyhow!(
+                        "invalid DceRpcContext: expected 9 fields, got {}",
+                        fields.len()
+                    )
+                    .into());
+                }
+                Ok(DceRpcContext {
+                    id: fields[0].parse().context("invalid context id")?,
+                    abstract_syntax: u128::from_str_radix(fields[1], 16)
+                        .context("invalid abstract_syntax")?,
+                    abstract_major: fields[2].parse().context("invalid abstract_major")?,
+                    abstract_minor: fields[3].parse().context("invalid abstract_minor")?,
+                    transfer_syntax: u128::from_str_radix(fields[4], 16)
+                        .context("invalid transfer_syntax")?,
+                    transfer_major: fields[5].parse().context("invalid transfer_major")?,
+                    transfer_minor: fields[6].parse().context("invalid transfer_minor")?,
+                    acceptance: fields[7].parse().context("invalid acceptance")?,
+                    reason: fields[8].parse().context("invalid reason")?,
+                })
+            })?
         } else {
             return Err(migration_error!("missing context"));
         };
@@ -1595,85 +1618,75 @@ impl TryFromGigantoRecord for Ftp {
         };
 
         let commands = if let Some(commands_str) = rec.get(15) {
-            let tuple_parts: Vec<&str> = if commands_str.contains("),(") {
-                commands_str.split("),(").collect()
-            } else {
-                vec![commands_str]
-            };
-            tuple_parts
-                .into_iter()
-                .map(|tuple_str| -> Result<FtpCommand> {
-                    let tuple_content = tuple_str.trim_start_matches('(').trim_end_matches(')');
+            parse_parenthesized_tuples(commands_str, |inner| {
+                // Split first 2 fields (command, reply_code) from the front
+                let front_parts: Vec<&str> = inner.splitn(3, ',').collect();
+                let command = (*front_parts
+                    .first()
+                    .ok_or_else(|| migration_error!("missing command"))?)
+                .to_string();
+                let reply_code = (*front_parts
+                    .get(1)
+                    .ok_or_else(|| migration_error!("missing reply code"))?)
+                .to_string();
+                let rest = front_parts
+                    .get(2)
+                    .ok_or_else(|| migration_error!("missing remaining fields"))?;
 
-                    // Split first 2 fields (command, reply_code) from the front
-                    let front_parts: Vec<&str> = tuple_content.splitn(3, ',').collect();
-                    let command = (*front_parts
-                        .first()
-                        .ok_or_else(|| migration_error!("missing command"))?)
-                    .to_string();
-                    let reply_code = (*front_parts
-                        .get(1)
-                        .ok_or_else(|| migration_error!("missing reply code"))?)
-                    .to_string();
-                    let rest = front_parts
-                        .get(2)
-                        .ok_or_else(|| migration_error!("missing remaining fields"))?;
+                // Split last 7 fields from the back, leaving reply_msg in the middle
+                let back_parts: Vec<&str> = rest.rsplitn(8, ',').collect();
 
-                    // Split last 7 fields from the back, leaving reply_msg in the middle
-                    let back_parts: Vec<&str> = rest.rsplitn(8, ',').collect();
+                let reply_msg = (*back_parts
+                    .get(7)
+                    .ok_or_else(|| migration_error!("missing reply message"))?)
+                .to_string();
+                let data_passive = back_parts
+                    .get(6)
+                    .ok_or_else(|| migration_error!("missing data passive"))?
+                    .parse::<bool>()
+                    .context("invalid data passive")?;
+                let data_orig_addr = back_parts
+                    .get(5)
+                    .ok_or_else(|| migration_error!("missing data source address"))?
+                    .parse::<IpAddr>()
+                    .context("invalid data source address")?;
+                let data_resp_addr = back_parts
+                    .get(4)
+                    .ok_or_else(|| migration_error!("missing data response address"))?
+                    .parse::<IpAddr>()
+                    .context("invalid data response address")?;
+                let data_resp_port = back_parts
+                    .get(3)
+                    .ok_or_else(|| migration_error!("missing data response port"))?
+                    .parse::<u16>()
+                    .context("invalid data response port")?;
+                let file = (*back_parts
+                    .get(2)
+                    .ok_or_else(|| migration_error!("missing file"))?)
+                .to_string();
+                let file_size = back_parts
+                    .get(1)
+                    .ok_or_else(|| migration_error!("missing file size"))?
+                    .parse::<u64>()
+                    .context("invalid file size")?;
+                let file_id = (*back_parts
+                    .first()
+                    .ok_or_else(|| migration_error!("missing file ID"))?)
+                .to_string();
 
-                    let reply_msg = (*back_parts
-                        .get(7)
-                        .ok_or_else(|| migration_error!("missing reply message"))?)
-                    .to_string();
-                    let data_passive = back_parts
-                        .get(6)
-                        .ok_or_else(|| migration_error!("missing data passive"))?
-                        .parse::<bool>()
-                        .context("invalid data passive")?;
-                    let data_orig_addr = back_parts
-                        .get(5)
-                        .ok_or_else(|| migration_error!("missing data source address"))?
-                        .parse::<IpAddr>()
-                        .context("invalid data source address")?;
-                    let data_resp_addr = back_parts
-                        .get(4)
-                        .ok_or_else(|| migration_error!("missing data response address"))?
-                        .parse::<IpAddr>()
-                        .context("invalid data response address")?;
-                    let data_resp_port = back_parts
-                        .get(3)
-                        .ok_or_else(|| migration_error!("missing data response port"))?
-                        .parse::<u16>()
-                        .context("invalid data response port")?;
-                    let file = (*back_parts
-                        .get(2)
-                        .ok_or_else(|| migration_error!("missing file"))?)
-                    .to_string();
-                    let file_size = back_parts
-                        .get(1)
-                        .ok_or_else(|| migration_error!("missing file size"))?
-                        .parse::<u64>()
-                        .context("invalid file size")?;
-                    let file_id = (*back_parts
-                        .first()
-                        .ok_or_else(|| migration_error!("missing file ID"))?)
-                    .to_string();
-
-                    Ok(FtpCommand {
-                        command,
-                        reply_code,
-                        reply_msg,
-                        data_passive,
-                        data_orig_addr,
-                        data_resp_addr,
-                        data_resp_port,
-                        file,
-                        file_size,
-                        file_id,
-                    })
+                Ok(FtpCommand {
+                    command,
+                    reply_code,
+                    reply_msg,
+                    data_passive,
+                    data_orig_addr,
+                    data_resp_addr,
+                    data_resp_port,
+                    file,
+                    file_size,
+                    file_id,
                 })
-                .collect::<Result<Vec<_>>>()?
+            })?
         } else {
             return Err(migration_error!("missing commands"));
         };
