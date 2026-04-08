@@ -456,6 +456,7 @@ where
     }
 }
 
+#[cfg(feature = "netflow")]
 pub(super) async fn run_netflow_kind<S>(
     filename: &Path,
     kind: &str,

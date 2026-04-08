@@ -15,10 +15,11 @@ mod tests;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
+#[cfg(feature = "netflow")]
+use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 use giganto_client::{
     RawEventKind,
     ingest::{
-        netflow::{Netflow5, Netflow9},
         network::{
             Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt,
             Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
@@ -35,6 +36,7 @@ use reproduce::collector::Collector;
 use reproduce::collector::file::files_in_dir;
 use reproduce::collector::log::LogCollector;
 use reproduce::collector::migration::MigrationCollector;
+#[cfg(feature = "netflow")]
 use reproduce::collector::netflow::NetflowCollector;
 use reproduce::collector::operation_log::OplogCollector;
 use reproduce::collector::security_log::SecurityLogCollector;
@@ -58,11 +60,12 @@ use tracing::{debug, error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+#[cfg(feature = "netflow")]
+use crate::kind_runners::run_netflow_kind;
 use crate::{
     config::{Config, File as FileConfig, InputType},
     kind_runners::{
-        run_log_kind, run_netflow_kind, run_operation_log, run_security_kind, run_sysmon_kind,
-        run_zeek_kind,
+        run_log_kind, run_operation_log, run_security_kind, run_sysmon_kind, run_zeek_kind,
     },
     report::Report,
 };
@@ -388,12 +391,14 @@ impl SysmonKind {
     }
 }
 
+#[cfg(feature = "netflow")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NetflowKind {
     Netflow5,
     Netflow9,
 }
 
+#[cfg(feature = "netflow")]
 impl NetflowKind {
     #[cfg(test)]
     const ALL: [Self; 2] = [Self::Netflow5, Self::Netflow9];
@@ -492,6 +497,7 @@ enum ClassifiedKind<'a> {
     Zeek(ZeekKind),
     OperationLog,
     Sysmon(SysmonKind),
+    #[cfg(feature = "netflow")]
     Netflow(NetflowKind),
     Security(SecurityKind),
     Log(&'a str),
@@ -517,12 +523,16 @@ fn classify_kind(kind: &str) -> ClassifiedKind<'_> {
         ClassifiedKind::OperationLog
     } else if let Some(kind) = SysmonKind::parse(kind) {
         ClassifiedKind::Sysmon(kind)
-    } else if let Some(kind) = NetflowKind::parse(kind) {
-        ClassifiedKind::Netflow(kind)
-    } else if let Some(kind) = SecurityKind::parse(kind) {
-        ClassifiedKind::Security(kind)
     } else {
-        ClassifiedKind::Log(kind)
+        #[cfg(feature = "netflow")]
+        if let Some(kind) = NetflowKind::parse(kind) {
+            return ClassifiedKind::Netflow(kind);
+        }
+        if let Some(kind) = SecurityKind::parse(kind) {
+            ClassifiedKind::Security(kind)
+        } else {
+            ClassifiedKind::Log(kind)
+        }
     }
 }
 
@@ -1014,6 +1024,7 @@ where
             .await?,
             true,
         ),
+        #[cfg(feature = "netflow")]
         ClassifiedKind::Netflow(kind) => (
             run_netflow_kind(filename, kind.as_str(), options, sender, report).await?,
             false,
