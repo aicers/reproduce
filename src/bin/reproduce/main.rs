@@ -934,11 +934,7 @@ impl Controller {
             &filename.to_string_lossy(),
             file.last_transfer_line_suffix.as_deref(),
         );
-        let offset = if self.config.directory.is_some() {
-            resolve_offset_with_fallback(file, checkpoint.as_ref(), &self.config.input)
-        } else {
-            resolve_offset(file, checkpoint.as_ref())
-        };
+        let offset = resolve_offset(file, checkpoint.as_ref());
         let count_sent = file.transfer_count.unwrap_or(0);
         let options = CollectorRunOptions {
             offset,
@@ -1113,46 +1109,6 @@ fn resolve_offset(file: &FileConfig, checkpoint: Option<&Checkpoint>) -> u64 {
     } else {
         0
     }
-}
-
-/// Resolves the offset for a file in directory polling mode.
-///
-/// When a per-file checkpoint does not yet exist, falls back to the old
-/// directory-level checkpoint so that upgrades from the previous
-/// single-checkpoint layout do not lose progress.
-fn resolve_offset_with_fallback(
-    file: &FileConfig,
-    checkpoint: Option<&Checkpoint>,
-    dir_input: &str,
-) -> u64 {
-    if file.transfer_skip_count.is_some() {
-        return resolve_offset(file, checkpoint);
-    }
-
-    if let Some(cp) = checkpoint {
-        let offset = checkpoint_offset(cp);
-        if offset > 0 {
-            return offset;
-        }
-
-        // Per-file checkpoint missing or zero; try the old directory-level
-        // checkpoint as a migration fallback.
-        let dir_checkpoint =
-            checkpoint_for_input(dir_input, file.last_transfer_line_suffix.as_deref());
-        if let Some(ref dir_cp) = dir_checkpoint {
-            let dir_offset = checkpoint_offset(dir_cp);
-            if dir_offset > 0 {
-                info!(
-                    "Migrating directory-level checkpoint ({dir_offset}) \
-                     as initial offset for {}",
-                    cp.path().display()
-                );
-                return dir_offset;
-            }
-        }
-    }
-
-    0
 }
 
 fn checkpoint_offset(checkpoint: &Checkpoint) -> u64 {
