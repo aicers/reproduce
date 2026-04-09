@@ -24,7 +24,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `MigrationError` is now `GigantoImportError`, and related
   functions follow the same convention.
 - Renamed the `export_from_giganto` config key to `import_from_giganto`.
-  The old key is no longer accepted; update configuration files to use
+  The old key is still accepted as a deprecated alias but will be removed
+  in a future release; update configuration files to use
   `import_from_giganto`.
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.27.0-alpha.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more

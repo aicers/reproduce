@@ -108,13 +108,13 @@ fn file_config(
     transfer_skip_count: Option<u64>,
     last_transfer_line_suffix: Option<&str>,
 ) -> FileConfig {
-    FileConfig {
-        import_from_giganto: Some(false),
-        polling_mode: false,
-        transfer_count: None,
+    FileConfig::new(
+        Some(false),
+        false,
+        None,
         transfer_skip_count,
-        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
-    }
+        last_transfer_line_suffix.map(str::to_string),
+    )
 }
 
 fn test_config(input: &Path, kind: &str) -> Config {
@@ -131,13 +131,7 @@ fn test_config(input: &Path, kind: &str) -> Config {
         report: false,
         report_dir: None,
         log_path: None,
-        file: Some(FileConfig {
-            import_from_giganto: Some(false),
-            polling_mode: false,
-            transfer_count: None,
-            transfer_skip_count: None,
-            last_transfer_line_suffix: None,
-        }),
+        file: Some(FileConfig::new(Some(false), false, None, None, None)),
         directory: None,
         elastic: None,
     }
@@ -150,13 +144,13 @@ fn controller_for_file(
     last_transfer_line_suffix: Option<&str>,
 ) -> Controller {
     let mut config = test_config(input, kind);
-    config.file = Some(FileConfig {
+    config.file = Some(FileConfig::new(
         import_from_giganto,
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
-    });
+        false,
+        None,
+        None,
+        last_transfer_line_suffix.map(str::to_string),
+    ));
     Controller::new(config)
 }
 
@@ -1264,20 +1258,8 @@ async fn run_single_ignores_checkpoint_write_failures() {
 
 #[test]
 fn giganto_import_enabled_requires_import_setting() {
-    let missing = FileConfig {
-        import_from_giganto: None,
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: None,
-    };
-    let enabled = FileConfig {
-        import_from_giganto: Some(true),
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: None,
-    };
+    let missing = FileConfig::new(None, false, None, None, None);
+    let enabled = FileConfig::new(Some(true), false, None, None, None);
 
     let err = giganto_import_enabled(missing.import_from_giganto)
         .expect_err("missing import_from_giganto must be rejected");
@@ -1303,13 +1285,13 @@ async fn dir_polling_creates_per_file_checkpoints() {
     write_text_file(&temp_dir, "a.log", "line_a\n");
     write_text_file(&temp_dir, "b.log", "line_b\n");
     let mut config = test_config(temp_dir.path(), "custom");
-    config.file = Some(FileConfig {
-        export_from_giganto: Some(false),
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: Some("offset".to_string()),
-    });
+    config.file = Some(FileConfig::new(
+        Some(false),
+        false,
+        None,
+        None,
+        Some("offset".to_string()),
+    ));
     config.directory = Some(Directory {
         file_prefix: None,
         polling_mode: false,
