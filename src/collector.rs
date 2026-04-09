@@ -1,6 +1,7 @@
 pub mod file;
 pub mod log;
 pub mod migration;
+#[cfg(feature = "netflow")]
 pub mod netflow;
 pub mod operation_log;
 pub mod security_log;
@@ -17,6 +18,7 @@ use giganto_client::RawEventKind;
 use thiserror::Error;
 use tokio::sync::watch;
 
+#[cfg(feature = "netflow")]
 use crate::parser::netflow::NetflowError;
 
 /// Defines how long polling collectors sleep after reaching EOF.
@@ -57,6 +59,7 @@ impl From<anyhow::Error> for CollectorError {
     }
 }
 
+#[cfg(feature = "netflow")]
 impl From<NetflowError> for CollectorError {
     fn from(error: NetflowError) -> Self {
         Self(anyhow::Error::new(error))

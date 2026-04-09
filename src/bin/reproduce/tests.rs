@@ -1,4 +1,5 @@
 use std::fs::{self, File};
+#[cfg(feature = "netflow")]
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,9 @@ use tokio::time::timeout;
 use super::*;
 use crate::config::Directory;
 
+#[cfg(feature = "netflow")]
 const ETHERNET_DATALINK: u32 = 1;
+#[cfg(feature = "netflow")]
 const PROTO_UDP: u8 = 17;
 const TEST_ROOT_PEM: &str = "tests/root.pem";
 const TEST_CERT_PEM: &str = "tests/cert.pem";
@@ -172,6 +175,7 @@ fn write_text_file(dir: &tempfile::TempDir, name: &str, contents: &str) -> PathB
     path
 }
 
+#[cfg(feature = "netflow")]
 fn hex_to_bytes(s: &str) -> Vec<u8> {
     let filtered: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     filtered
@@ -184,6 +188,7 @@ fn hex_to_bytes(s: &str) -> Vec<u8> {
         .collect()
 }
 
+#[cfg(feature = "netflow")]
 fn write_pcap(path: &Path, packets: &[Vec<u8>]) {
     let mut file = File::create(path).expect("pcap fixture should be created");
     file.write_all(&0xa1b2_c3d4_u32.to_le_bytes())
@@ -216,6 +221,7 @@ fn write_pcap(path: &Path, packets: &[Vec<u8>]) {
     }
 }
 
+#[cfg(feature = "netflow")]
 fn build_ipv4_udp_packet(payload: &[u8], dst_port: u16) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&[0u8; 6]);
@@ -244,6 +250,7 @@ fn build_ipv4_udp_packet(payload: &[u8], dst_port: u16) -> Vec<u8> {
     bytes
 }
 
+#[cfg(feature = "netflow")]
 fn v5_header_bytes(count: u16) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&5u16.to_be_bytes());
@@ -258,6 +265,7 @@ fn v5_header_bytes(count: u16) -> Vec<u8> {
     bytes
 }
 
+#[cfg(feature = "netflow")]
 fn build_v5_packet(record_count: u16) -> Vec<u8> {
     let record = hex_to_bytes(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -742,6 +750,7 @@ async fn run_single_processes_security_log_input() {
     assert_eq!(sender.ensured_protocols, vec![RawEventKind::SecuLog]);
 }
 
+#[cfg(feature = "netflow")]
 #[tokio::test]
 async fn run_single_processes_netflow_input() {
     let temp_dir = tempdir().expect("temporary directory should be created");
@@ -1012,6 +1021,7 @@ async fn run_security_kind_dispatches_all_supported_kinds() {
     }
 }
 
+#[cfg(feature = "netflow")]
 #[tokio::test]
 async fn run_netflow_kind_dispatches_all_supported_kinds_without_packets() {
     let temp_dir = tempdir().expect("temporary directory should be created");
@@ -1100,6 +1110,7 @@ async fn run_security_kind_rejects_unknown_kind() {
     assert!(err.to_string().contains("unknown security log kind"));
 }
 
+#[cfg(feature = "netflow")]
 #[tokio::test]
 async fn run_netflow_kind_rejects_unknown_kind() {
     let temp_dir = tempdir().expect("temporary directory should be created");

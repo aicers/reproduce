@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "reproduce"
 path = "src/bin/reproduce/main.rs"
 
+[features]
+default = ["netflow"]
+netflow = ["dep:pcap"]
+
 [dependencies]
 async-trait = "0.1"
 anyhow = "1"
@@ -25,7 +29,7 @@ giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "
 jiff = { version = "0.2", features = ["serde"] }
 num-traits = "0.2"
 num_enum = "0.7"
-pcap = "2"
+pcap = { version = "2", optional = true }
 quinn = { version = "0.11", features = ["ring"] }
 rayon = "1"
 regex = "1"
