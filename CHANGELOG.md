@@ -40,6 +40,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   sample would leave `min_bytes` at 0 instead of the actual value.
 - Fixed "Skip Count" byte display in report output to use accumulated
   `skip_bytes` instead of `skip_cnt`.
+- Fixed CSV-based collectors (`SysmonCollector`, `ZeekCollector`,
+  `MigrationCollector`) persisting checkpoint `1` for empty inputs where
+  no data row was consumed. The checkpoint now correctly remains at zero.
 
 ## [0.23.0] - 2025-11-26
 

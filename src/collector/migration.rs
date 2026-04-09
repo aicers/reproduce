@@ -16,6 +16,7 @@ use crate::sender::BATCH_SIZE;
 
 /// Collects Giganto migration CSV records, parsing and batching them for
 /// sending.
+#[allow(clippy::struct_excessive_bools)]
 pub struct MigrationCollector<T> {
     iter: Option<StringRecordsIntoIter<File>>,
     protocol: RawEventKind,
@@ -28,6 +29,7 @@ pub struct MigrationCollector<T> {
     committed_line: u64,
     pending_commit: Option<u64>,
     last_record: StringRecord,
+    has_consumed_rows: bool,
     success_cnt: u64,
     failed_cnt: u64,
     exhausted: bool,
@@ -58,6 +60,7 @@ impl<T> MigrationCollector<T> {
             committed_line: skip,
             pending_commit: None,
             last_record: StringRecord::new(),
+            has_consumed_rows: false,
             success_cnt: 0,
             failed_cnt: 0,
             exhausted: false,
@@ -96,6 +99,7 @@ where
             let next_pos = iter.reader().position().clone();
             if let Some(result) = iter.next() {
                 self.pos = next_pos.clone();
+                self.has_consumed_rows = true;
                 if next_pos.line() <= self.skip {
                     continue;
                 }
@@ -162,7 +166,9 @@ where
         }
 
         if buf.is_empty() {
-            self.committed_line = self.pos.line();
+            if self.has_consumed_rows {
+                self.committed_line = self.pos.line();
+            }
             return Ok(None);
         }
 
@@ -331,6 +337,8 @@ mod tests {
         let (mut collector, _dir) = make_conn_collector(&[], 0);
         let result = collector.next_batch().await.expect("next_batch");
         assert!(result.is_none());
+        assert_eq!(collector.position(), b"0".to_vec());
+        assert_eq!(collector.stats(), (0, 0));
     }
 
     #[tokio::test]

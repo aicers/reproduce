@@ -15,6 +15,7 @@ use crate::parser::zeek::TryFromZeekRecord;
 use crate::sender::BATCH_SIZE;
 
 /// Collects Zeek TSV log records, parsing and batching them for sending.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ZeekCollector<T> {
     iter: Option<StringRecordsIntoIter<File>>,
     protocol: RawEventKind,
@@ -29,6 +30,7 @@ pub struct ZeekCollector<T> {
     last_record: StringRecord,
     reference_timestamp: Option<i64>,
     timestamp_offset: i64,
+    has_consumed_rows: bool,
     success_cnt: u64,
     failed_cnt: u64,
     exhausted: bool,
@@ -61,6 +63,7 @@ impl<T> ZeekCollector<T> {
             last_record: StringRecord::new(),
             reference_timestamp: None,
             timestamp_offset: 0,
+            has_consumed_rows: false,
             success_cnt: 0,
             failed_cnt: 0,
             exhausted: false,
@@ -100,6 +103,7 @@ where
             let next_pos = iter.reader().position().clone();
             if let Some(result) = iter.next() {
                 self.pos = next_pos.clone();
+                self.has_consumed_rows = true;
                 if next_pos.line() <= self.skip {
                     continue;
                 }
@@ -198,7 +202,9 @@ where
         }
 
         if buf.is_empty() {
-            self.committed_line = self.pos.line();
+            if self.has_consumed_rows {
+                self.committed_line = self.pos.line();
+            }
             return Ok(None);
         }
 
@@ -285,6 +291,7 @@ mod tests {
 
         let none = collector.next_batch().await.expect("second call");
         assert!(none.is_none());
+        assert_eq!(collector.position(), b"3".to_vec());
     }
 
     #[tokio::test]
@@ -379,6 +386,35 @@ mod tests {
         let (mut collector, _dir) = make_conn_collector(&[], 0);
         let result = collector.next_batch().await.expect("next_batch");
         assert!(result.is_none());
+        assert_eq!(collector.position(), b"0".to_vec());
+        assert_eq!(collector.stats(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn zeek_collector_preserves_zero_checkpoint_for_header_only_file() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("empty.log");
+        {
+            let mut f = std::fs::File::create(&path).expect("create file");
+            // Zeek files use comment lines as headers
+            writeln!(f, "#fields\tts\tuid\tid.orig_h").expect("write");
+        }
+
+        let reader = csv::ReaderBuilder::new()
+            .comment(Some(b'#'))
+            .delimiter(b'\t')
+            .has_headers(false)
+            .flexible(true)
+            .from_path(&path)
+            .expect("open csv");
+        let iter = reader.into_records();
+        let (_tx, shutdown) = watch::channel(false);
+        let mut collector =
+            ZeekCollector::<Conn>::new(iter, RawEventKind::Conn, 0, 0, false, false, shutdown);
+
+        assert!(collector.next_batch().await.expect("next_batch").is_none());
+        assert_eq!(collector.position(), b"0".to_vec());
+        assert_eq!(collector.stats(), (0, 0));
     }
 
     #[tokio::test]

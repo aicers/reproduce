@@ -864,12 +864,10 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
         .await
         .expect("supported zeek kind should dispatch even when there are no records");
 
-        // Known bug: CSV-backed collectors still surface `line() == 1` when
-        // no record was consumed from an empty file.
         assert_eq!(
             pos,
-            b"1".to_vec(),
-            "empty zeek input currently reports the CSV default line position",
+            b"0".to_vec(),
+            "empty zeek input should preserve zero-progress checkpoint",
         );
         assert!(
             sender.batch_sizes.is_empty(),
@@ -900,12 +898,10 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
         .await
         .expect("migration-only kind should dispatch in export mode");
 
-        // Known bug: CSV-backed collectors still surface `line() == 1` when
-        // no record was consumed from an empty file.
         assert_eq!(
             pos,
-            b"1".to_vec(),
-            "empty migration input currently reports the CSV default line position",
+            b"0".to_vec(),
+            "empty migration input should preserve zero-progress checkpoint",
         );
         assert!(
             sender.batch_sizes.is_empty(),
@@ -968,12 +964,10 @@ async fn run_sysmon_kind_dispatches_all_supported_kinds_without_records() {
         .await
         .expect("supported sysmon kind should dispatch even when there are no records");
 
-        // Known bug: Sysmon keeps the CSV `line()` default position even when
-        // the file contains only the header and no data record is consumed.
         assert_eq!(
             pos,
-            b"1".to_vec(),
-            "header-only sysmon input currently reports the CSV default line position",
+            b"0".to_vec(),
+            "header-only sysmon input should preserve zero-progress checkpoint",
         );
         assert!(
             sender.batch_sizes.is_empty(),
