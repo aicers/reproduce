@@ -1296,3 +1296,61 @@ fn resolve_offset_defaults_to_zero_without_skip_count_or_checkpoint() {
     let file = file_config(None, None);
     assert_eq!(resolve_offset(&file, None), 0);
 }
+
+#[tokio::test]
+async fn dir_polling_creates_per_file_checkpoints() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    write_text_file(&temp_dir, "a.log", "line_a\n");
+    write_text_file(&temp_dir, "b.log", "line_b\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig {
+        export_from_giganto: Some(false),
+        polling_mode: false,
+        transfer_count: None,
+        transfer_skip_count: None,
+        last_transfer_line_suffix: Some("offset".to_string()),
+    });
+    config.directory = Some(Directory {
+        file_prefix: None,
+        polling_mode: false,
+    });
+    let controller = Controller::new(config);
+    let mut sender = MockSender::default();
+
+    controller
+        .run_split(&mut sender)
+        .await
+        .expect("directory processing should succeed");
+
+    // Each file should have its own checkpoint, not a single directory one.
+    let cp_a = Checkpoint::from_input_and_suffix(
+        &temp_dir.path().join("a.log").to_string_lossy(),
+        "offset",
+    );
+    let cp_b = Checkpoint::from_input_and_suffix(
+        &temp_dir.path().join("b.log").to_string_lossy(),
+        "offset",
+    );
+    assert!(
+        cp_a.load()
+            .expect("checkpoint a should be readable")
+            .is_some(),
+        "per-file checkpoint for a.log should exist"
+    );
+    assert!(
+        cp_b.load()
+            .expect("checkpoint b should be readable")
+            .is_some(),
+        "per-file checkpoint for b.log should exist"
+    );
+
+    // The old directory-level checkpoint should NOT be created.
+    let cp_dir = Checkpoint::from_input_and_suffix(&temp_dir.path().to_string_lossy(), "offset");
+    assert!(
+        cp_dir
+            .load()
+            .expect("directory checkpoint should be readable")
+            .is_none(),
+        "directory-level checkpoint should not be created"
+    );
+}

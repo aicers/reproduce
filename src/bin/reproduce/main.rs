@@ -931,7 +931,7 @@ impl Controller {
             .as_ref()
             .ok_or_else(|| anyhow!("file's parameters is required"))?;
         let checkpoint = checkpoint_for_input(
-            &self.config.input,
+            &filename.to_string_lossy(),
             file.last_transfer_line_suffix.as_deref(),
         );
         let offset = resolve_offset(file, checkpoint.as_ref());
