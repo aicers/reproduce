@@ -1261,20 +1261,30 @@ mod tests {
     // Bootroot-style certificate chain helpers and integration tests
     // ---------------------------------------------------------------
 
-    /// Generated Bootroot-style PKI material: root CA -> intermediate CA -> leaf.
+    /// Server SAN used in the test PKI, modelling a Bootroot data-store identity.
+    const SERVER_SAN: &str = "validation.data-store.localhost.bootroot.test";
+    /// Client SAN used in the test PKI, modelling a Bootroot data-broker identity.
+    const CLIENT_SAN: &str = "validation.data-broker.localhost.bootroot.test";
+
+    /// Generated Bootroot-style PKI material: root CA -> intermediate CA -> server leaf + client leaf.
     #[allow(clippy::struct_field_names)]
     struct BootrootPki {
         root_ca_pem: String,
         intermediate_ca_pem: String,
-        leaf_cert_pem: String,
-        leaf_key_pem: String,
+        server_cert_pem: String,
+        server_key_pem: String,
+        client_cert_pem: String,
+        client_key_pem: String,
     }
 
     /// Generates a three-level certificate chain modelling a Bootroot deployment:
     /// `leaf <- intermediate <- root`.
     ///
-    /// The leaf certificate has `localhost` as the subject and SAN so that
-    /// it can be used for both server and client identity in local tests.
+    /// Two separate leaf certificates are generated:
+    /// - A **server** leaf with SAN `validation.data-store.localhost.bootroot.test`
+    ///   and `ServerAuth` EKU.
+    /// - A **client** leaf with SAN `validation.data-broker.localhost.bootroot.test`
+    ///   and `ClientAuth` EKU.
     fn generate_bootroot_pki() -> BootrootPki {
         // Root CA
         let mut root_params =
@@ -1304,29 +1314,42 @@ mod tests {
             .signed_by(&inter_key, &root_issuer)
             .expect("intermediate CA should be signed by root");
 
-        // Leaf (localhost)
-        let mut leaf_params = CertificateParams::new(vec!["localhost".to_string()])
-            .expect("leaf params should be valid");
-        leaf_params
-            .distinguished_name
-            .push(rcgen::DnType::CommonName, "localhost");
-        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        leaf_params.extended_key_usages = vec![
-            rcgen::ExtendedKeyUsagePurpose::ServerAuth,
-            rcgen::ExtendedKeyUsagePurpose::ClientAuth,
-        ];
-        let leaf_key = KeyPair::generate().expect("leaf key should generate");
         let inter_issuer = Issuer::from_ca_cert_der(inter_cert.der(), &inter_key)
             .expect("intermediate issuer should be constructible");
-        let leaf_cert = leaf_params
-            .signed_by(&leaf_key, &inter_issuer)
-            .expect("leaf should be signed by intermediate");
+
+        // Server leaf (data-store identity)
+        let mut server_params = CertificateParams::new(vec![SERVER_SAN.to_string()])
+            .expect("server leaf params should be valid");
+        server_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, SERVER_SAN);
+        server_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        server_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        let server_key = KeyPair::generate().expect("server leaf key should generate");
+        let server_cert = server_params
+            .signed_by(&server_key, &inter_issuer)
+            .expect("server leaf should be signed by intermediate");
+
+        // Client leaf (data-broker identity)
+        let mut client_params = CertificateParams::new(vec![CLIENT_SAN.to_string()])
+            .expect("client leaf params should be valid");
+        client_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, CLIENT_SAN);
+        client_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        client_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        let client_key = KeyPair::generate().expect("client leaf key should generate");
+        let client_cert = client_params
+            .signed_by(&client_key, &inter_issuer)
+            .expect("client leaf should be signed by intermediate");
 
         BootrootPki {
             root_ca_pem: root_cert.pem(),
             intermediate_ca_pem: inter_cert.pem(),
-            leaf_cert_pem: leaf_cert.pem(),
-            leaf_key_pem: leaf_key.serialize_pem(),
+            server_cert_pem: server_cert.pem(),
+            server_key_pem: server_key.serialize_pem(),
+            client_cert_pem: client_cert.pem(),
+            client_key_pem: client_key.serialize_pem(),
         }
     }
 
@@ -1424,10 +1447,10 @@ mod tests {
         let pki = generate_bootroot_pki();
         let dir = tempdir().expect("tempdir should be created");
 
-        // leaf-chain.pem = leaf + intermediate (for client cert chain)
-        let chain = format!("{}{}", pki.leaf_cert_pem, pki.intermediate_ca_pem);
-        let cert_path = write_pem(dir.path(), "leaf-chain.pem", &chain);
-        let key_path = write_pem(dir.path(), "leaf-key.pem", &pki.leaf_key_pem);
+        // client-chain.pem = client leaf + intermediate (for client cert chain)
+        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
+        let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
         let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
         let ca_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
 
@@ -1441,9 +1464,9 @@ mod tests {
         let pki = generate_bootroot_pki();
         let dir = tempdir().expect("tempdir should be created");
 
-        let chain = format!("{}{}", pki.leaf_cert_pem, pki.intermediate_ca_pem);
-        let cert_path = write_pem(dir.path(), "leaf-chain.pem", &chain);
-        let key_path = write_pem(dir.path(), "leaf-key.pem", &pki.leaf_key_pem);
+        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
+        let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
         let root_path = write_pem(dir.path(), "root.pem", &pki.root_ca_pem);
         let inter_path = write_pem(dir.path(), "intermediate.pem", &pki.intermediate_ca_pem);
 
@@ -1459,13 +1482,13 @@ mod tests {
         pki: &BootrootPki,
         dir: &Path,
     ) -> Result<(Endpoint, SocketAddr)> {
-        let chain_pem = format!("{}{}", pki.leaf_cert_pem, pki.intermediate_ca_pem);
+        let chain_pem = format!("{}{}", pki.server_cert_pem, pki.intermediate_ca_pem);
         let chain_bytes = chain_pem.as_bytes();
         let cert_chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*chain_bytes)
             .collect::<std::result::Result<_, _>>()
             .context("server cert chain PEM should parse")?;
 
-        let key_bytes = pki.leaf_key_pem.as_bytes();
+        let key_bytes = pki.server_key_pem.as_bytes();
         let private_key = rustls_pemfile::private_key(&mut &*key_bytes)
             .context("server key PEM should parse")?
             .context("server key PEM should contain a key")?;
@@ -1515,9 +1538,9 @@ mod tests {
             build_bootroot_server_endpoint(&pki, dir.path()).expect("mTLS server should start");
 
         // Client uses Bootroot-style inputs
-        let chain = format!("{}{}", pki.leaf_cert_pem, pki.intermediate_ca_pem);
+        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
         let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
-        let key_path = write_pem(dir.path(), "client-key.pem", &pki.leaf_key_pem);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
         let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
         let ca_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
 
@@ -1525,7 +1548,7 @@ mod tests {
             .expect("client endpoint should be created");
 
         let connect = client_endpoint
-            .connect(server_addr, "localhost")
+            .connect(server_addr, SERVER_SAN)
             .expect("client should start connecting");
         let (client_result, server_result) = tokio::join!(
             async { connect.await.context("client TLS handshake") },
@@ -1550,13 +1573,13 @@ mod tests {
         pki: &BootrootPki,
         _dir: &Path,
     ) -> Result<(Endpoint, SocketAddr)> {
-        // Server presents ONLY the leaf cert (no intermediate in chain).
-        let cert_bytes = pki.leaf_cert_pem.as_bytes();
+        // Server presents ONLY the server leaf cert (no intermediate in chain).
+        let cert_bytes = pki.server_cert_pem.as_bytes();
         let cert_chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*cert_bytes)
             .collect::<std::result::Result<_, _>>()
-            .context("leaf cert PEM should parse")?;
+            .context("server leaf cert PEM should parse")?;
 
-        let key_bytes = pki.leaf_key_pem.as_bytes();
+        let key_bytes = pki.server_key_pem.as_bytes();
         let private_key = rustls_pemfile::private_key(&mut &*key_bytes)
             .context("leaf key PEM should parse")?
             .context("leaf key PEM should contain a key")?;
@@ -1594,15 +1617,15 @@ mod tests {
             .expect("leaf-only server should start");
 
         // Client trusts only root (not intermediate).
-        let cert_path = write_pem(dir.path(), "client-cert.pem", &pki.leaf_cert_pem);
-        let key_path = write_pem(dir.path(), "client-key.pem", &pki.leaf_key_pem);
+        let cert_path = write_pem(dir.path(), "client-cert.pem", &pki.client_cert_pem);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
         let ca_path = write_pem(dir.path(), "root-only.pem", &pki.root_ca_pem);
 
         let client_endpoint = create_endpoint(&cert_path, &key_path, &[ca_path])
             .expect("client endpoint should be created");
 
         let connect = client_endpoint
-            .connect(server_addr, "localhost")
+            .connect(server_addr, SERVER_SAN)
             .expect("client should start connecting");
         let (client_result, _server_result) = tokio::join!(connect, async {
             let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept()).await;
@@ -1631,8 +1654,8 @@ mod tests {
             .expect("leaf-only server should start");
 
         // Client has the full Bootroot CA bundle
-        let cert_path = write_pem(dir.path(), "client-cert.pem", &pki.leaf_cert_pem);
-        let key_path = write_pem(dir.path(), "client-key.pem", &pki.leaf_key_pem);
+        let cert_path = write_pem(dir.path(), "client-cert.pem", &pki.client_cert_pem);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
         let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
         let ca_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
 
@@ -1640,7 +1663,7 @@ mod tests {
             .expect("client endpoint should be created");
 
         let connect = client_endpoint
-            .connect(server_addr, "localhost")
+            .connect(server_addr, SERVER_SAN)
             .expect("client should start connecting");
         let (client_result, server_result) = tokio::join!(
             async { connect.await.context("client TLS handshake") },
@@ -1668,9 +1691,9 @@ mod tests {
         let (server_endpoint, server_addr) =
             build_bootroot_server_endpoint(&pki, dir.path()).expect("mTLS server should start");
 
-        let chain = format!("{}{}", pki.leaf_cert_pem, pki.intermediate_ca_pem);
+        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
         let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
-        let key_path = write_pem(dir.path(), "client-key.pem", &pki.leaf_key_pem);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
         let root_path = write_pem(dir.path(), "root.pem", &pki.root_ca_pem);
         let inter_path = write_pem(dir.path(), "intermediate.pem", &pki.intermediate_ca_pem);
 
@@ -1678,7 +1701,7 @@ mod tests {
             .expect("client endpoint should be created");
 
         let connect = client_endpoint
-            .connect(server_addr, "localhost")
+            .connect(server_addr, SERVER_SAN)
             .expect("client should start connecting");
         let (client_result, server_result) = tokio::join!(
             async { connect.await.context("client TLS handshake") },
