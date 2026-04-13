@@ -63,6 +63,54 @@ fn parse_post_body(s: &str) -> Vec<u8> {
         Vec::new()
     }
 }
+
+fn parse_parenthesized_tuples<T, F>(s: &str, parse_item: F) -> MigrationResult<Vec<T>>
+where
+    F: Fn(&str) -> MigrationResult<T>,
+{
+    if s == "-" || s.is_empty() {
+        return Ok(Vec::new());
+    }
+    s.split("),(")
+        .map(|part| {
+            let inner = part.trim_start_matches('(').trim_end_matches(')');
+            parse_item(inner)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod parse_parenthesized_tuples_tests {
+    use super::*;
+
+    #[test]
+    fn empty_string() {
+        let result: Vec<String> =
+            parse_parenthesized_tuples("", |inner| Ok(inner.to_string())).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn dash_returns_empty() {
+        let result: Vec<String> =
+            parse_parenthesized_tuples("-", |inner| Ok(inner.to_string())).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn single_tuple() {
+        let result = parse_parenthesized_tuples("(a,b,c)", |inner| Ok(inner.to_string())).unwrap();
+        assert_eq!(result, vec!["a,b,c"]);
+    }
+
+    #[test]
+    fn multiple_tuples() {
+        let result =
+            parse_parenthesized_tuples("(a,b),(c,d),(e,f)", |inner| Ok(inner.to_string())).unwrap();
+        assert_eq!(result, vec!["a,b", "c,d", "e,f"]);
+    }
+}
+
 #[cfg(test)]
 mod giganto_timestamp_tests {
     use super::*;

@@ -33,7 +33,7 @@ pub const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 pub const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 
 /// Defines the minimum Giganto server version that this client is compatible with.
-pub const REQUIRED_GIGANTO_VERSION: &str = "0.26.1";
+pub const REQUIRED_GIGANTO_VERSION: &str = "0.27.0-alpha.1";
 
 /// Defines the keep-alive and reconnect interval in seconds.
 pub const INTERVAL: u64 = 5;
