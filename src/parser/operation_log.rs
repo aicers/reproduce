@@ -69,7 +69,7 @@ pub fn log_regex(line: &str, agent: &str) -> OperationLogResult<(OpLog, i64)> {
     Ok((
         OpLog {
             sensor: String::new(),
-            agent_name: agent.to_string(),
+            service_name: agent.to_string(),
             log_level,
             contents: log.to_string(),
         },
@@ -108,17 +108,17 @@ mod tests {
                 .timestamp_nanos_opt()
                 .unwrap()
         );
-        assert_eq!(res_info.agent_name, "agent".to_string());
+        assert_eq!(res_info.service_name, "agent".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));
         assert_eq!(res_info.contents, "infolog".to_string());
         assert_eq!(res_info.sensor, String::new());
 
-        assert_eq!(res_warn.agent_name, "agent".to_string());
+        assert_eq!(res_warn.service_name, "agent".to_string());
         assert!(matches!(res_warn.log_level, OpLogLevel::Warn));
         assert_eq!(res_warn.contents, "warnlog".to_string());
         assert_eq!(res_warn.sensor, String::new());
 
-        assert_eq!(res_error.agent_name, "agent".to_string());
+        assert_eq!(res_error.service_name, "agent".to_string());
         assert!(matches!(res_error.log_level, OpLogLevel::Error));
         assert_eq!(res_error.contents, "errorlog".to_string());
         assert_eq!(res_error.sensor, String::new());
@@ -177,7 +177,7 @@ mod tests {
                 matches!(oplog.log_level, ref level if std::mem::discriminant(level) == std::mem::discriminant(&expected_level)),
                 "Unexpected log level for: {line}"
             );
-            assert_eq!(oplog.agent_name, "test_agent");
+            assert_eq!(oplog.service_name, "test_agent");
         }
     }
 
@@ -216,7 +216,7 @@ mod tests {
 
         for agent in agents {
             let (oplog, _) = log_regex(line, agent).unwrap();
-            assert_eq!(oplog.agent_name, agent);
+            assert_eq!(oplog.service_name, agent);
         }
     }
 

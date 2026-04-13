@@ -21,6 +21,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   to align with the updated Giganto import terminology. The old key is
   still accepted as a deprecated alias but will be removed in a future
   release; update configuration files to use `import_from_giganto`.
+- Bumped `giganto-client` to `0572e52`, renaming
+  `Kerberos::client_name` to `cname`,
+  `Kerberos::service_name` to `sname`, and
+  `OpLog::agent_name` to `service_name`.
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.27.0-alpha.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
