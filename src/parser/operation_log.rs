@@ -45,7 +45,7 @@ fn parse_log_level(level: &str) -> OperationLogResult<OpLogLevel> {
 /// # Errors
 ///
 /// Returns an error if the line does not match the expected log format.
-pub fn log_regex(line: &str, agent: &str) -> OperationLogResult<(OpLog, i64)> {
+pub fn log_regex(line: &str, service_name: &str) -> OperationLogResult<(OpLog, i64)> {
     let caps = get_log_regex().captures(line).context("invalid log line")?;
 
     let log_level = match caps.name("level") {
@@ -69,7 +69,7 @@ pub fn log_regex(line: &str, agent: &str) -> OperationLogResult<(OpLog, i64)> {
     Ok((
         OpLog {
             sensor: String::new(),
-            service_name: agent.to_string(),
+            service_name: service_name.to_string(),
             log_level,
             contents: log.to_string(),
         },
@@ -93,14 +93,14 @@ mod tests {
         let invalid_level = "2023-01-02T07:36:17.123123Z TRACE infolog";
         let no_contents = "2023-01-02T07:36:17.123123Z  INFO ";
 
-        let (res_info, dt) = log_regex(line_info, "agent").unwrap();
-        let (res_warn, _) = log_regex(line_warn, "agent").unwrap();
-        let (res_error, _) = log_regex(line_error, "agent").unwrap();
+        let (res_info, dt) = log_regex(line_info, "service_name").unwrap();
+        let (res_warn, _) = log_regex(line_warn, "service_name").unwrap();
+        let (res_error, _) = log_regex(line_error, "service_name").unwrap();
 
-        assert!(log_regex(invalid_log, "agent").is_err());
-        assert!(log_regex(invalid_dt, "agent").is_err());
-        assert!(log_regex(invalid_level, "agent").is_err());
-        assert!(log_regex(no_contents, "agent").is_err());
+        assert!(log_regex(invalid_log, "service_name").is_err());
+        assert!(log_regex(invalid_dt, "service_name").is_err());
+        assert!(log_regex(invalid_level, "service_name").is_err());
+        assert!(log_regex(no_contents, "service_name").is_err());
         assert_eq!(
             dt,
             Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
@@ -108,17 +108,17 @@ mod tests {
                 .timestamp_nanos_opt()
                 .unwrap()
         );
-        assert_eq!(res_info.service_name, "agent".to_string());
+        assert_eq!(res_info.service_name, "service_name".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));
         assert_eq!(res_info.contents, "infolog".to_string());
         assert_eq!(res_info.sensor, String::new());
 
-        assert_eq!(res_warn.service_name, "agent".to_string());
+        assert_eq!(res_warn.service_name, "service_name".to_string());
         assert!(matches!(res_warn.log_level, OpLogLevel::Warn));
         assert_eq!(res_warn.contents, "warnlog".to_string());
         assert_eq!(res_warn.sensor, String::new());
 
-        assert_eq!(res_error.service_name, "agent".to_string());
+        assert_eq!(res_error.service_name, "service_name".to_string());
         assert!(matches!(res_error.log_level, OpLogLevel::Error));
         assert_eq!(res_error.contents, "errorlog".to_string());
         assert_eq!(res_error.sensor, String::new());

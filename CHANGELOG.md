@@ -15,13 +15,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- Bumped `giganto-client` to 0.26.0, updating `DceRpc` to use
-  the new `context` and `request` fields.
 - Renamed the `export_from_giganto` config key to `import_from_giganto`
   to align with the updated Giganto import terminology. The old key is
   still accepted as a deprecated alias but will be removed in a future
   release; update configuration files to use `import_from_giganto`.
-- Bumped `giganto-client` to `0572e52`, renaming
+- Bumped `giganto-client` to `0572e52`, updating `DceRpc` to use
+  the new `context` and `request` fields, and renaming
   `Kerberos::client_name` to `cname`,
   `Kerberos::service_name` to `sname`, and
   `OpLog::agent_name` to `service_name`.
