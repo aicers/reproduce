@@ -8,15 +8,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Added sysmon file migration support.
+- Added support for sysmon files exported from Giganto.
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.
-- Added `ICMP` protocol support for migration-only events.
+- Added `ICMP` protocol support for Giganto import-only events.
 
 ### Changed
 
 - Bumped `giganto-client` to 0.26.0, updating `DceRpc` to use
   the new `context` and `request` fields.
+- Renamed the `export_from_giganto` config key to `import_from_giganto`
+  to align with the updated Giganto import terminology. The old key is
+  still accepted as a deprecated alias but will be removed in a future
+  release; update configuration files to use `import_from_giganto`.
 - Bumped `REQUIRED_GIGANTO_VERSION` version to 0.27.0-alpha.1.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
@@ -44,7 +48,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed "Skip Count" byte display in report output to use accumulated
   `skip_bytes` instead of `skip_cnt`.
 - Fixed CSV-based collectors (`SysmonCollector`, `ZeekCollector`,
-  `MigrationCollector`) persisting checkpoint `1` for empty inputs where
+  `GigantoImportCollector`) persisting checkpoint `1` for empty inputs where
   no data row was consumed. The checkpoint now correctly remains at zero.
 
 ## [0.23.0] - 2025-11-26

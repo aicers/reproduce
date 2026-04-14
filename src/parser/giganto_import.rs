@@ -12,9 +12,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct MigrationError(#[from] anyhow::Error);
+pub struct GigantoImportError(#[from] anyhow::Error);
 
-pub type MigrationResult<T> = std::result::Result<T, MigrationError>;
+pub type GigantoImportResult<T> = std::result::Result<T, GigantoImportError>;
 
 pub trait TryFromGigantoRecord: Sized {
     /// Converts a Giganto CSV record into the implementing type with a timestamp.
@@ -22,10 +22,10 @@ pub trait TryFromGigantoRecord: Sized {
     /// # Errors
     ///
     /// Returns an error if the record cannot be parsed.
-    fn try_from_giganto_record(rec: &StringRecord) -> MigrationResult<(Self, i64)>;
+    fn try_from_giganto_record(rec: &StringRecord) -> GigantoImportResult<(Self, i64)>;
 }
 
-fn parse_giganto_timestamp(timestamp: &str) -> MigrationResult<Timestamp> {
+fn parse_giganto_timestamp(timestamp: &str) -> GigantoImportResult<Timestamp> {
     if let Some(i) = timestamp.find('.') {
         let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
         let nanos = timestamp[i + 1..]
@@ -33,17 +33,17 @@ fn parse_giganto_timestamp(timestamp: &str) -> MigrationResult<Timestamp> {
             .context("invalid timestamp")?;
         Timestamp::new(secs, nanos)
             .map_err(|e| anyhow!("failed to create Timestamp: {e}"))
-            .map_err(MigrationError::from)
+            .map_err(GigantoImportError::from)
     } else {
         Err(anyhow!("invalid timestamp: {timestamp}").into())
     }
 }
 
-fn parse_giganto_timestamp_ns(timestamp: &str) -> MigrationResult<i64> {
+fn parse_giganto_timestamp_ns(timestamp: &str) -> GigantoImportResult<i64> {
     let ts = parse_giganto_timestamp(timestamp)?;
     i64::try_from(ts.as_nanosecond())
         .context("to_timestamp_nanos")
-        .map_err(MigrationError::from)
+        .map_err(GigantoImportError::from)
 }
 
 fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::Err> {
@@ -64,9 +64,9 @@ fn parse_post_body(s: &str) -> Vec<u8> {
     }
 }
 
-fn parse_parenthesized_tuples<T, F>(s: &str, parse_item: F) -> MigrationResult<Vec<T>>
+fn parse_parenthesized_tuples<T, F>(s: &str, parse_item: F) -> GigantoImportResult<Vec<T>>
 where
-    F: Fn(&str) -> MigrationResult<T>,
+    F: Fn(&str) -> GigantoImportResult<T>,
 {
     if s == "-" || s.is_empty() {
         return Ok(Vec::new());

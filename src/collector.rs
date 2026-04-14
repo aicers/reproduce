@@ -1,6 +1,6 @@
 pub mod file;
+pub mod giganto_import;
 pub mod log;
-pub mod migration;
 #[cfg(feature = "netflow")]
 pub mod netflow;
 pub mod operation_log;

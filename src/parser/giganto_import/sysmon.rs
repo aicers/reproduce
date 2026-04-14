@@ -8,9 +8,9 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 
-use super::{MigrationResult, TryFromGigantoRecord, parse_giganto_timestamp_ns};
+use super::{GigantoImportResult, TryFromGigantoRecord, parse_giganto_timestamp_ns};
 
-type Result<T> = MigrationResult<T>;
+type Result<T> = GigantoImportResult<T>;
 
 fn record_timestamp(rec: &StringRecord, idx: usize) -> Result<i64> {
     let timestamp = rec.get(idx).ok_or_else(|| anyhow!("missing timestamp"))?;

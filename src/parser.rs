@@ -1,4 +1,4 @@
-pub mod migration;
+pub mod giganto_import;
 #[cfg(feature = "netflow")]
 pub mod netflow;
 pub mod operation_log;

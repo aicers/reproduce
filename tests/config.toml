@@ -8,7 +8,7 @@ input = "/path/to/file_or_directory"
 report = false
 
 [file]
-export_from_giganto = true
+import_from_giganto = true
 polling_mode = false
 transfer_count = 0
 transfer_skip_count = 0

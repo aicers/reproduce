@@ -34,8 +34,8 @@ use giganto_client::{
 use reproduce::checkpoint::Checkpoint;
 use reproduce::collector::Collector;
 use reproduce::collector::file::files_in_dir;
+use reproduce::collector::giganto_import::GigantoImportCollector;
 use reproduce::collector::log::LogCollector;
-use reproduce::collector::migration::MigrationCollector;
 #[cfg(feature = "netflow")]
 use reproduce::collector::netflow::NetflowCollector;
 use reproduce::collector::operation_log::OplogCollector;
@@ -43,7 +43,7 @@ use reproduce::collector::security_log::SecurityLogCollector;
 use reproduce::collector::sysmon_csv::SysmonCollector;
 use reproduce::collector::zeek::ZeekCollector;
 use reproduce::controller::{PipelineSender, run_pipeline_with_sender};
-use reproduce::parser::migration::TryFromGigantoRecord;
+use reproduce::parser::giganto_import::TryFromGigantoRecord;
 use reproduce::parser::security_log::{
     Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
     Wapples,
@@ -279,7 +279,7 @@ impl ZeekKind {
     }
 
     #[cfg(test)]
-    const fn requires_migration(self) -> bool {
+    const fn requires_giganto_import(self) -> bool {
         matches!(
             self,
             Self::Mqtt
@@ -505,7 +505,7 @@ enum ClassifiedKind<'a> {
 
 struct FileRunPlan<'a> {
     kind: ClassifiedKind<'a>,
-    export_from_giganto: Option<bool>,
+    import_from_giganto: Option<bool>,
     checkpoint: Option<Checkpoint>,
     options: CollectorRunOptions,
     report: Report,
@@ -578,10 +578,10 @@ impl ControllerSender for GigantoSender {
     }
 }
 
-async fn run_zeek_or_migration_collector<T, S>(
+async fn run_zeek_or_giganto_import_collector<T, S>(
     filename: &Path,
     protocol: RawEventKind,
-    migration: bool,
+    giganto_import: bool,
     options: CollectorRunOptions,
     sender: &mut S,
     report: Report,
@@ -600,9 +600,9 @@ where
     let rdr = open_raw_event_log_file(filename)?;
     let iter = rdr.into_records();
 
-    if migration {
+    if giganto_import {
         run_collector(
-            MigrationCollector::<T>::new(
+            GigantoImportCollector::<T>::new(
                 iter,
                 protocol,
                 offset,
@@ -635,10 +635,10 @@ where
     }
 }
 
-async fn run_migration_only_collector<T, S>(
+async fn run_giganto_import_only_collector<T, S>(
     filename: &Path,
     protocol: RawEventKind,
-    migration: bool,
+    giganto_import: bool,
     unsupported_name: &'static str,
     options: CollectorRunOptions,
     sender: &mut S,
@@ -648,7 +648,7 @@ where
     T: Serialize + TryFromGigantoRecord + Unpin + Debug + Send,
     S: PipelineSender + ?Sized,
 {
-    if !migration {
+    if !giganto_import {
         bail!("{unsupported_name} zeek log is not supported");
     }
 
@@ -663,7 +663,7 @@ where
     let iter = rdr.into_records();
 
     run_collector(
-        MigrationCollector::<T>::new(
+        GigantoImportCollector::<T>::new(
             iter,
             protocol,
             offset,
@@ -679,10 +679,10 @@ where
     .await
 }
 
-async fn run_sysmon_or_migration_collector<T, S>(
+async fn run_sysmon_or_giganto_import_collector<T, S>(
     filename: &Path,
     protocol: RawEventKind,
-    migration: bool,
+    giganto_import: bool,
     options: CollectorRunOptions,
     sender: &mut S,
     report: Report,
@@ -701,9 +701,9 @@ where
     let rdr = open_sysmon_csv_file(filename)?;
     let iter = rdr.into_records();
 
-    if migration {
+    if giganto_import {
         run_collector(
-            MigrationCollector::<T>::new(
+            GigantoImportCollector::<T>::new(
                 iter,
                 protocol,
                 offset,
@@ -946,7 +946,7 @@ impl Controller {
 
         Ok(FileRunPlan {
             kind: classify_kind(kind),
-            export_from_giganto: file.export_from_giganto,
+            import_from_giganto: file.import_from_giganto,
             checkpoint,
             options,
             report: Report::new(self.config.clone()),
@@ -964,13 +964,13 @@ impl Controller {
     {
         let FileRunPlan {
             kind,
-            export_from_giganto,
+            import_from_giganto,
             checkpoint,
             options,
             report,
         } = plan;
         let result =
-            run_classified_kind(filename, kind, export_from_giganto, options, sender, report)
+            run_classified_kind(filename, kind, import_from_giganto, options, sender, report)
                 .await?;
         if result.reset_header {
             sender.reset_header();
@@ -980,14 +980,14 @@ impl Controller {
     }
 }
 
-fn migration_enabled(export_from_giganto: Option<bool>) -> Result<bool> {
-    export_from_giganto.context("export_from_giganto parameter is required")
+fn giganto_import_enabled(import_from_giganto: Option<bool>) -> Result<bool> {
+    import_from_giganto.context("import_from_giganto parameter is required")
 }
 
 async fn run_classified_kind<S>(
     filename: &Path,
     kind: ClassifiedKind<'_>,
-    export_from_giganto: Option<bool>,
+    import_from_giganto: Option<bool>,
     options: CollectorRunOptions,
     sender: &mut S,
     report: Report,
@@ -1000,7 +1000,7 @@ where
             run_zeek_kind(
                 filename,
                 kind.as_str(),
-                migration_enabled(export_from_giganto)?,
+                giganto_import_enabled(import_from_giganto)?,
                 options,
                 sender,
                 report,
@@ -1016,7 +1016,7 @@ where
             run_sysmon_kind(
                 filename,
                 kind.as_str(),
-                migration_enabled(export_from_giganto)?,
+                giganto_import_enabled(import_from_giganto)?,
                 options,
                 sender,
                 report,

@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use reproduce::config::GigantoConfig;
 use serde::Deserialize;
+use tracing::warn;
 
 const DEFAULT_REPORT_MODE: bool = false;
 const DEFAULT_POLLING_MODE: bool = false;
-const DEFAULT_EXPORT_FROM_GIGANTO: bool = false;
+const DEFAULT_IMPORT_FROM_GIGANTO: bool = false;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InputType {
@@ -17,11 +18,33 @@ pub(crate) enum InputType {
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct File {
-    pub(crate) export_from_giganto: Option<bool>,
+    pub(crate) import_from_giganto: Option<bool>,
+    /// Deprecated: use `import_from_giganto` instead.
+    export_from_giganto: Option<bool>,
     pub(crate) polling_mode: bool,
     pub(crate) transfer_count: Option<u64>,
     pub(crate) transfer_skip_count: Option<u64>,
     pub(crate) last_transfer_line_suffix: Option<String>,
+}
+
+impl File {
+    #[cfg(test)]
+    pub(crate) fn new(
+        import_from_giganto: Option<bool>,
+        polling_mode: bool,
+        transfer_count: Option<u64>,
+        transfer_skip_count: Option<u64>,
+        last_transfer_line_suffix: Option<String>,
+    ) -> Self {
+        Self {
+            import_from_giganto,
+            export_from_giganto: None,
+            polling_mode,
+            transfer_count,
+            transfer_skip_count,
+            last_transfer_line_suffix,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -71,12 +94,24 @@ impl Config {
             .context("cannot set the default file polling mode value")?
             .set_default("directory.polling_mode", DEFAULT_POLLING_MODE)
             .context("cannot set the default directory polling mode value")?
-            .set_default("file.export_from_giganto", DEFAULT_EXPORT_FROM_GIGANTO)
-            .context("cannot set the default export_from_giganto value")?
+            .set_default("file.import_from_giganto", DEFAULT_IMPORT_FROM_GIGANTO)
+            .context("cannot set the default import_from_giganto value")?
             .add_source(config::File::from(path))
             .build()
             .context("cannot build the config")?;
-        let config: Self = config.try_deserialize()?;
+        let mut config: Self = config.try_deserialize()?;
+
+        if let Some(ref mut file) = config.file
+            && let Some(value) = file.export_from_giganto.take()
+        {
+            warn!(
+                "`export_from_giganto` is deprecated and will be removed in a future release; \
+                 use `import_from_giganto` instead"
+            );
+            if file.import_from_giganto.is_none() {
+                file.import_from_giganto = Some(value);
+            }
+        }
 
         if config.kind.trim().is_empty() {
             bail!("kind cannot be empty");
@@ -100,7 +135,7 @@ impl Config {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use super::{Config, DEFAULT_EXPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
+    use super::{Config, DEFAULT_IMPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
 
     fn create_temp_config(content: &str) -> (tempfile::TempDir, PathBuf) {
         let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -239,8 +274,8 @@ input = "/path/to/input"
         let file_section = config.file.expect("file section should exist");
         assert_eq!(file_section.polling_mode, DEFAULT_POLLING_MODE);
         assert_eq!(
-            file_section.export_from_giganto,
-            Some(DEFAULT_EXPORT_FROM_GIGANTO)
+            file_section.import_from_giganto,
+            Some(DEFAULT_IMPORT_FROM_GIGANTO)
         );
     }
 

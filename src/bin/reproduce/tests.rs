@@ -108,13 +108,13 @@ fn file_config(
     transfer_skip_count: Option<u64>,
     last_transfer_line_suffix: Option<&str>,
 ) -> FileConfig {
-    FileConfig {
-        export_from_giganto: Some(false),
-        polling_mode: false,
-        transfer_count: None,
+    FileConfig::new(
+        Some(false),
+        false,
+        None,
         transfer_skip_count,
-        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
-    }
+        last_transfer_line_suffix.map(str::to_string),
+    )
 }
 
 fn test_config(input: &Path, kind: &str) -> Config {
@@ -131,13 +131,7 @@ fn test_config(input: &Path, kind: &str) -> Config {
         report: false,
         report_dir: None,
         log_path: None,
-        file: Some(FileConfig {
-            export_from_giganto: Some(false),
-            polling_mode: false,
-            transfer_count: None,
-            transfer_skip_count: None,
-            last_transfer_line_suffix: None,
-        }),
+        file: Some(FileConfig::new(Some(false), false, None, None, None)),
         directory: None,
         elastic: None,
     }
@@ -146,17 +140,17 @@ fn test_config(input: &Path, kind: &str) -> Config {
 fn controller_for_file(
     input: &Path,
     kind: &str,
-    export_from_giganto: Option<bool>,
+    import_from_giganto: Option<bool>,
     last_transfer_line_suffix: Option<&str>,
 ) -> Controller {
     let mut config = test_config(input, kind);
-    config.file = Some(FileConfig {
-        export_from_giganto,
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: last_transfer_line_suffix.map(str::to_string),
-    });
+    config.file = Some(FileConfig::new(
+        import_from_giganto,
+        false,
+        None,
+        None,
+        last_transfer_line_suffix.map(str::to_string),
+    ));
     Controller::new(config)
 }
 
@@ -719,7 +713,7 @@ async fn run_single_processes_zeek_input() {
 }
 
 #[tokio::test]
-async fn run_single_processes_migration_input() {
+async fn run_single_processes_giganto_import_input() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(&temp_dir, "conn.log", &format!("{MIGR_CONN_1}\n"));
     let controller = controller_for_file(&path, "conn", Some(true), None);
@@ -728,7 +722,7 @@ async fn run_single_processes_migration_input() {
     controller
         .run_single(&path, &mut sender, "conn", false)
         .await
-        .expect("migration input should be processed");
+        .expect("giganto import input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
     assert_eq!(sender.ensured_protocols, vec![RawEventKind::Conn]);
@@ -846,7 +840,7 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
     let temp_dir = tempdir().expect("temporary directory should be created");
 
     for kind in ZeekKind::ALL {
-        if kind.requires_migration() {
+        if kind.requires_giganto_import() {
             continue;
         }
         let kind_name = kind.as_str();
@@ -880,7 +874,7 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
     }
 
     for kind in ZeekKind::ALL {
-        if !kind.requires_migration() {
+        if !kind.requires_giganto_import() {
             continue;
         }
         let kind_name = kind.as_str();
@@ -896,26 +890,26 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
             report_for(&path, kind_name),
         )
         .await
-        .expect("migration-only kind should dispatch in export mode");
+        .expect("giganto-import-only kind should dispatch in giganto import mode");
 
         assert_eq!(
             pos,
             b"0".to_vec(),
-            "empty migration input should preserve zero-progress checkpoint",
+            "empty giganto import input should preserve zero-progress checkpoint",
         );
         assert!(
             sender.batch_sizes.is_empty(),
-            "empty migration input should not send any batches",
+            "empty giganto import input should not send any batches",
         );
     }
 }
 
 #[tokio::test]
-async fn run_zeek_migration_only_kind_errors_without_migration_flag() {
+async fn run_zeek_giganto_import_only_kind_errors_without_flag() {
     let temp_dir = tempdir().expect("temporary directory should be created");
 
     for kind in ZeekKind::ALL {
-        if !kind.requires_migration() {
+        if !kind.requires_giganto_import() {
             continue;
         }
         let kind_name = kind.as_str();
@@ -934,7 +928,7 @@ async fn run_zeek_migration_only_kind_errors_without_migration_flag() {
 
         assert!(
             result.is_err(),
-            "migration-only kind {kind_name} should error when migration=false",
+            "giganto-import-only kind {kind_name} should error when giganto_import=false",
         );
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -1064,7 +1058,7 @@ async fn run_zeek_kind_rejects_unknown_kind() {
     )
     .await
     .expect_err("unknown zeek kind must be rejected");
-    assert!(err.to_string().contains("unknown zeek/migration kind"));
+    assert!(err.to_string().contains("unknown zeek/giganto-import kind"));
 }
 
 #[tokio::test]
@@ -1125,7 +1119,7 @@ async fn run_netflow_kind_rejects_unknown_kind() {
 }
 
 #[tokio::test]
-async fn run_single_requires_export_flag_for_zeek_kinds() {
+async fn run_single_requires_import_flag_for_zeek_kinds() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(&temp_dir, "conn.log", &format!("{ZEEK_CONN_1}\n"));
     let controller = controller_for_file(&path, "conn", None, None);
@@ -1134,10 +1128,10 @@ async fn run_single_requires_export_flag_for_zeek_kinds() {
     let err = controller
         .run_single(&path, &mut sender, "conn", false)
         .await
-        .expect_err("missing export flag must be rejected");
+        .expect_err("missing import flag must be rejected");
     assert!(
         err.to_string()
-            .contains("export_from_giganto parameter is required")
+            .contains("import_from_giganto parameter is required")
     );
 }
 
@@ -1263,31 +1257,19 @@ async fn run_single_ignores_checkpoint_write_failures() {
 }
 
 #[test]
-fn migration_enabled_requires_export_setting() {
-    let missing = FileConfig {
-        export_from_giganto: None,
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: None,
-    };
-    let enabled = FileConfig {
-        export_from_giganto: Some(true),
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: None,
-    };
+fn giganto_import_enabled_requires_import_setting() {
+    let missing = FileConfig::new(None, false, None, None, None);
+    let enabled = FileConfig::new(Some(true), false, None, None, None);
 
-    let err = migration_enabled(missing.export_from_giganto)
-        .expect_err("missing export_from_giganto must be rejected");
+    let err = giganto_import_enabled(missing.import_from_giganto)
+        .expect_err("missing import_from_giganto must be rejected");
     assert!(
         err.to_string()
-            .contains("export_from_giganto parameter is required")
+            .contains("import_from_giganto parameter is required")
     );
     assert!(
-        migration_enabled(enabled.export_from_giganto)
-            .expect("configured export flag should be returned")
+        giganto_import_enabled(enabled.import_from_giganto)
+            .expect("configured import flag should be returned")
     );
 }
 
@@ -1303,13 +1285,13 @@ async fn dir_polling_creates_per_file_checkpoints() {
     write_text_file(&temp_dir, "a.log", "line_a\n");
     write_text_file(&temp_dir, "b.log", "line_b\n");
     let mut config = test_config(temp_dir.path(), "custom");
-    config.file = Some(FileConfig {
-        export_from_giganto: Some(false),
-        polling_mode: false,
-        transfer_count: None,
-        transfer_skip_count: None,
-        last_transfer_line_suffix: Some("offset".to_string()),
-    });
+    config.file = Some(FileConfig::new(
+        Some(false),
+        false,
+        None,
+        None,
+        Some("offset".to_string()),
+    ));
     config.directory = Some(Directory {
         file_prefix: None,
         polling_mode: false,
