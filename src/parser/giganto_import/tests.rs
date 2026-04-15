@@ -196,6 +196,27 @@ fn giganto_dhcp() {
 }
 
 #[test]
+fn giganto_dhcp_invalid_options() {
+    let base = "1614130373.991064000\tlocalhost\t192.168.0.111\t58459\t192.168.0.7\t49670\t6\t0.000000000\t0\t1\t0\t21515\t27889\t0\t192.168.4.1\t192.168.4.2\t192.168.4.3\t192.168.4.4\t192.168.4.5\t192.168.4.11,192.168.4.22\t192.168.4.33,192.168.4.44\t192.168.4.6\t1\t192.168.4.7\t0,1,2\tmessage\t1\t1\t0,1,2\t1\t0,1,2\t";
+
+    // Missing colon separator
+    let rec = stringrecord(&format!("{base}invalid"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+
+    // Tag not a valid u8
+    let rec = stringrecord(&format!("{base}999:05"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+
+    // Odd-length hex value
+    let rec = stringrecord(&format!("{base}53:0"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+
+    // Invalid hex characters
+    let rec = stringrecord(&format!("{base}53:ZZZZ"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+}
+
+#[test]
 fn giganto_radius() {
     let data = "1756197618.963374000	localhost	127.0.0.1	53031	192.0.2.1	1812	17	1440447766.441298000	0	1	0	21515	27889	103	1	255	40b664dbf5d681b2adbd1769515118c8		115,116,101,118,101	219,198,196,183,88,190,20,240,5,179,135,124,158,47,182,1	-	192.168.0.28	123	-	-	0	";
 
