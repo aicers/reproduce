@@ -113,6 +113,10 @@ pub struct GigantoSender {
     sender: SendStream,
     init_msg: bool,
     finish_checker: Arc<AtomicBool>,
+    cert_path: String,
+    key_path: String,
+    ca_cert_paths: Vec<String>,
+    reload_requested: Arc<AtomicBool>,
 }
 
 impl GigantoSender {
@@ -122,6 +126,10 @@ impl GigantoSender {
     /// Combines endpoint creation with the initial
     /// connection handshake and bidirectional stream setup. If the server is
     /// temporarily unreachable (`TimedOut`), retries indefinitely.
+    ///
+    /// The `reload_requested` flag is checked on each reconnect; when set,
+    /// the endpoint is rebuilt from fresh cert/key/CA files before the next
+    /// handshake.
     ///
     /// # Errors
     ///
@@ -133,15 +141,21 @@ impl GigantoSender {
         ca_certs: &[String],
         server_addr: SocketAddr,
         server_name: &str,
+        reload_requested: Arc<AtomicBool>,
     ) -> std::result::Result<Self, SenderError> {
         let cert = cert.to_owned();
         let key = key.to_owned();
         let ca_certs = ca_certs.to_vec();
-        let endpoint = task::spawn_blocking(move || create_endpoint(&cert, &key, &ca_certs))
-            .await
-            .map_err(|source| {
-                SenderError::context("failed to join endpoint creation task", source)
-            })??;
+        let endpoint = task::spawn_blocking({
+            let cert = cert.clone();
+            let key = key.clone();
+            let ca_certs = ca_certs.clone();
+            move || create_endpoint(&cert, &key, &ca_certs)
+        })
+        .await
+        .map_err(|source| {
+            SenderError::context("failed to join endpoint creation task", source)
+        })??;
         let (conn, send, finish_checker) =
             connect_stream(&endpoint, server_addr, server_name).await?;
         info!("Connected to data store ingest server at {server_addr}");
@@ -154,6 +168,10 @@ impl GigantoSender {
             sender: send,
             init_msg: true,
             finish_checker,
+            cert_path: cert,
+            key_path: key,
+            ca_cert_paths: ca_certs,
+            reload_requested,
         })
     }
 
@@ -232,6 +250,12 @@ impl GigantoSender {
     /// Tears down the current QUIC stream and establishes a fresh one,
     /// performing the handshake again.
     ///
+    /// When `reload_requested` is set, the endpoint is rebuilt from the
+    /// configured cert/key/CA paths before the next handshake so that
+    /// externally rotated certificates take effect. If the rebuild fails,
+    /// the last-known-good endpoint is preserved and `reload_requested`
+    /// remains set so that the next reconnect retries the rebuild.
+    ///
     /// On `TimedOut` the method retries indefinitely. After a successful
     /// reconnection `init_msg` is reset to `true` so that the next call to
     /// `ensure_header_sent` will write the record header.
@@ -241,6 +265,24 @@ impl GigantoSender {
     /// Returns an error if the handshake or stream opening fails.
     pub async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
         sleep(Duration::from_secs(2)).await;
+
+        if self.reload_requested.load(Ordering::SeqCst) {
+            info!("Reload requested, rebuilding QUIC endpoint from fresh TLS material");
+            match self.try_rebuild_endpoint().await {
+                Ok(new_endpoint) => {
+                    self.endpoint = new_endpoint;
+                    self.reload_requested.store(false, Ordering::SeqCst);
+                    info!("QUIC endpoint rebuilt successfully");
+                }
+                Err(error) => {
+                    warn!(
+                        "Failed to rebuild QUIC endpoint, \
+                         keeping last-known-good endpoint: {error}"
+                    );
+                }
+            }
+        }
+
         let (conn, send, finish_checker) =
             connect_stream(&self.endpoint, self.server_addr, &self.name).await?;
         self.conn = conn;
@@ -248,6 +290,20 @@ impl GigantoSender {
         self.init_msg = true;
         self.finish_checker = finish_checker;
         Ok(())
+    }
+
+    /// Attempts to rebuild the QUIC endpoint from the configured TLS file
+    /// paths. This is called when a reload has been requested (e.g. via
+    /// `SIGHUP`) so that externally rotated certificates are picked up.
+    async fn try_rebuild_endpoint(&self) -> std::result::Result<Endpoint, SenderError> {
+        let cert = self.cert_path.clone();
+        let key = self.key_path.clone();
+        let ca_certs = self.ca_cert_paths.clone();
+        task::spawn_blocking(move || create_endpoint(&cert, &key, &ca_certs))
+            .await
+            .map_err(|source| {
+                SenderError::context("failed to join endpoint rebuild task", source)
+            })?
     }
 
     /// Sends the channel-close sentinel message to signal the server that
@@ -615,6 +671,10 @@ mod tests {
                 sender: client_send,
                 init_msg: true,
                 finish_checker: finish_checker_send,
+                cert_path: cert,
+                key_path: key,
+                ca_cert_paths: roots.to_vec(),
+                reload_requested: Arc::new(AtomicBool::new(false)),
             },
             ServerSession {
                 server_endpoint,
@@ -1011,7 +1071,14 @@ mod tests {
         let roots = [root];
 
         let (sender_result, server_result) = tokio::join!(
-            GigantoSender::new(&cert, &key, &roots, server_addr, TEST_SERVER_NAME),
+            GigantoSender::new(
+                &cert,
+                &key,
+                &roots,
+                server_addr,
+                TEST_SERVER_NAME,
+                Arc::new(AtomicBool::new(false)),
+            ),
             async {
                 let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept())
                     .await
@@ -1065,9 +1132,16 @@ mod tests {
             Ok::<_, anyhow::Error>(connection)
         });
 
-        let mut sender = GigantoSender::new(&cert, &key, &roots, server_addr, TEST_SERVER_NAME)
-            .await
-            .expect("compatible server should accept sender creation");
+        let mut sender = GigantoSender::new(
+            &cert,
+            &key,
+            &roots,
+            server_addr,
+            TEST_SERVER_NAME,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .expect("compatible server should accept sender creation");
         let connection = server_task
             .await
             .expect("server task should join cleanly")
@@ -1685,5 +1759,136 @@ mod tests {
 
         client_result.expect("split-CA mTLS client handshake should succeed");
         server_result.expect("split-CA mTLS server handshake should succeed");
+    }
+
+    #[tokio::test]
+    async fn reconnect_reuses_endpoint_without_reload() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let server_task = tokio::spawn(async move {
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept a reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("sender reconnect should complete QUIC setup")?;
+            server_handshake(&connection, REQUIRED_GIGANTO_VERSION).await?;
+            Ok::<_, anyhow::Error>(connection)
+        });
+
+        assert!(
+            !sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested should be false initially"
+        );
+        sender
+            .reconnect()
+            .await
+            .expect("reconnect without reload should succeed");
+        server_task
+            .await
+            .expect("server task should join")
+            .expect("server handshake should succeed");
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint should be reused when reload is not requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_causes_endpoint_rebuild_on_next_reconnect() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        // Simulate SIGHUP by setting the reload flag.
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let server_task = tokio::spawn(async move {
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept a reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("sender reconnect should complete QUIC setup")?;
+            server_handshake(&connection, REQUIRED_GIGANTO_VERSION).await?;
+            Ok::<_, anyhow::Error>(connection)
+        });
+
+        sender
+            .reconnect()
+            .await
+            .expect("reconnect with reload should succeed");
+        server_task
+            .await
+            .expect("server task should join")
+            .expect("server handshake should succeed");
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_ne!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint should be rebuilt when reload was requested"
+        );
+        assert!(
+            !sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested should be cleared after successful rebuild"
+        );
+    }
+
+    #[tokio::test]
+    async fn rebuild_failure_preserves_last_known_good_endpoint() {
+        let (mut sender, _session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        // Point cert/key at invalid paths so rebuild will fail.
+        sender.cert_path = "/nonexistent/cert.pem".to_string();
+        sender.key_path = "/nonexistent/key.pem".to_string();
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        // try_rebuild_endpoint should fail, but the endpoint stays.
+        let result = sender.try_rebuild_endpoint().await;
+        assert!(
+            result.is_err(),
+            "rebuild should fail with invalid cert paths"
+        );
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint should be preserved after rebuild failure"
+        );
+        assert!(
+            sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested should remain set after rebuild failure"
+        );
     }
 }

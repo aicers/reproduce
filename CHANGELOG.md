@@ -8,6 +8,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Handle `SIGHUP` as a reload trigger for the Giganto QUIC
+  client. On the next reconnect after `SIGHUP`, the endpoint is
+  rebuilt from fresh cert/key/CA files so that externally rotated
+  certificates take effect without restarting the process.
+  `SIGINT`/`SIGTERM` remain termination signals.
 - Added support for sysmon files exported from Giganto.
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.

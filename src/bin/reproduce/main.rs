@@ -2,7 +2,8 @@ use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use std::{env, process::exit};
 
@@ -87,7 +88,9 @@ async fn main() -> anyhow::Result<()> {
     let config_filename = parse();
     let config = config::Config::new(config_filename.as_ref())?;
     let _guard = init_tracing(config.log_path.as_deref())?;
-    let controller = Controller::new(config);
+    let reload_requested = Arc::new(AtomicBool::new(false));
+    spawn_sighup_handler(Arc::clone(&reload_requested));
+    let controller = Controller::new(config, reload_requested);
     tracing::info!("Data Broker started");
     if let Err(error) = controller.run().await {
         tracing::error!("Terminated with error: {error}");
@@ -738,14 +741,18 @@ where
 
 struct Controller {
     config: Config,
+    reload_requested: Arc<AtomicBool>,
 }
 
 static SHUTDOWN_SENDER: OnceLock<watch::Sender<bool>> = OnceLock::new();
 
 impl Controller {
     #[must_use]
-    fn new(config: Config) -> Self {
-        Self { config }
+    fn new(config: Config, reload_requested: Arc<AtomicBool>) -> Self {
+        Self {
+            config,
+            reload_requested,
+        }
     }
 
     /// # Errors
@@ -759,7 +766,8 @@ impl Controller {
             let shutdown = shutdown_receiver()?;
             self.run_elastic_with_shutdown(shutdown).await?;
         } else {
-            let mut sender = create_sender(&self.config).await?;
+            let mut sender =
+                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
             self.run_with_sender(&mut sender).await?;
         }
 
@@ -865,7 +873,8 @@ impl Controller {
 
         files.sort_unstable();
         for file in files {
-            let mut sender = create_sender(&self.config).await?;
+            let mut sender =
+                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
             info!("File: {file:?}");
             let kind = file_to_kind(&file)?;
             self.run_single_with_shutdown(
@@ -1079,6 +1088,27 @@ async fn wait_for_shutdown_or_timeout(
     }
 }
 
+/// Spawns a background task that listens for `SIGHUP` and sets the
+/// `reload_requested` flag each time it is received. The process keeps
+/// running; only `SIGINT`/`SIGTERM` trigger termination.
+#[cfg(unix)]
+fn spawn_sighup_handler(reload_requested: Arc<AtomicBool>) {
+    tokio::spawn(async move {
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("failed to register SIGHUP handler");
+        loop {
+            sighup.recv().await;
+            reload_requested.store(true, Ordering::SeqCst);
+            info!("SIGHUP received, reload requested");
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_sighup_handler(_reload_requested: Arc<AtomicBool>) {
+    // SIGHUP is not available on non-Unix platforms.
+}
+
 fn shutdown_receiver() -> Result<watch::Receiver<bool>> {
     if let Some(sender) = SHUTDOWN_SENDER.get() {
         return Ok(sender.subscribe());
@@ -1190,7 +1220,10 @@ pub(crate) fn input_type(input: &str) -> InputType {
     }
 }
 
-async fn create_sender(config: &Config) -> Result<GigantoSender> {
+async fn create_sender(
+    config: &Config,
+    reload_requested: Arc<AtomicBool>,
+) -> Result<GigantoSender> {
     debug!("output type=GIGANTO");
     GigantoSender::new(
         &config.giganto.cert,
@@ -1198,6 +1231,7 @@ async fn create_sender(config: &Config) -> Result<GigantoSender> {
         &config.giganto.ca_certs,
         config.giganto.ingest_srv_addr,
         &config.giganto.name,
+        reload_requested,
     )
     .await
     .map_err(anyhow::Error::from)
