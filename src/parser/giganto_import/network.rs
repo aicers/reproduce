@@ -1176,13 +1176,13 @@ impl TryFromGigantoRecord for Kerberos {
         } else {
             return Err(giganto_import_error!("missing cname_type"));
         };
-        let client_name = if let Some(client_name) = rec.get(18) {
-            client_name
+        let cname = if let Some(cname) = rec.get(18) {
+            cname
                 .split(',')
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(giganto_import_error!("missing client_name"));
+            return Err(giganto_import_error!("missing cname"));
         };
         let realm = if let Some(realm) = rec.get(19) {
             realm.to_string()
@@ -1194,13 +1194,13 @@ impl TryFromGigantoRecord for Kerberos {
         } else {
             return Err(giganto_import_error!("missing sname_type"));
         };
-        let service_name = if let Some(service_name) = rec.get(21) {
-            service_name
+        let sname = if let Some(sname) = rec.get(21) {
+            sname
                 .split(',')
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(giganto_import_error!("missing service_name"));
+            return Err(giganto_import_error!("missing sname"));
         };
 
         Ok((
@@ -1217,10 +1217,10 @@ impl TryFromGigantoRecord for Kerberos {
                 error_code,
                 client_realm,
                 cname_type,
-                client_name,
+                cname,
                 realm,
                 sname_type,
-                service_name,
+                sname,
                 orig_pkts,
                 resp_pkts,
                 orig_l2_bytes,
