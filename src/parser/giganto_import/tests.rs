@@ -178,11 +178,42 @@ fn giganto_bootp() {
 
 #[test]
 fn giganto_dhcp() {
-    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	0	1	0	21515	27889	0	192.168.4.1	192.168.4.2	192.168.4.3	192.168.4.4	192.168.4.5	192.168.4.11,192.168.4.22	192.168.4.33,192.168.4.44	192.168.4.6	1	192.168.4.7	0,1,2	message	1	1	0,1,2	1	0,1,2";
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	0	1	0	21515	27889	0	192.168.4.1	192.168.4.2	192.168.4.3	192.168.4.4	192.168.4.5	192.168.4.11,192.168.4.22	192.168.4.33,192.168.4.44	192.168.4.6	1	192.168.4.7	0,1,2	message	1	1	0,1,2	1	0,1,2	53:05,51:00015180";
 
     let rec = stringrecord(data);
 
-    assert!(Dhcp::try_from_giganto_record(&rec).is_ok());
+    let (dhcp, _) = Dhcp::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(
+        dhcp.options,
+        vec![(53, vec![0x05]), (51, vec![0x00, 0x01, 0x51, 0x80])]
+    );
+
+    // Empty options
+    let data_empty = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	0.000000000	0	1	0	21515	27889	0	192.168.4.1	192.168.4.2	192.168.4.3	192.168.4.4	192.168.4.5	192.168.4.11,192.168.4.22	192.168.4.33,192.168.4.44	192.168.4.6	1	192.168.4.7	0,1,2	message	1	1	0,1,2	1	0,1,2	-";
+    let rec_empty = stringrecord(data_empty);
+    let (dhcp_empty, _) = Dhcp::try_from_giganto_record(&rec_empty).unwrap();
+    assert!(dhcp_empty.options.is_empty());
+}
+
+#[test]
+fn giganto_dhcp_invalid_options() {
+    let base = "1614130373.991064000\tlocalhost\t192.168.0.111\t58459\t192.168.0.7\t49670\t6\t0.000000000\t0\t1\t0\t21515\t27889\t0\t192.168.4.1\t192.168.4.2\t192.168.4.3\t192.168.4.4\t192.168.4.5\t192.168.4.11,192.168.4.22\t192.168.4.33,192.168.4.44\t192.168.4.6\t1\t192.168.4.7\t0,1,2\tmessage\t1\t1\t0,1,2\t1\t0,1,2\t";
+
+    // Missing colon separator
+    let rec = stringrecord(&format!("{base}invalid"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+
+    // Tag not a valid u8
+    let rec = stringrecord(&format!("{base}999:05"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+
+    // Odd-length hex value
+    let rec = stringrecord(&format!("{base}53:0"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+
+    // Invalid hex characters
+    let rec = stringrecord(&format!("{base}53:ZZZZ"));
+    assert!(Dhcp::try_from_giganto_record(&rec).is_err());
 }
 
 #[test]

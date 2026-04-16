@@ -2826,6 +2826,9 @@ impl TryFromGigantoRecord for Dhcp {
         let client_id = parse_comma_separated(rec.get(30).context("missing client_id")?)
             .context("invalid client_id")?;
 
+        let options = parse_dhcp_options(rec.get(31).context("missing options")?)
+            .context("invalid options")?;
+
         Ok((
             Self {
                 orig_addr,
@@ -2853,6 +2856,7 @@ impl TryFromGigantoRecord for Dhcp {
                 class_id,
                 client_id_type,
                 client_id,
+                options,
                 orig_pkts,
                 resp_pkts,
                 orig_l2_bytes,
@@ -2861,6 +2865,31 @@ impl TryFromGigantoRecord for Dhcp {
             time,
         ))
     }
+}
+
+fn parse_dhcp_options(field: &str) -> Result<Vec<(u8, Vec<u8>)>> {
+    if field == "-" {
+        return Ok(Vec::new());
+    }
+    field
+        .split(',')
+        .map(|entry| {
+            let (tag_str, hex_str) = entry
+                .split_once(':')
+                .context("invalid dhcp option format")?;
+            let tag = tag_str.parse::<u8>().context("invalid dhcp option tag")?;
+            let mut value = Vec::with_capacity(hex_str.len() / 2);
+            for i in (0..hex_str.len()).step_by(2) {
+                let byte_str = hex_str
+                    .get(i..i + 2)
+                    .context("odd-length hex string in dhcp option")?;
+                let byte =
+                    u8::from_str_radix(byte_str, 16).context("invalid hex byte in dhcp option")?;
+                value.push(byte);
+            }
+            Ok((tag, value))
+        })
+        .collect()
 }
 
 fn parse_qtype(qtype: &str) -> u16 {
