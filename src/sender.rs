@@ -496,6 +496,7 @@ mod tests {
         ingest::receive_record_header,
     };
     use quinn::{Connection, RecvStream, SendStream};
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
     use tempfile::tempdir;
     use tokio::time::{Duration, timeout};
 
@@ -736,21 +737,6 @@ mod tests {
             err.to_string()
                 .contains("no certificates found in root certificate file")
         );
-    }
-
-    #[test]
-    fn to_root_cert_loads_bundled_pem_with_multiple_certificates() {
-        let root_pem = fs::read(fixture_path(TEST_ROOT_PEM))
-            .expect("fixture root certificate should be readable");
-        let dir = tempdir().expect("tempdir should be created");
-        let bundled_path = dir.path().join("bundled-roots.pem");
-        let mut bundled = root_pem.clone();
-        bundled.extend_from_slice(&root_pem);
-        fs::write(&bundled_path, &bundled).expect("bundled PEM fixture should be written");
-
-        let store = to_root_cert(&[bundled_path.to_string_lossy().into_owned()])
-            .expect("bundled PEM with multiple certificates should load");
-        assert_eq!(store.len(), 2);
     }
 
     #[test]
@@ -1254,5 +1240,450 @@ mod tests {
             !finish_checker.load(Ordering::SeqCst),
             "non-close ACKs must not set the finish checker flag",
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Bootroot-style certificate chain helpers and integration tests
+    // ---------------------------------------------------------------
+
+    /// Server SAN used in the test PKI, modelling a Bootroot data-store identity.
+    const SERVER_SAN: &str = "validation.data-store.localhost.bootroot.test";
+    /// Client SAN used in the test PKI, modelling a Bootroot data-broker identity.
+    const CLIENT_SAN: &str = "validation.data-broker.localhost.bootroot.test";
+
+    /// Generated Bootroot-style PKI material: root CA -> intermediate CA -> server leaf + client leaf.
+    #[allow(clippy::struct_field_names)]
+    struct BootrootPki {
+        root_ca_pem: String,
+        intermediate_ca_pem: String,
+        server_cert_pem: String,
+        server_key_pem: String,
+        client_cert_pem: String,
+        client_key_pem: String,
+    }
+
+    /// Generates a three-level certificate chain modelling a Bootroot deployment:
+    /// `leaf <- intermediate <- root`.
+    ///
+    /// Two separate leaf certificates are generated:
+    /// - A **server** leaf with SAN `validation.data-store.localhost.bootroot.test`
+    ///   and `ServerAuth` EKU.
+    /// - A **client** leaf with SAN `validation.data-broker.localhost.bootroot.test`
+    ///   and `ClientAuth` EKU.
+    fn generate_bootroot_pki() -> BootrootPki {
+        // Root CA
+        let mut root_params =
+            CertificateParams::new(Vec::<String>::new()).expect("root CA params should be valid");
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        root_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Test Root CA");
+        root_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        let root_key = KeyPair::generate().expect("root CA key should generate");
+        let root_cert = root_params
+            .self_signed(&root_key)
+            .expect("root CA should self-sign");
+
+        // Intermediate CA
+        let mut inter_params = CertificateParams::new(Vec::<String>::new())
+            .expect("intermediate CA params should be valid");
+        inter_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        inter_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Test Intermediate CA");
+        inter_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        let inter_key = KeyPair::generate().expect("intermediate key should generate");
+        let root_issuer = Issuer::from_ca_cert_der(root_cert.der(), &root_key)
+            .expect("root issuer should be constructible");
+        let inter_cert = inter_params
+            .signed_by(&inter_key, &root_issuer)
+            .expect("intermediate CA should be signed by root");
+
+        let inter_issuer = Issuer::from_ca_cert_der(inter_cert.der(), &inter_key)
+            .expect("intermediate issuer should be constructible");
+
+        // Server leaf (data-store identity)
+        let mut server_params = CertificateParams::new(vec![SERVER_SAN.to_string()])
+            .expect("server leaf params should be valid");
+        server_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, SERVER_SAN);
+        server_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        server_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        let server_key = KeyPair::generate().expect("server leaf key should generate");
+        let server_cert = server_params
+            .signed_by(&server_key, &inter_issuer)
+            .expect("server leaf should be signed by intermediate");
+
+        // Client leaf (data-broker identity)
+        let mut client_params = CertificateParams::new(vec![CLIENT_SAN.to_string()])
+            .expect("client leaf params should be valid");
+        client_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, CLIENT_SAN);
+        client_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        client_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        let client_key = KeyPair::generate().expect("client leaf key should generate");
+        let client_cert = client_params
+            .signed_by(&client_key, &inter_issuer)
+            .expect("client leaf should be signed by intermediate");
+
+        BootrootPki {
+            root_ca_pem: root_cert.pem(),
+            intermediate_ca_pem: inter_cert.pem(),
+            server_cert_pem: server_cert.pem(),
+            server_key_pem: server_key.serialize_pem(),
+            client_cert_pem: client_cert.pem(),
+            client_key_pem: client_key.serialize_pem(),
+        }
+    }
+
+    /// Writes PEM content to a file inside `dir` and returns the path as a `String`.
+    fn write_pem(dir: &Path, name: &str, pem: &str) -> String {
+        let path = dir.join(name);
+        fs::write(&path, pem).unwrap_or_else(|e| {
+            panic!("should write {name}: {e}");
+        });
+        path.to_string_lossy().into_owned()
+    }
+
+    // --- trust-store unit tests for Bootroot-shaped bundles ---
+
+    #[test]
+    fn to_root_cert_loads_bootroot_ca_bundle() {
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        // Bootroot-style: intermediate + root in one file
+        let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
+        let bundle_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
+
+        let store = to_root_cert(&[bundle_path]).expect("Bootroot CA bundle should load");
+        assert_eq!(
+            store.len(),
+            2,
+            "both intermediate and root must be in the trust store"
+        );
+    }
+
+    #[test]
+    fn to_root_cert_distinguishes_intermediate_only_from_full_bootroot_bundle() {
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        // This store-level test intentionally complements the handshake-level
+        // regression checks below. It makes the trust-store shape explicit:
+        // an intermediate-only file yields one trust anchor, while the full
+        // Bootroot bundle yields both intermediate and root.
+        let intermediate_only = write_pem(
+            dir.path(),
+            "intermediate-only.pem",
+            &pki.intermediate_ca_pem,
+        );
+
+        let store =
+            to_root_cert(&[intermediate_only]).expect("single intermediate PEM should load");
+        assert_eq!(
+            store.len(),
+            1,
+            "only the intermediate should be present when root is missing"
+        );
+
+        // Now verify that the full bundle has both
+        let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
+        let bundle_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
+        let full_store = to_root_cert(&[bundle_path]).expect("full bundle should load");
+        assert_eq!(
+            full_store.len(),
+            2,
+            "bundle must include both intermediate and root"
+        );
+    }
+
+    #[test]
+    fn to_root_cert_loads_split_ca_files_backward_compat() {
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        let root_path = write_pem(dir.path(), "root.pem", &pki.root_ca_pem);
+        let inter_path = write_pem(dir.path(), "intermediate.pem", &pki.intermediate_ca_pem);
+
+        let store = to_root_cert(&[root_path, inter_path]).expect("split CA files should load");
+        assert_eq!(
+            store.len(),
+            2,
+            "split-file CA input must load both certificates"
+        );
+    }
+
+    #[test]
+    fn to_root_cert_loads_single_root_backward_compat() {
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+        let root_path = write_pem(dir.path(), "root.pem", &pki.root_ca_pem);
+
+        let store = to_root_cert(&[root_path]).expect("single root CA should load");
+        assert_eq!(store.len(), 1);
+    }
+
+    // --- endpoint-level integration tests with Bootroot chain ---
+
+    #[tokio::test]
+    async fn create_endpoint_with_split_ca_files() {
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
+        let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
+        let root_path = write_pem(dir.path(), "root.pem", &pki.root_ca_pem);
+        let inter_path = write_pem(dir.path(), "intermediate.pem", &pki.intermediate_ca_pem);
+
+        let endpoint = create_endpoint(&cert_path, &key_path, &[root_path, inter_path])
+            .expect("split CA files should create endpoint");
+        drop(endpoint);
+    }
+
+    // --- QUIC/TLS mTLS handshake tests with Bootroot chain ---
+
+    /// Builds a test server that requires mTLS using the Bootroot chain.
+    fn build_bootroot_server_endpoint(
+        pki: &BootrootPki,
+        dir: &Path,
+    ) -> Result<(Endpoint, SocketAddr)> {
+        let chain_pem = format!("{}{}", pki.server_cert_pem, pki.intermediate_ca_pem);
+        let chain_bytes = chain_pem.as_bytes();
+        let cert_chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*chain_bytes)
+            .collect::<std::result::Result<_, _>>()
+            .context("server cert chain PEM should parse")?;
+
+        let key_bytes = pki.server_key_pem.as_bytes();
+        let private_key = rustls_pemfile::private_key(&mut &*key_bytes)
+            .context("server key PEM should parse")?
+            .context("server key PEM should contain a key")?;
+
+        // Build client-auth verifier using the CA bundle
+        let mut client_roots = rustls::RootCertStore::empty();
+        let bundle_pem = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
+        let bundle_bytes = bundle_pem.as_bytes();
+        let ca_certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*bundle_bytes)
+            .collect::<std::result::Result<_, _>>()
+            .context("CA bundle PEM should parse")?;
+        for cert in ca_certs {
+            client_roots
+                .add(cert)
+                .context("should add CA cert to client verifier")?;
+        }
+
+        let client_verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(client_roots))
+            .build()
+            .context("client verifier should build")?;
+
+        let server_crypto = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(client_verifier)
+            .with_single_cert(cert_chain, private_key)
+            .context("mTLS server config should build")?;
+
+        let _ = dir; // dir kept alive by caller
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
+                .context("mTLS QUIC server config should build")?,
+        ));
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let endpoint = Endpoint::server(server_config, bind_addr)
+            .context("mTLS server endpoint should bind")?;
+        let addr = endpoint
+            .local_addr()
+            .context("mTLS server should have a local address")?;
+        Ok((endpoint, addr))
+    }
+
+    #[tokio::test]
+    async fn bootroot_mtls_handshake_succeeds_with_bundled_ca() {
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        let (server_endpoint, server_addr) =
+            build_bootroot_server_endpoint(&pki, dir.path()).expect("mTLS server should start");
+
+        // Client uses Bootroot-style inputs
+        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
+        let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
+        let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
+        let ca_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
+
+        let client_endpoint = create_endpoint(&cert_path, &key_path, &[ca_path])
+            .expect("client endpoint should be created");
+
+        let connect = client_endpoint
+            .connect(server_addr, SERVER_SAN)
+            .expect("client should start connecting");
+        let (client_result, server_result) = tokio::join!(
+            async { connect.await.context("client TLS handshake") },
+            async {
+                let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept())
+                    .await
+                    .context("server should accept in time")?
+                    .context("server should stay open")?;
+                incoming.await.context("server TLS handshake")
+            },
+        );
+
+        client_result.expect("Bootroot mTLS client handshake should succeed");
+        server_result.expect("Bootroot mTLS server handshake should succeed");
+    }
+
+    /// Builds a server that presents only its leaf cert (no chain), so the
+    /// client must have both intermediate and root in its trust store to
+    /// verify the leaf. This models the regression where only the first PEM
+    /// from a bundled CA file was loaded.
+    fn build_leaf_only_server_endpoint(
+        pki: &BootrootPki,
+        _dir: &Path,
+    ) -> Result<(Endpoint, SocketAddr)> {
+        // Server presents ONLY the server leaf cert (no intermediate in chain).
+        let cert_bytes = pki.server_cert_pem.as_bytes();
+        let cert_chain: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*cert_bytes)
+            .collect::<std::result::Result<_, _>>()
+            .context("server leaf cert PEM should parse")?;
+
+        let key_bytes = pki.server_key_pem.as_bytes();
+        let private_key = rustls_pemfile::private_key(&mut &*key_bytes)
+            .context("leaf key PEM should parse")?
+            .context("leaf key PEM should contain a key")?;
+
+        let server_crypto = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, private_key)
+            .context("leaf-only server config should build")?;
+
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
+                .context("leaf-only QUIC server config should build")?,
+        ));
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let endpoint = Endpoint::server(server_config, bind_addr)
+            .context("leaf-only server endpoint should bind")?;
+        let addr = endpoint
+            .local_addr()
+            .context("leaf-only server should have a local address")?;
+        Ok((endpoint, addr))
+    }
+
+    #[tokio::test]
+    async fn bootroot_mtls_fails_with_root_only_in_trust_store() {
+        // The server presents only the leaf cert (not a full chain).
+        // The client has only the root CA, but NOT the intermediate.
+        // Without the intermediate, the client cannot build a path from
+        // leaf -> intermediate -> root, so TLS must fail.
+        // This catches a regression to first-PEM-only parsing of a bundle
+        // where the first cert is the intermediate and the root is dropped.
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        let (server_endpoint, server_addr) = build_leaf_only_server_endpoint(&pki, dir.path())
+            .expect("leaf-only server should start");
+
+        // Client trusts only root (not intermediate).
+        let cert_path = write_pem(dir.path(), "client-cert.pem", &pki.client_cert_pem);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
+        let ca_path = write_pem(dir.path(), "root-only.pem", &pki.root_ca_pem);
+
+        let client_endpoint = create_endpoint(&cert_path, &key_path, &[ca_path])
+            .expect("client endpoint should be created");
+
+        let connect = client_endpoint
+            .connect(server_addr, SERVER_SAN)
+            .expect("client should start connecting");
+        let (client_result, _server_result) = tokio::join!(connect, async {
+            let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept()).await;
+            if let Ok(Some(incoming)) = incoming {
+                let _ = incoming.await;
+            }
+        },);
+
+        assert!(
+            client_result.is_err(),
+            "TLS must fail when server sends leaf-only and client \
+             only has root (missing intermediate in trust store)"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootroot_bundled_ca_succeeds_where_root_only_fails() {
+        // This is the key regression test: given a server that presents
+        // only its leaf, a client with the full Bootroot CA bundle
+        // (intermediate + root) MUST succeed, whereas root-only MUST
+        // fail. This ensures multi-PEM parsing loads all certs.
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        let (server_endpoint, server_addr) = build_leaf_only_server_endpoint(&pki, dir.path())
+            .expect("leaf-only server should start");
+
+        // Client has the full Bootroot CA bundle
+        let cert_path = write_pem(dir.path(), "client-cert.pem", &pki.client_cert_pem);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
+        let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
+        let ca_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
+
+        let client_endpoint = create_endpoint(&cert_path, &key_path, &[ca_path])
+            .expect("client endpoint should be created");
+
+        let connect = client_endpoint
+            .connect(server_addr, SERVER_SAN)
+            .expect("client should start connecting");
+        let (client_result, server_result) = tokio::join!(
+            async { connect.await.context("client TLS handshake") },
+            async {
+                let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept())
+                    .await
+                    .context("server should accept in time")?
+                    .context("server should stay open")?;
+                incoming.await.context("server TLS handshake")
+            },
+        );
+
+        client_result.expect(
+            "Bootroot CA bundle must allow validation of leaf cert \
+             (regression: first-PEM-only would miss the root)",
+        );
+        server_result.expect("server handshake should complete");
+    }
+
+    #[tokio::test]
+    async fn bootroot_mtls_handshake_succeeds_with_split_ca_files() {
+        let pki = generate_bootroot_pki();
+        let dir = tempdir().expect("tempdir should be created");
+
+        let (server_endpoint, server_addr) =
+            build_bootroot_server_endpoint(&pki, dir.path()).expect("mTLS server should start");
+
+        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
+        let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
+        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
+        let root_path = write_pem(dir.path(), "root.pem", &pki.root_ca_pem);
+        let inter_path = write_pem(dir.path(), "intermediate.pem", &pki.intermediate_ca_pem);
+
+        let client_endpoint = create_endpoint(&cert_path, &key_path, &[root_path, inter_path])
+            .expect("client endpoint should be created");
+
+        let connect = client_endpoint
+            .connect(server_addr, SERVER_SAN)
+            .expect("client should start connecting");
+        let (client_result, server_result) = tokio::join!(
+            async { connect.await.context("client TLS handshake") },
+            async {
+                let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept())
+                    .await
+                    .context("server should accept in time")?
+                    .context("server should stay open")?;
+                incoming.await.context("server TLS handshake")
+            },
+        );
+
+        client_result.expect("split-CA mTLS client handshake should succeed");
+        server_result.expect("split-CA mTLS server handshake should succeed");
     }
 }

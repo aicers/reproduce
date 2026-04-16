@@ -58,6 +58,7 @@ chrono = "0.4"
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+rcgen = { version = "0.14", features = ["x509-parser"] }
 
 [lints.clippy]
 pedantic = "warn"
