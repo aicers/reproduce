@@ -12,7 +12,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.
 - Added `ICMP` protocol support for Giganto import-only events.
-- Added `ICMP` protocol support for migration-only events.
 
 ### Changed
 
