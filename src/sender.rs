@@ -740,21 +740,6 @@ mod tests {
     }
 
     #[test]
-    fn to_root_cert_loads_bundled_pem_with_multiple_certificates() {
-        let root_pem = fs::read(fixture_path(TEST_ROOT_PEM))
-            .expect("fixture root certificate should be readable");
-        let dir = tempdir().expect("tempdir should be created");
-        let bundled_path = dir.path().join("bundled-roots.pem");
-        let mut bundled = root_pem.clone();
-        bundled.extend_from_slice(&root_pem);
-        fs::write(&bundled_path, &bundled).expect("bundled PEM fixture should be written");
-
-        let store = to_root_cert(&[bundled_path.to_string_lossy().into_owned()])
-            .expect("bundled PEM with multiple certificates should load");
-        assert_eq!(store.len(), 2);
-    }
-
-    #[test]
     fn create_endpoint_rejects_missing_certificate_files() {
         let err = create_endpoint("missing-cert.pem", "missing-key.pem", &[])
             .expect_err("missing certificate paths must fail");
@@ -1382,13 +1367,14 @@ mod tests {
     }
 
     #[test]
-    fn to_root_cert_regression_rejects_first_pem_only_if_both_needed() {
+    fn to_root_cert_distinguishes_intermediate_only_from_full_bootroot_bundle() {
         let pki = generate_bootroot_pki();
         let dir = tempdir().expect("tempdir should be created");
 
-        // Write only the intermediate (first cert of a bundle) as the sole CA.
-        // A leaf signed by the intermediate cannot be validated without the
-        // root in the store, so the store must contain both.
+        // This store-level test intentionally complements the handshake-level
+        // regression checks below. It makes the trust-store shape explicit:
+        // an intermediate-only file yields one trust anchor, while the full
+        // Bootroot bundle yields both intermediate and root.
         let intermediate_only = write_pem(
             dir.path(),
             "intermediate-only.pem",
@@ -1441,23 +1427,6 @@ mod tests {
     }
 
     // --- endpoint-level integration tests with Bootroot chain ---
-
-    #[tokio::test]
-    async fn create_endpoint_with_bootroot_bundle() {
-        let pki = generate_bootroot_pki();
-        let dir = tempdir().expect("tempdir should be created");
-
-        // client-chain.pem = client leaf + intermediate (for client cert chain)
-        let chain = format!("{}{}", pki.client_cert_pem, pki.intermediate_ca_pem);
-        let cert_path = write_pem(dir.path(), "client-chain.pem", &chain);
-        let key_path = write_pem(dir.path(), "client-key.pem", &pki.client_key_pem);
-        let bundle = format!("{}{}", pki.intermediate_ca_pem, pki.root_ca_pem);
-        let ca_path = write_pem(dir.path(), "ca-bundle.pem", &bundle);
-
-        let endpoint = create_endpoint(&cert_path, &key_path, &[ca_path])
-            .expect("Bootroot cert/key/CA bundle should create endpoint");
-        drop(endpoint);
-    }
 
     #[tokio::test]
     async fn create_endpoint_with_split_ca_files() {

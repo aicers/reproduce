@@ -13,10 +13,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   report files are written. When `report = true`, `report_dir` is required.
 - Added `ICMP` protocol support for Giganto import-only events.
 - Added `ICMP` protocol support for migration-only events.
-- Added integration tests for Bootroot-style mTLS with bundled
-  CA certificates (`intermediate + root` in a single file),
-  split-file backward compatibility, and regression detection
-  for first-PEM-only parsing.
 
 ### Changed
 
