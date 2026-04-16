@@ -176,7 +176,7 @@ const AGENTS_LIST: [&str; 7] = [
     "ti_container",
 ];
 const OPERATION_LOG: &str = "oplog";
-const DIRECTORY_POLL_INTERVAL: Duration = Duration::from_millis(10_000);
+const DIRECTORY_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ZeekKind {
