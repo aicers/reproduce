@@ -1,6 +1,5 @@
 use std::fmt::Debug;
-use std::fs::{File, OpenOptions};
-use std::io::BufReader;
+use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -15,39 +14,15 @@ mod tests;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
-#[cfg(feature = "netflow")]
-use giganto_client::ingest::netflow::{Netflow5, Netflow9};
-use giganto_client::{
-    RawEventKind,
-    ingest::{
-        network::{
-            Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt,
-            Nfs, Ntlm, Radius, Rdp, Smb, Smtp, Ssh, Tls,
-        },
-        sysmon::{
-            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
-        },
-    },
-};
+use giganto_client::RawEventKind;
 use reproduce::checkpoint::Checkpoint;
 use reproduce::collector::Collector;
 use reproduce::collector::file::files_in_dir;
 use reproduce::collector::giganto_import::GigantoImportCollector;
-use reproduce::collector::log::LogCollector;
-#[cfg(feature = "netflow")]
-use reproduce::collector::netflow::NetflowCollector;
-use reproduce::collector::operation_log::OplogCollector;
-use reproduce::collector::security_log::SecurityLogCollector;
 use reproduce::collector::sysmon_csv::SysmonCollector;
 use reproduce::collector::zeek::ZeekCollector;
 use reproduce::controller::{PipelineSender, run_pipeline_with_sender};
 use reproduce::parser::giganto_import::TryFromGigantoRecord;
-use reproduce::parser::security_log::{
-    Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
-    Wapples,
-};
 use reproduce::parser::sysmon_csv::{
     ElasticDumpOptions, TryFromSysmonRecord, open_sysmon_csv_file,
 };
@@ -176,7 +151,7 @@ const AGENTS_LIST: [&str; 7] = [
     "ti_container",
 ];
 const OPERATION_LOG: &str = "oplog";
-const DIRECTORY_POLL_INTERVAL: Duration = Duration::from_millis(10_000);
+const DIRECTORY_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ZeekKind {

@@ -1,4 +1,35 @@
-use super::*;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+
+use anyhow::{Result, anyhow};
+use giganto_client::RawEventKind;
+#[cfg(feature = "netflow")]
+use giganto_client::ingest::netflow::{Netflow5, Netflow9};
+use giganto_client::ingest::network::{
+    Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs, Ntlm,
+    Radius, Rdp, Smb, Smtp, Ssh, Tls,
+};
+use giganto_client::ingest::sysmon::{
+    DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
+    FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
+    ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+};
+use reproduce::collector::log::LogCollector;
+#[cfg(feature = "netflow")]
+use reproduce::collector::netflow::NetflowCollector;
+use reproduce::collector::operation_log::OplogCollector;
+use reproduce::collector::security_log::SecurityLogCollector;
+use reproduce::parser::security_log::{
+    Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
+    Wapples,
+};
+
+use super::{
+    CollectorRunOptions, NetflowKind, PipelineSender, Report, SecurityKind, SysmonKind, ZeekKind,
+    operation_log_agent_name, run_collector, run_giganto_import_only_collector,
+    run_sysmon_or_giganto_import_collector, run_zeek_or_giganto_import_collector,
+};
 
 // The kind-to-collector mapping is intentionally explicit so supported formats
 // stay visible in one place.
