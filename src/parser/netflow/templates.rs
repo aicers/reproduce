@@ -25,13 +25,13 @@ pub(super) struct Template {
 impl std::fmt::Display for Template {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.header)?;
-        writeln!(f, "Template id: {}", self.template_id,)?;
+        writeln!(f, "Template id: {}", self.template_id)?;
         writeln!(f, "Field count: {}", self.field_count)?;
         writeln!(f, "Flow length: {}", self.flow_length)?;
         writeln!(f, "Options template: {}", self.options_template)?;
 
         if self.options_template {
-            writeln!(f, "Scope fields count: {}", self.scope_field_count,)?;
+            writeln!(f, "Scope fields count: {}", self.scope_field_count)?;
             writeln!(
                 f,
                 "Options fields count: {}",
@@ -64,7 +64,7 @@ impl std::fmt::Display for Template {
                 }
             }
         } else {
-            writeln!(f, "Fields:",)?;
+            writeln!(f, "Fields:")?;
             for (k, v) in &self.fields {
                 writeln!(f, " (\"{:?}\", {v})", FieldTypes::from_primitive(*k))?;
             }

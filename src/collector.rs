@@ -22,7 +22,7 @@ use tokio::sync::watch;
 use crate::parser::netflow::NetflowError;
 
 /// Defines how long polling collectors sleep after reaching EOF.
-pub(crate) const POLLING_INTERVAL: Duration = Duration::from_millis(3_000);
+pub(crate) const POLLING_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Encodes a numeric collector position using the legacy decimal format.
 pub(crate) fn position_bytes(position: u64) -> Vec<u8> {
