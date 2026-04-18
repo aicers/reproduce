@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
     let config = config::Config::new(config_filename.as_ref())?;
     let _guard = init_tracing(config.log_path.as_deref())?;
     let reload_requested = Arc::new(AtomicBool::new(false));
-    spawn_sighup_handler(Arc::clone(&reload_requested));
+    install_signal_handlers(Arc::clone(&reload_requested))?;
     let controller = Controller::new(config, reload_requested);
     tracing::info!("Data Broker started");
     if let Err(error) = controller.run().await {
@@ -763,7 +763,7 @@ impl Controller {
         let input_type = input_type(&self.config.input);
 
         if input_type == InputType::Elastic {
-            let shutdown = shutdown_receiver()?;
+            let shutdown = shutdown_receiver();
             self.run_elastic_with_shutdown(shutdown).await?;
         } else {
             let mut sender =
@@ -796,7 +796,7 @@ impl Controller {
     where
         S: ControllerSender + ?Sized,
     {
-        let shutdown = shutdown_receiver()?;
+        let shutdown = shutdown_receiver();
         self.run_split_with_shutdown(sender, shutdown).await
     }
 
@@ -902,7 +902,7 @@ impl Controller {
     where
         S: ControllerSender + ?Sized,
     {
-        let shutdown = shutdown_receiver()?;
+        let shutdown = shutdown_receiver();
         self.run_single_with_shutdown(filename, sender, kind, dir_polling_mode, shutdown)
             .await
     }
@@ -1088,9 +1088,26 @@ async fn wait_for_shutdown_or_timeout(
     }
 }
 
-/// Spawns a background task that listens for `SIGHUP` and sets the
-/// `reload_requested` flag each time it is received. The process keeps
-/// running; only `SIGINT`/`SIGTERM` trigger termination.
+/// Installs process-wide signal handlers:
+///
+/// * `SIGHUP` sets `reload_requested` so the next reconnect rebuilds the
+///   QUIC endpoint from fresh TLS material. The process keeps running.
+/// * `SIGINT` and `SIGTERM` request shutdown via the shared
+///   `SHUTDOWN_SENDER` channel.
+///
+/// `ctrlc` is not used because its `termination` feature would also
+/// catch `SIGHUP` and terminate the process, defeating the reload path.
+fn install_signal_handlers(reload_requested: Arc<AtomicBool>) -> Result<()> {
+    let (sender, _receiver) = watch::channel(false);
+    SHUTDOWN_SENDER
+        .set(sender.clone())
+        .map_err(|_| anyhow!("signal handlers were already installed"))?;
+
+    spawn_sighup_handler(reload_requested);
+    spawn_termination_handlers(sender);
+    Ok(())
+}
+
 #[cfg(unix)]
 fn spawn_sighup_handler(reload_requested: Arc<AtomicBool>) {
     tokio::spawn(async move {
@@ -1109,21 +1126,52 @@ fn spawn_sighup_handler(_reload_requested: Arc<AtomicBool>) {
     // SIGHUP is not available on non-Unix platforms.
 }
 
-fn shutdown_receiver() -> Result<watch::Receiver<bool>> {
+#[cfg(unix)]
+fn spawn_termination_handlers(sender: watch::Sender<bool>) {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let sigint_sender = sender.clone();
+    tokio::spawn(async move {
+        let mut sigint =
+            signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");
+        if sigint.recv().await.is_some() {
+            info!("SIGINT received, shutting down");
+            let _ = sigint_sender.send(true);
+        }
+    });
+
+    tokio::spawn(async move {
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+        if sigterm.recv().await.is_some() {
+            info!("SIGTERM received, shutting down");
+            let _ = sender.send(true);
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_termination_handlers(sender: watch::Sender<bool>) {
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            info!("Ctrl-C received, shutting down");
+            let _ = sender.send(true);
+        }
+    });
+}
+
+fn shutdown_receiver() -> watch::Receiver<bool> {
     if let Some(sender) = SHUTDOWN_SENDER.get() {
-        return Ok(sender.subscribe());
+        return sender.subscribe();
     }
 
+    // When signal handlers have not been installed (e.g. in unit tests),
+    // fall back to a detached, never-triggered channel so callers still
+    // get a valid receiver.
     let (sender, receiver) = watch::channel(false);
-    let handler_sender = sender.clone();
-    ctrlc::set_handler(move || {
-        let _ = handler_sender.send(true);
-    })
-    .context("failed to install Ctrl-C handler")?;
-
     match SHUTDOWN_SENDER.set(sender) {
-        Ok(()) => Ok(receiver),
-        Err(existing) => Ok(existing.subscribe()),
+        Ok(()) => receiver,
+        Err(existing) => existing.subscribe(),
     }
 }
 

@@ -1891,4 +1891,59 @@ mod tests {
             "reload_requested should remain set after rebuild failure"
         );
     }
+
+    #[tokio::test]
+    async fn reconnect_with_failed_rebuild_preserves_endpoint_and_leaves_reload_pending() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        // Simulate a TLS rotation race where the new files are not yet on
+        // disk: reload is requested, but the paths can't be read. The
+        // reconnect must still succeed using the existing endpoint, and
+        // `reload_requested` must remain set so a later reconnect can
+        // retry the rebuild.
+        sender.cert_path = "/nonexistent/cert.pem".to_string();
+        sender.key_path = "/nonexistent/key.pem".to_string();
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let server_task = tokio::spawn(async move {
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept the fallback reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("fallback reconnect should complete QUIC setup")?;
+            server_handshake(&connection, REQUIRED_GIGANTO_VERSION).await?;
+            Ok::<_, anyhow::Error>(connection)
+        });
+
+        sender
+            .reconnect()
+            .await
+            .expect("reconnect must succeed with the preserved endpoint");
+        server_task
+            .await
+            .expect("server task should join")
+            .expect("server handshake should succeed against preserved endpoint");
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint must be preserved when rebuild fails during reconnect"
+        );
+        assert!(
+            sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested must stay set so the next reconnect retries rebuild"
+        );
+    }
 }

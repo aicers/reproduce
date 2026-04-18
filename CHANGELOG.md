@@ -12,7 +12,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   client. On the next reconnect after `SIGHUP`, the endpoint is
   rebuilt from fresh cert/key/CA files so that externally rotated
   certificates take effect without restarting the process.
-  `SIGINT`/`SIGTERM` remain termination signals.
+  `SIGINT`/`SIGTERM` remain termination signals. Replaced the
+  `ctrlc` crate (whose `termination` feature also caught
+  `SIGHUP` and would have terminated the process) with explicit
+  `tokio::signal` handlers for `SIGHUP`, `SIGINT`, and `SIGTERM`
+  so each signal maps to the intended action.
 - Added support for sysmon files exported from Giganto.
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.
