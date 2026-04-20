@@ -74,7 +74,6 @@ where
             on_record_bytes(bytes);
         }
 
-        sender.ensure_header_sent(batch.kind).await?;
         let mut shutdown_requested = false;
 
         loop {
@@ -82,11 +81,24 @@ where
                 shutdown_requested = true;
                 break;
             }
+            // Both the header and the batch must be reconnect-retryable,
+            // because a broken stream is observed at the first write on
+            // that stream — which is the header, not the batch. Propagating
+            // a header-level `WriteError` instead of reconnecting skips the
+            // reload path and defeats `SIGHUP`-driven TLS rotation.
+            if let Err(error) = sender.ensure_header_sent(batch.kind).await {
+                match error {
+                    SenderError::Send(SendError::WriteError(_)) => {
+                        sender.reconnect().await?;
+                        continue;
+                    }
+                    other => return Err(PipelineError::Sender(other)),
+                }
+            }
             match sender.send_batch(&batch.events).await {
                 Ok(()) => break,
                 Err(SendError::WriteError(_)) => {
                     sender.reconnect().await?;
-                    sender.ensure_header_sent(batch.kind).await?;
                 }
                 Err(error) => return Err(PipelineError::Send(error)),
             }

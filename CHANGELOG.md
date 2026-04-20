@@ -46,6 +46,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed the pipeline so a `WriteError` raised by the initial
+  per-batch header send (not only by the batch send itself) now
+  triggers a reconnect. Without this, a broken stream that surfaces
+  on the header write skipped the reconnect path and therefore the
+  `SIGHUP` reload path, leaving the daemon unable to pick up rotated
+  TLS material on the next reconnect.
 - Fixed `ca_certs` to load all certificates from bundled PEM files,
   not just the first one. Files containing multiple CA certificates
   (e.g., root + intermediate) are now fully trusted.
