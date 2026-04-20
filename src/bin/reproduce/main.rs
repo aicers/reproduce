@@ -166,7 +166,7 @@ fn init_tracing(log_path: Option<&std::path::Path>) -> anyhow::Result<WorkerGuar
     Ok(guard)
 }
 
-const AGENTS_LIST: [&str; 7] = [
+const SERVICE_NAMES: [&str; 7] = [
     "manager",
     "data_store",
     "sensor",
@@ -1144,20 +1144,20 @@ fn checkpoint_offset(checkpoint: &Checkpoint) -> u64 {
     }
 }
 
-fn operation_log_agent_name(path: &Path) -> Result<&str> {
+fn operation_log_service_name(path: &Path) -> Result<&str> {
     let file_name = path
         .file_name()
         .with_context(|| format!("missing file name in {}", path.display()))?;
     let file_name = file_name
         .to_str()
         .with_context(|| format!("invalid unicode in {}", path.display()))?;
-    let (agent, _) = file_name
+    let (service_name, _) = file_name
         .split_once('.')
         .with_context(|| format!("operation log file must have an extension: {file_name}"))?;
-    if AGENTS_LIST.contains(&agent) {
-        Ok(agent)
+    if SERVICE_NAMES.contains(&service_name) {
+        Ok(service_name)
     } else {
-        bail!("invalid agent name `{file_name}`");
+        bail!("invalid service name `{file_name}`");
     }
 }
 

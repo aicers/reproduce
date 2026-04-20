@@ -263,13 +263,13 @@ where
         dir_polling_mode,
         shutdown,
     } = options;
-    let agent = operation_log_agent_name(filename)?;
+    let service_name = operation_log_service_name(filename)?;
     let oplog = File::open(filename)?;
     let rdr = BufReader::new(oplog);
     run_collector(
         OplogCollector::new(
             rdr,
-            agent.to_string(),
+            service_name.to_string(),
             offset,
             count_sent,
             file_polling_mode,

@@ -461,7 +461,7 @@ fn input_type_nonexistent_path() {
 }
 
 #[test]
-fn valid_agent_filenames() {
+fn valid_service_filenames() {
     let valid_filenames = [
         "manager.log",
         "data_store.txt",
@@ -474,13 +474,16 @@ fn valid_agent_filenames() {
 
     for filename in valid_filenames {
         let path = Path::new(filename);
-        let result = operation_log_agent_name(path);
-        assert!(result.is_ok(), "Expected valid agent filename: {filename}");
+        let result = operation_log_service_name(path);
+        assert!(
+            result.is_ok(),
+            "Expected valid service filename: {filename}"
+        );
     }
 }
 
 #[test]
-fn valid_agent_filenames_with_directory() {
+fn valid_service_filenames_with_directory() {
     let valid_paths = [
         "/var/log/manager.txt",
         "/home/user/logs/data_store.csv",
@@ -491,30 +494,30 @@ fn valid_agent_filenames_with_directory() {
 
     for path_str in valid_paths {
         let path = Path::new(path_str);
-        let result = operation_log_agent_name(path);
+        let result = operation_log_service_name(path);
         assert!(
             result.is_ok(),
-            "Expected valid agent filename with path: {path_str}"
+            "Expected valid service filename with path: {path_str}"
         );
     }
 }
 
 #[test]
-fn invalid_agent_name_returns_error() {
-    let invalid_agent_filenames = [
-        "unknown_agent.txt",
+fn invalid_service_name_returns_error() {
+    let invalid_service_filenames = [
+        "unknown_service.txt",
         "invalid.csv",
         "test.json",
         "other_service.dat",
-        "agent.out",
+        "service.out",
     ];
 
-    for filename in invalid_agent_filenames {
+    for filename in invalid_service_filenames {
         let path = Path::new(filename);
-        let result = operation_log_agent_name(path);
+        let result = operation_log_service_name(path);
         assert!(
             result.is_err(),
-            "Expected invalid agent name to return an error: {filename}"
+            "Expected invalid service name to return an error: {filename}"
         );
     }
 }
@@ -522,7 +525,7 @@ fn invalid_agent_name_returns_error() {
 #[test]
 fn returns_error_on_filename_without_dot() {
     let path = Path::new("manager_no_extension");
-    let err = operation_log_agent_name(path).expect_err("missing extension must be rejected");
+    let err = operation_log_service_name(path).expect_err("missing extension must be rejected");
     assert!(err.to_string().contains("must have an extension"));
 }
 
@@ -530,12 +533,12 @@ fn returns_error_on_filename_without_dot() {
 fn returns_error_on_empty_path() {
     let path = Path::new("/");
     let err =
-        operation_log_agent_name(path).expect_err("path without a file name must be rejected");
+        operation_log_service_name(path).expect_err("path without a file name must be rejected");
     assert!(err.to_string().contains("missing file name"));
 }
 
 #[test]
-fn valid_agent_with_different_extensions() {
+fn valid_service_with_different_extensions() {
     let valid_with_other_ext = [
         "manager.txt",
         "sensor.csv",
@@ -545,10 +548,10 @@ fn valid_agent_with_different_extensions() {
 
     for filename in valid_with_other_ext {
         let path = Path::new(filename);
-        let result = operation_log_agent_name(path);
+        let result = operation_log_service_name(path);
         assert!(
             result.is_ok(),
-            "Expected valid agent name regardless of extension: {filename}"
+            "Expected valid service name regardless of extension: {filename}"
         );
     }
 }

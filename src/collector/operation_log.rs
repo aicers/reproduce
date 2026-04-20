@@ -18,7 +18,7 @@ use crate::sender::BATCH_SIZE;
 /// batching them for sending.
 pub struct OplogCollector {
     lines: Lines<BufReader<File>>,
-    agent: String,
+    service_name: String,
     skip: u64,
     count_sent: u64,
     file_polling_mode: bool,
@@ -35,11 +35,11 @@ pub struct OplogCollector {
 impl OplogCollector {
     /// Creates a new `OplogCollector`.
     ///
-    /// `agent` is the agent name embedded in each `OpLog` record.
+    /// `service_name` is the service name embedded in each `OpLog` record.
     #[must_use]
     pub fn new(
         reader: BufReader<File>,
-        agent: String,
+        service_name: String,
         skip: u64,
         count_sent: u64,
         file_polling_mode: bool,
@@ -48,7 +48,7 @@ impl OplogCollector {
     ) -> Self {
         Self {
             lines: reader.lines(),
-            agent,
+            service_name,
             skip,
             count_sent,
             file_polling_mode,
@@ -92,7 +92,7 @@ impl Collector for OplogCollector {
                 }
 
                 let (oplog_data, timestamp) =
-                    if let Ok(r) = operation_log::log_regex(&line, &self.agent) {
+                    if let Ok(r) = operation_log::log_regex(&line, &self.service_name) {
                         self.success_cnt += 1;
                         r
                     } else {

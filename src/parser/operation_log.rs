@@ -170,14 +170,14 @@ mod tests {
         ];
 
         for (line, expected_level) in valid_lines {
-            let result = log_regex(line, "test_agent");
+            let result = log_regex(line, "test_service");
             assert!(result.is_ok(), "Expected valid log line: {line}");
             let (oplog, _) = result.unwrap();
             assert!(
                 matches!(oplog.log_level, ref level if std::mem::discriminant(level) == std::mem::discriminant(&expected_level)),
                 "Unexpected log level for: {line}"
             );
-            assert_eq!(oplog.service_name, "test_agent");
+            assert_eq!(oplog.service_name, "test_service");
         }
     }
 
@@ -203,20 +203,20 @@ mod tests {
         ];
 
         for line in invalid_lines {
-            let result = log_regex(line, "agent");
+            let result = log_regex(line, "test_service");
             assert!(result.is_err(), "Expected error for invalid line: {line}");
         }
     }
 
     #[test]
-    fn log_regex_preserves_agent_name() {
-        // Agent name should be passed through unchanged
+    fn log_regex_preserves_service_name() {
+        // Service name should be passed through unchanged
         let line = "2023-01-02T07:36:17Z  INFO test message";
-        let agents = ["manager", "data_store", "sensor", "custom_agent"];
+        let service_names = ["manager", "data_store", "sensor", "custom_service"];
 
-        for agent in agents {
-            let (oplog, _) = log_regex(line, agent).unwrap();
-            assert_eq!(oplog.service_name, agent);
+        for service_name in service_names {
+            let (oplog, _) = log_regex(line, service_name).unwrap();
+            assert_eq!(oplog.service_name, service_name);
         }
     }
 
@@ -236,7 +236,7 @@ mod tests {
         ];
 
         for (line, expected_content) in test_cases {
-            let (oplog, _) = log_regex(line, "agent").unwrap();
+            let (oplog, _) = log_regex(line, "test_service").unwrap();
             assert_eq!(oplog.contents, expected_content);
         }
     }
@@ -280,7 +280,7 @@ mod tests {
         ];
 
         for (line, expected_nanos) in test_cases {
-            let (_, timestamp) = log_regex(line, "agent").unwrap();
+            let (_, timestamp) = log_regex(line, "test_service").unwrap();
             assert_eq!(
                 timestamp, expected_nanos,
                 "Timestamp mismatch for line: {line}"
