@@ -105,6 +105,13 @@ where
         }
 
         if shutdown_requested {
+            // The reconnect path resets `init_msg = true`, so a fresh
+            // post-reconnect stream still requires the record header before
+            // any payload write. Send it here so the final flush obeys the
+            // same header-first invariant as the normal send path.
+            if let Err(error) = sender.ensure_header_sent(batch.kind).await {
+                return Err(PipelineError::Sender(error));
+            }
             match sender.send_batch(&batch.events).await {
                 Ok(()) => {}
                 Err(error) => return Err(PipelineError::Send(error)),
@@ -480,6 +487,87 @@ mod tests {
             let _ = self.shutdown.send(true);
             Ok(())
         }
+    }
+
+    /// Models the real sender's header-first invariant: `send_batch` must be
+    /// preceded by `ensure_header_sent` on a fresh post-reconnect stream, and
+    /// `reconnect` resets `init_msg` so the header must be re-sent.
+    struct HeaderStateSender {
+        init_msg: bool,
+        send_attempts: usize,
+        reconnects: usize,
+        header_sends: usize,
+        header_violations: usize,
+        shutdown: watch::Sender<bool>,
+    }
+
+    #[async_trait]
+    impl PipelineSender for HeaderStateSender {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            if self.init_msg {
+                self.header_sends += 1;
+                self.init_msg = false;
+            }
+            Ok(())
+        }
+
+        async fn send_batch(
+            &mut self,
+            _events: &[(i64, Vec<u8>)],
+        ) -> std::result::Result<(), SendError> {
+            if self.init_msg {
+                self.header_violations += 1;
+            }
+            self.send_attempts += 1;
+            if self.send_attempts == 1 {
+                return Err(SendError::WriteError(WriteError::Stopped(
+                    VarInt::from_u32(0),
+                )));
+            }
+            Ok(())
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+            self.reconnects += 1;
+            self.init_msg = true;
+            let _ = self.shutdown.send(true);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_flush_sends_header_after_reconnect() {
+        let (shutdown_tx, shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: b"99".to_vec(),
+        };
+        let mut sender = HeaderStateSender {
+            init_msg: true,
+            send_attempts: 0,
+            reconnects: 0,
+            header_sends: 0,
+            header_violations: 0,
+            shutdown: shutdown_tx,
+        };
+
+        run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+            .await
+            .expect("the shutdown flush must succeed after reconnect");
+
+        assert_eq!(sender.reconnects, 1);
+        assert_eq!(sender.send_attempts, 2);
+        // Header is sent once on the initial stream and once on the
+        // post-reconnect stream used by the shutdown flush.
+        assert_eq!(sender.header_sends, 2);
+        assert_eq!(
+            sender.header_violations, 0,
+            "shutdown flush must not send a batch before the record header"
+        );
     }
 
     #[tokio::test]

@@ -52,6 +52,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   on the header write skipped the reconnect path and therefore the
   `SIGHUP` reload path, leaving the daemon unable to pick up rotated
   TLS material on the next reconnect.
+- Fixed the shutdown-after-reconnect flush path to send the record
+  header before flushing the pending batch. When a `WriteError` had
+  triggered a reconnect and shutdown was then requested, the final
+  flush wrote the batch on a fresh stream without the required
+  header, violating the header-first invariant. The flush now obeys
+  the same invariant as the normal send path.
 - Fixed `ca_certs` to load all certificates from bundled PEM files,
   not just the first one. Files containing multiple CA certificates
   (e.g., root + intermediate) are now fully trusted.
