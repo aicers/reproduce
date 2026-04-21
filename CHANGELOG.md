@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-04-21
+
 ### Added
 
 - Added support for sysmon files exported from Giganto.
@@ -481,7 +483,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
-[Unreleased]: https://github.com/aicers/reproduce/compare/0.23.0...main
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.0...main
+[0.24.0]: https://github.com/aicers/reproduce/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/aicers/reproduce/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/aicers/reproduce/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/aicers/reproduce/compare/0.21.2...0.22.0
