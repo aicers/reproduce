@@ -27,7 +27,7 @@ use rcgen::{
 use reproduce::sender::{CHANNEL_CLOSE_TIMESTAMP, REQUIRED_GIGANTO_VERSION};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tempfile::{TempDir, tempdir};
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
@@ -161,32 +161,54 @@ fn reap(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// Spawn the binary and drain its stderr in the background so that pipe
-/// back-pressure cannot stall the process.
-fn spawn_reproduce(config_path: &Path) -> Result<Child> {
+/// Substring the `reproduce` binary logs once its `SIGHUP` handler has
+/// finished storing `reload_requested = true`. Observing this line is the
+/// synchronization point tests use to know the child has actually processed
+/// `SIGHUP` before they force a reconnect.
+const SIGHUP_HANDLED_LOG: &str = "SIGHUP received, reload requested";
+
+/// Spawn the binary and drain its stdout/stderr in the background so that
+/// pipe back-pressure cannot stall the process. The returned `Notify` fires
+/// the first time the child logs that it has processed `SIGHUP`, so tests
+/// can await reload intent instead of racing against a fixed sleep.
+fn spawn_reproduce(config_path: &Path) -> Result<(Child, Arc<Notify>)> {
     let bin = env!("CARGO_BIN_EXE_reproduce");
+    // `init_tracing` applies `EnvFilter::from_default_env()` on the stdout
+    // branch with no fallback directive, so without `RUST_LOG` the child
+    // emits nothing and tests cannot observe handler progress. Force
+    // info-level logging so the SIGHUP acknowledgement line is produced.
     let mut child = Command::new(bin)
         .arg(config_path)
+        .env("RUST_LOG", "info")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("spawn reproduce binary")?;
+    let sighup_handled = Arc::new(Notify::new());
     if let Some(stdout) = child.stdout.take() {
+        let notify = Arc::clone(&sighup_handled);
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 eprintln!("[reproduce stdout] {line}");
+                if line.contains(SIGHUP_HANDLED_LOG) {
+                    notify.notify_one();
+                }
             }
         });
     }
     if let Some(stderr) = child.stderr.take() {
+        let notify = Arc::clone(&sighup_handled);
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 eprintln!("[reproduce stderr] {line}");
+                if line.contains(SIGHUP_HANDLED_LOG) {
+                    notify.notify_one();
+                }
             }
         });
     }
-    Ok(child)
+    Ok((child, sighup_handled))
 }
 
 async fn run_signal_scenario(termination_signal: libc::c_int) -> Result<()> {
@@ -200,7 +222,7 @@ async fn run_signal_scenario(termination_signal: libc::c_int) -> Result<()> {
     std::fs::create_dir(&input_dir).context("create input dir")?;
     let config_path = write_config(&temp_dir, server_addr, &input_dir)?;
 
-    let mut child = spawn_reproduce(&config_path)?;
+    let (mut child, sighup_handled) = spawn_reproduce(&config_path)?;
     let pid = child.id();
 
     // Let the client connect and enter the directory-polling loop.
@@ -210,9 +232,19 @@ async fn run_signal_scenario(termination_signal: libc::c_int) -> Result<()> {
         anyhow::bail!("process exited before signals were delivered: {status:?}");
     }
 
-    // SIGHUP must NOT terminate the process.
+    // SIGHUP must NOT terminate the process. Wait for the child to log that
+    // its handler ran so we are not asserting on an unobserved signal.
     send_signal(pid, libc::SIGHUP);
-    sleep(POST_SIGNAL_DWELL).await;
+    if timeout(POST_SIGNAL_DWELL, sighup_handled.notified())
+        .await
+        .is_err()
+    {
+        server_task.abort();
+        anyhow::bail!(
+            "child did not acknowledge SIGHUP within {}s",
+            POST_SIGNAL_DWELL.as_secs()
+        );
+    }
     if let Ok(Some(status)) = child.try_wait() {
         server_task.abort();
         anyhow::bail!("process exited after SIGHUP: {status:?}");
@@ -433,7 +465,8 @@ async fn sighup_reload_uses_rotated_tls_on_next_reconnect() {
     let config_path = write_reload_config(&temp_dir, server_addr, &input_dir, &ca_path)
         .expect("write reload config");
 
-    let mut child = spawn_reproduce(&config_path).expect("spawn reproduce binary");
+    let (mut child, sighup_handled) =
+        spawn_reproduce(&config_path).expect("spawn reproduce binary");
     let pid = child.id();
 
     let conn_v1 = match timeout(Duration::from_secs(20), conn_v1_rx).await {
@@ -455,6 +488,22 @@ async fn sighup_reload_uses_rotated_tls_on_next_reconnect() {
 
     // Ask the daemon to reload — this is the behaviour under test.
     send_signal(pid, libc::SIGHUP);
+
+    // Synchronize on the child: do not proceed until the signal handler
+    // has actually run and stored `reload_requested = true`. Without this
+    // barrier, a slow runner can reach the forced-reconnect step before
+    // the child has observed the signal, causing the reconnect to rebuild
+    // with stale TLS and fail CA verification against the rotated server.
+    if timeout(Duration::from_secs(30), sighup_handled.notified())
+        .await
+        .is_err()
+    {
+        server_task.abort();
+        send_signal(pid, libc::SIGTERM);
+        let _ = wait_for_exit(&mut child, EXIT_WAIT).await;
+        reap(&mut child);
+        panic!("child did not acknowledge SIGHUP within 30s; reload intent never set");
+    }
 
     // New incoming QUIC connections will now be served with PKI v2.
     let v2_server_config =
