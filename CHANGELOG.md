@@ -8,15 +8,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Handle `SIGHUP` as a reload trigger for the Giganto QUIC
-  client. On the next reconnect after `SIGHUP`, the endpoint is
-  rebuilt from fresh cert/key/CA files so that externally rotated
-  certificates take effect without restarting the process.
-  `SIGINT`/`SIGTERM` remain termination signals. Replaced the
-  `ctrlc` crate (whose `termination` feature also caught
-  `SIGHUP` and would have terminated the process) with explicit
-  `tokio::signal` handlers for `SIGHUP`, `SIGINT`, and `SIGTERM`
-  so each signal maps to the intended action.
+- Handle `SIGHUP` as a reload trigger for the Giganto QUIC client so rotated TLS
+  material is applied on the next reconnect without restarting the process.
+  `SIGINT` and `SIGTERM` remain termination signals, and reconnect/shutdown
+  flush paths preserve the required header and retry behavior for this reload
+  flow.
 - Added support for sysmon files exported from Giganto.
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.
@@ -46,18 +42,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Fixed the pipeline so a `WriteError` raised by the initial
-  per-batch header send (not only by the batch send itself) now
-  triggers a reconnect. Without this, a broken stream that surfaces
-  on the header write skipped the reconnect path and therefore the
-  `SIGHUP` reload path, leaving the daemon unable to pick up rotated
-  TLS material on the next reconnect.
-- Fixed the shutdown-after-reconnect flush path to send the record
-  header before flushing the pending batch. When a `WriteError` had
-  triggered a reconnect and shutdown was then requested, the final
-  flush wrote the batch on a fresh stream without the required
-  header, violating the header-first invariant. The flush now obeys
-  the same invariant as the normal send path.
 - Fixed `ca_certs` to load all certificates from bundled PEM files,
   not just the first one. Files containing multiple CA certificates
   (e.g., root + intermediate) are now fully trusted.
