@@ -167,16 +167,30 @@ fn reap(child: &mut Child) {
 /// `SIGHUP` before they force a reconnect.
 const SIGHUP_HANDLED_LOG: &str = "SIGHUP received, reload requested";
 
+/// Substring the `reproduce` binary logs once `GigantoSender::new` has
+/// completed the QUIC handshake and returned. Observing this line proves
+/// the main task has finished initial sender startup, so the reload test
+/// is not racing against an in-flight handshake when it forces a
+/// reconnect boundary.
+const SENDER_READY_LOG: &str = "Connected to data store ingest server at";
+
+/// Notifications surfaced by the child-log drain threads.
+struct ChildNotifications {
+    sender_ready: Arc<Notify>,
+    sighup_handled: Arc<Notify>,
+}
+
 /// Spawn the binary and drain its stdout/stderr in the background so that
-/// pipe back-pressure cannot stall the process. The returned `Notify` fires
-/// the first time the child logs that it has processed `SIGHUP`, so tests
-/// can await reload intent instead of racing against a fixed sleep.
-fn spawn_reproduce(config_path: &Path) -> Result<(Child, Arc<Notify>)> {
+/// pipe back-pressure cannot stall the process. The returned notifications
+/// fire the first time the child logs that the sender finished its initial
+/// handshake and that the `SIGHUP` handler set reload intent, respectively,
+/// so tests can await those states instead of racing against fixed sleeps.
+fn spawn_reproduce(config_path: &Path) -> Result<(Child, ChildNotifications)> {
     let bin = env!("CARGO_BIN_EXE_reproduce");
     // `init_tracing` applies `EnvFilter::from_default_env()` on the stdout
     // branch with no fallback directive, so without `RUST_LOG` the child
     // emits nothing and tests cannot observe handler progress. Force
-    // info-level logging so the SIGHUP acknowledgement line is produced.
+    // info-level logging so the sync-point lines are produced.
     let mut child = Command::new(bin)
         .arg(config_path)
         .env("RUST_LOG", "info")
@@ -185,30 +199,45 @@ fn spawn_reproduce(config_path: &Path) -> Result<(Child, Arc<Notify>)> {
         .stderr(Stdio::piped())
         .spawn()
         .context("spawn reproduce binary")?;
+    let sender_ready = Arc::new(Notify::new());
     let sighup_handled = Arc::new(Notify::new());
     if let Some(stdout) = child.stdout.take() {
-        let notify = Arc::clone(&sighup_handled);
+        let ready = Arc::clone(&sender_ready);
+        let handled = Arc::clone(&sighup_handled);
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 eprintln!("[reproduce stdout] {line}");
+                if line.contains(SENDER_READY_LOG) {
+                    ready.notify_one();
+                }
                 if line.contains(SIGHUP_HANDLED_LOG) {
-                    notify.notify_one();
+                    handled.notify_one();
                 }
             }
         });
     }
     if let Some(stderr) = child.stderr.take() {
-        let notify = Arc::clone(&sighup_handled);
+        let ready = Arc::clone(&sender_ready);
+        let handled = Arc::clone(&sighup_handled);
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 eprintln!("[reproduce stderr] {line}");
+                if line.contains(SENDER_READY_LOG) {
+                    ready.notify_one();
+                }
                 if line.contains(SIGHUP_HANDLED_LOG) {
-                    notify.notify_one();
+                    handled.notify_one();
                 }
             }
         });
     }
-    Ok((child, sighup_handled))
+    Ok((
+        child,
+        ChildNotifications {
+            sender_ready,
+            sighup_handled,
+        },
+    ))
 }
 
 async fn run_signal_scenario(termination_signal: libc::c_int) -> Result<()> {
@@ -222,7 +251,7 @@ async fn run_signal_scenario(termination_signal: libc::c_int) -> Result<()> {
     std::fs::create_dir(&input_dir).context("create input dir")?;
     let config_path = write_config(&temp_dir, server_addr, &input_dir)?;
 
-    let (mut child, sighup_handled) = spawn_reproduce(&config_path)?;
+    let (mut child, notifications) = spawn_reproduce(&config_path)?;
     let pid = child.id();
 
     // Let the client connect and enter the directory-polling loop.
@@ -235,7 +264,7 @@ async fn run_signal_scenario(termination_signal: libc::c_int) -> Result<()> {
     // SIGHUP must NOT terminate the process. Wait for the child to log that
     // its handler ran so we are not asserting on an unobserved signal.
     send_signal(pid, libc::SIGHUP);
-    if timeout(POST_SIGNAL_DWELL, sighup_handled.notified())
+    if timeout(POST_SIGNAL_DWELL, notifications.sighup_handled.notified())
         .await
         .is_err()
     {
@@ -465,8 +494,7 @@ async fn sighup_reload_uses_rotated_tls_on_next_reconnect() {
     let config_path = write_reload_config(&temp_dir, server_addr, &input_dir, &ca_path)
         .expect("write reload config");
 
-    let (mut child, sighup_handled) =
-        spawn_reproduce(&config_path).expect("spawn reproduce binary");
+    let (mut child, notifications) = spawn_reproduce(&config_path).expect("spawn reproduce binary");
     let pid = child.id();
 
     let conn_v1 = match timeout(Duration::from_secs(20), conn_v1_rx).await {
@@ -477,6 +505,28 @@ async fn sighup_reload_uses_rotated_tls_on_next_reconnect() {
             panic!("initial (v1) handshake did not complete: {other:?}");
         }
     };
+
+    // The server-side `conn_v1_rx` notify fires as soon as `server_handshake`
+    // returns, but the client still needs to finish `open_bi`, spawn its
+    // ACK task, return from `GigantoSender::new`, and enter the directory
+    // polling loop. Waiting on `conn_v1_rx` alone leaves a window where the
+    // main task is still inside `create_sender`; forcing a reconnect in
+    // that window can surface a non-`WriteError` failure that skips the
+    // reload path entirely. Block until the child logs that its sender is
+    // connected so the rest of the test operates against a settled client.
+    if timeout(
+        Duration::from_secs(30),
+        notifications.sender_ready.notified(),
+    )
+    .await
+    .is_err()
+    {
+        server_task.abort();
+        send_signal(pid, libc::SIGTERM);
+        let _ = wait_for_exit(&mut child, EXIT_WAIT).await;
+        reap(&mut child);
+        panic!("child did not log sender readiness within 30s; initial handshake never settled");
+    }
 
     // Rotate CA file on disk to PKI v2 BEFORE signalling, so the reload
     // handler picks up the new material the moment it fires.
@@ -494,9 +544,12 @@ async fn sighup_reload_uses_rotated_tls_on_next_reconnect() {
     // barrier, a slow runner can reach the forced-reconnect step before
     // the child has observed the signal, causing the reconnect to rebuild
     // with stale TLS and fail CA verification against the rotated server.
-    if timeout(Duration::from_secs(30), sighup_handled.notified())
-        .await
-        .is_err()
+    if timeout(
+        Duration::from_secs(30),
+        notifications.sighup_handled.notified(),
+    )
+    .await
+    .is_err()
     {
         server_task.abort();
         send_signal(pid, libc::SIGTERM);
