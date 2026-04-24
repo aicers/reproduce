@@ -250,11 +250,15 @@ impl GigantoSender {
     /// Tears down the current QUIC stream and establishes a fresh one,
     /// performing the handshake again.
     ///
-    /// When `reload_requested` is set, the endpoint is rebuilt from the
-    /// configured cert/key/CA paths before the next handshake so that
-    /// externally rotated certificates take effect. If the rebuild fails,
-    /// the last-known-good endpoint is preserved and `reload_requested`
-    /// remains set so that the next reconnect retries the rebuild.
+    /// When `reload_requested` is set, a replacement endpoint is built
+    /// from the configured cert/key/CA paths and used for the next
+    /// handshake so that externally rotated certificates take effect.
+    /// The replacement endpoint is only committed and `reload_requested`
+    /// is only cleared after `connect_stream` succeeds with it; if the
+    /// rebuild fails, or if the new endpoint cannot complete the next
+    /// handshake or stream setup, the last-known-good endpoint is
+    /// preserved and `reload_requested` remains set so that the next
+    /// reconnect retries the reload with fresh material.
     ///
     /// On `TimedOut` the method retries indefinitely. After a successful
     /// reconnection `init_msg` is reset to `true` so that the next call to
@@ -266,25 +270,38 @@ impl GigantoSender {
     pub async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
         sleep(Duration::from_secs(2)).await;
 
-        if self.reload_requested.load(Ordering::SeqCst) {
+        // If a reload was requested, build a replacement endpoint from
+        // fresh TLS material, but do NOT commit it to `self` or clear
+        // `reload_requested` yet. A valid-but-incompatible TLS rotation
+        // (e.g. a new CA that parses but does not trust the current
+        // server cert) would otherwise discard the last-known-good
+        // endpoint before we confirm the replacement can actually
+        // complete a QUIC/TLS handshake.
+        let rebuilt_endpoint = if self.reload_requested.load(Ordering::SeqCst) {
             info!("Reload requested, rebuilding QUIC endpoint from fresh TLS material");
             match self.try_rebuild_endpoint().await {
-                Ok(new_endpoint) => {
-                    self.endpoint = new_endpoint;
-                    self.reload_requested.store(false, Ordering::SeqCst);
-                    info!("QUIC endpoint rebuilt successfully");
-                }
+                Ok(new_endpoint) => Some(new_endpoint),
                 Err(error) => {
                     warn!(
                         "Failed to rebuild QUIC endpoint, \
                          keeping last-known-good endpoint: {error}"
                     );
+                    None
                 }
             }
-        }
+        } else {
+            None
+        };
 
+        let endpoint_for_connect = rebuilt_endpoint.as_ref().unwrap_or(&self.endpoint);
         let (conn, send, finish_checker) =
-            connect_stream(&self.endpoint, self.server_addr, &self.name).await?;
+            connect_stream(endpoint_for_connect, self.server_addr, &self.name).await?;
+
+        if let Some(new_endpoint) = rebuilt_endpoint {
+            self.endpoint = new_endpoint;
+            self.reload_requested.store(false, Ordering::SeqCst);
+            info!("QUIC endpoint rebuilt successfully");
+        }
         self.conn = conn;
         self.sender = send;
         self.init_msg = true;
@@ -1944,6 +1961,58 @@ mod tests {
         assert!(
             sender.reload_requested.load(Ordering::SeqCst),
             "reload_requested must stay set so the next reconnect retries rebuild"
+        );
+    }
+
+    // Simulates a valid-but-incompatible TLS rotation: the rebuilt
+    // endpoint is created from a syntactically valid TLS triple (so
+    // `try_rebuild_endpoint` succeeds) and even completes the QUIC/TLS
+    // transport handshake, but the subsequent application-level
+    // handshake fails. The last-known-good endpoint and the reload
+    // intent must both be preserved so that a later reconnect can retry
+    // with fresh material.
+    #[tokio::test]
+    async fn reconnect_with_successful_rebuild_but_failed_handshake_preserves_state() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let (reconnect_result, server_result) = tokio::join!(sender.reconnect(), async {
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept a reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("sender reconnect should complete QUIC setup")?;
+            let err = server_handshake(&connection, "0.0.1")
+                .await
+                .expect_err("server should reject an incompatible reconnect version");
+            Ok::<_, anyhow::Error>(err)
+        });
+
+        server_result.expect("server reconnect task should complete");
+        reconnect_result
+            .expect_err("reconnect must fail when the rebuilt endpoint's handshake is rejected");
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint must stay the last-known-good one when the rebuilt endpoint's handshake fails"
+        );
+        assert!(
+            sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested must stay set so the next reconnect retries the reload"
         );
     }
 }

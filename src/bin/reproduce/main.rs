@@ -1103,37 +1103,42 @@ fn install_signal_handlers(reload_requested: Arc<AtomicBool>) -> Result<()> {
         .set(sender.clone())
         .map_err(|_| anyhow!("signal handlers were already installed"))?;
 
-    spawn_sighup_handler(reload_requested);
-    spawn_termination_handlers(sender);
+    spawn_sighup_handler(reload_requested)?;
+    spawn_termination_handlers(sender)?;
     Ok(())
 }
 
 #[cfg(unix)]
-fn spawn_sighup_handler(reload_requested: Arc<AtomicBool>) {
+fn spawn_sighup_handler(reload_requested: Arc<AtomicBool>) -> Result<()> {
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .context("failed to register SIGHUP handler")?;
     tokio::spawn(async move {
-        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-            .expect("failed to register SIGHUP handler");
         loop {
             sighup.recv().await;
             reload_requested.store(true, Ordering::SeqCst);
             info!("SIGHUP received, reload requested");
         }
     });
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn spawn_sighup_handler(_reload_requested: Arc<AtomicBool>) {
+fn spawn_sighup_handler(_reload_requested: Arc<AtomicBool>) -> Result<()> {
     // SIGHUP is not available on non-Unix platforms.
+    Ok(())
 }
 
 #[cfg(unix)]
-fn spawn_termination_handlers(sender: watch::Sender<bool>) {
+fn spawn_termination_handlers(sender: watch::Sender<bool>) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sigint =
+        signal(SignalKind::interrupt()).context("failed to register SIGINT handler")?;
+    let mut sigterm =
+        signal(SignalKind::terminate()).context("failed to register SIGTERM handler")?;
 
     let sigint_sender = sender.clone();
     tokio::spawn(async move {
-        let mut sigint =
-            signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");
         if sigint.recv().await.is_some() {
             info!("SIGINT received, shutting down");
             let _ = sigint_sender.send(true);
@@ -1141,23 +1146,23 @@ fn spawn_termination_handlers(sender: watch::Sender<bool>) {
     });
 
     tokio::spawn(async move {
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
         if sigterm.recv().await.is_some() {
             info!("SIGTERM received, shutting down");
             let _ = sender.send(true);
         }
     });
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn spawn_termination_handlers(sender: watch::Sender<bool>) {
+fn spawn_termination_handlers(sender: watch::Sender<bool>) -> Result<()> {
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             info!("Ctrl-C received, shutting down");
             let _ = sender.send(true);
         }
     });
+    Ok(())
 }
 
 fn shutdown_receiver() -> watch::Receiver<bool> {
