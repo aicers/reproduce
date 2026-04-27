@@ -41,6 +41,35 @@ pub const INTERVAL: u64 = 5;
 /// Limits the maximum number of events to accumulate before flushing a batch.
 pub const BATCH_SIZE: usize = 100;
 
+/// Categorizes the outcome of a successful `GigantoSender::reconnect()`
+/// call.
+///
+/// `Reconnected` means the sender now has a working stream that
+/// reflects the operator's reload intent: either no reload was
+/// requested, or a requested reload was fully applied (the rebuilt
+/// endpoint completed handshake/stream setup and was committed,
+/// clearing `reload_requested`).
+///
+/// `ReloadDeferred` means the sender now has a working stream against
+/// the **last-known-good** endpoint, but a requested reload could not
+/// be applied because the rebuilt endpoint failed handshake/stream
+/// setup. The last-known-good endpoint is kept and `reload_requested`
+/// remains set so a later reconnect can retry the reload with fresh
+/// material. This is *not* a fatal error: the daemon must keep running
+/// to expose that retry opportunity, which is why this is reported as a
+/// successful outcome rather than an error.
+#[derive(Debug)]
+pub enum ReconnectOutcome {
+    /// The reconnect fully succeeded, including any pending reload.
+    Reconnected,
+
+    /// The reconnect succeeded against the last-known-good endpoint
+    /// after the reload candidate failed handshake/stream setup. The
+    /// carried error describes why the candidate was rejected, so the
+    /// caller can log it; `reload_requested` remains set.
+    ReloadDeferred(SenderError),
+}
+
 #[derive(Debug, Error)]
 pub enum SenderError {
     #[error("failed to connect Giganto")]
@@ -254,59 +283,81 @@ impl GigantoSender {
     /// from the configured cert/key/CA paths and used for the next
     /// handshake so that externally rotated certificates take effect.
     /// The replacement endpoint is only committed and `reload_requested`
-    /// is only cleared after `connect_stream` succeeds with it; if the
-    /// rebuild fails, or if the new endpoint cannot complete the next
-    /// handshake or stream setup, the last-known-good endpoint is
-    /// preserved and `reload_requested` remains set so that the next
-    /// reconnect retries the reload with fresh material.
+    /// is only cleared after `connect_stream` succeeds with it. If the
+    /// rebuild itself fails, or if the rebuilt endpoint cannot complete
+    /// the next handshake or stream setup, the method falls back to the
+    /// last-known-good endpoint to obtain a working stream and reports
+    /// `ReconnectOutcome::ReloadDeferred` so the caller can keep the
+    /// daemon running and let a later reconnect retry the reload. Only
+    /// when the last-known-good endpoint also cannot reconnect does
+    /// `reconnect()` return a fatal `SenderError`.
     ///
-    /// On `TimedOut` the method retries indefinitely. After a successful
-    /// reconnection `init_msg` is reset to `true` so that the next call to
-    /// `ensure_header_sent` will write the record header.
+    /// On `TimedOut` the connect path retries indefinitely. After a
+    /// successful reconnection `init_msg` is reset to `true` so that the
+    /// next call to `ensure_header_sent` will write the record header.
     ///
     /// # Errors
     ///
-    /// Returns an error if the handshake or stream opening fails.
-    pub async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+    /// Returns an error only when the last-known-good endpoint also
+    /// fails handshake or stream opening (i.e. the reconnect cannot
+    /// produce a working stream by any path).
+    pub async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
         sleep(Duration::from_secs(2)).await;
 
-        // If a reload was requested, build a replacement endpoint from
-        // fresh TLS material, but do NOT commit it to `self` or clear
-        // `reload_requested` yet. A valid-but-incompatible TLS rotation
-        // (e.g. a new CA that parses but does not trust the current
-        // server cert) would otherwise discard the last-known-good
-        // endpoint before we confirm the replacement can actually
-        // complete a QUIC/TLS handshake.
-        let rebuilt_endpoint = if self.reload_requested.load(Ordering::SeqCst) {
+        // If a reload was requested, attempt the candidate path first.
+        // The replacement endpoint is committed and `reload_requested`
+        // is cleared *only* if `connect_stream` against it succeeds;
+        // otherwise we fall through to the last-known-good endpoint so
+        // that a valid-but-incompatible TLS rotation cannot strand the
+        // daemon without a working connection.
+        let mut deferred_reload_error: Option<SenderError> = None;
+        if self.reload_requested.load(Ordering::SeqCst) {
             info!("Reload requested, rebuilding QUIC endpoint from fresh TLS material");
             match self.try_rebuild_endpoint().await {
-                Ok(new_endpoint) => Some(new_endpoint),
+                Ok(candidate) => {
+                    match connect_stream(&candidate, self.server_addr, &self.name).await {
+                        Ok((conn, send, finish_checker)) => {
+                            self.endpoint = candidate;
+                            self.reload_requested.store(false, Ordering::SeqCst);
+                            info!("QUIC endpoint rebuilt successfully");
+                            self.conn = conn;
+                            self.sender = send;
+                            self.init_msg = true;
+                            self.finish_checker = finish_checker;
+                            return Ok(ReconnectOutcome::Reconnected);
+                        }
+                        Err(error) => {
+                            warn!(
+                                "Reload candidate handshake/stream setup failed; \
+                                 falling back to last-known-good endpoint and \
+                                 leaving reload pending: {error}"
+                            );
+                            deferred_reload_error = Some(error);
+                        }
+                    }
+                }
                 Err(error) => {
                     warn!(
-                        "Failed to rebuild QUIC endpoint, \
-                         keeping last-known-good endpoint: {error}"
+                        "Failed to rebuild QUIC endpoint; keeping \
+                         last-known-good endpoint and leaving reload \
+                         pending: {error}"
                     );
-                    None
+                    deferred_reload_error = Some(error);
                 }
             }
-        } else {
-            None
-        };
-
-        let endpoint_for_connect = rebuilt_endpoint.as_ref().unwrap_or(&self.endpoint);
-        let (conn, send, finish_checker) =
-            connect_stream(endpoint_for_connect, self.server_addr, &self.name).await?;
-
-        if let Some(new_endpoint) = rebuilt_endpoint {
-            self.endpoint = new_endpoint;
-            self.reload_requested.store(false, Ordering::SeqCst);
-            info!("QUIC endpoint rebuilt successfully");
         }
+
+        let (conn, send, finish_checker) =
+            connect_stream(&self.endpoint, self.server_addr, &self.name).await?;
         self.conn = conn;
         self.sender = send;
         self.init_msg = true;
         self.finish_checker = finish_checker;
-        Ok(())
+
+        Ok(match deferred_reload_error {
+            Some(error) => ReconnectOutcome::ReloadDeferred(error),
+            None => ReconnectOutcome::Reconnected,
+        })
     }
 
     /// Attempts to rebuild the QUIC endpoint from the configured TLS file
@@ -1968,9 +2019,10 @@ mod tests {
     // endpoint is created from a syntactically valid TLS triple (so
     // `try_rebuild_endpoint` succeeds) and even completes the QUIC/TLS
     // transport handshake, but the subsequent application-level
-    // handshake fails. The last-known-good endpoint and the reload
-    // intent must both be preserved so that a later reconnect can retry
-    // with fresh material.
+    // handshake fails. The reconnect must fall back to the
+    // last-known-good endpoint to obtain a working stream and report
+    // `ReloadDeferred` so the daemon can keep running while a later
+    // reconnect retries the reload with fresh material.
     #[tokio::test]
     async fn reconnect_with_successful_rebuild_but_failed_handshake_preserves_state() {
         let (mut sender, session) = connect_stream_sender()
@@ -1985,22 +2037,45 @@ mod tests {
 
         let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
         let (reconnect_result, server_result) = tokio::join!(sender.reconnect(), async {
+            // First accept: the rebuilt reload candidate connects but
+            // the test server rejects the application handshake.
             let incoming = timeout(accept_timeout, session.server_endpoint.accept())
                 .await
-                .context("test server should accept a reconnect in time")?
+                .context("test server should accept the reload candidate in time")?
                 .context("test server endpoint should stay open while accepting")?;
-            let connection = incoming
+            let candidate_connection = incoming
                 .await
-                .context("sender reconnect should complete QUIC setup")?;
-            let err = server_handshake(&connection, "0.0.1")
+                .context("reload candidate should complete QUIC setup")?;
+            let candidate_err = server_handshake(&candidate_connection, "0.0.1")
                 .await
-                .expect_err("server should reject an incompatible reconnect version");
-            Ok::<_, anyhow::Error>(err)
+                .expect_err("server should reject the reload candidate version");
+            drop(candidate_connection);
+
+            // Second accept: the fallback to the last-known-good
+            // endpoint connects and completes the handshake so the
+            // sender ends up with a working stream.
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept the fallback reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let fallback_connection = incoming
+                .await
+                .context("fallback reconnect should complete QUIC setup")?;
+            server_handshake(&fallback_connection, REQUIRED_GIGANTO_VERSION)
+                .await
+                .context("fallback handshake should succeed")?;
+            Ok::<_, anyhow::Error>((candidate_err, fallback_connection))
         });
 
         server_result.expect("server reconnect task should complete");
-        reconnect_result
-            .expect_err("reconnect must fail when the rebuilt endpoint's handshake is rejected");
+        let outcome = reconnect_result
+            .expect("reconnect must succeed via the last-known-good endpoint fallback");
+        match outcome {
+            ReconnectOutcome::ReloadDeferred(SenderError::Handshake(_)) => {}
+            other => panic!(
+                "reconnect should report ReloadDeferred(Handshake), got {other:?}"
+            ),
+        }
 
         let endpoint_addr_after_reconnect = sender
             .endpoint

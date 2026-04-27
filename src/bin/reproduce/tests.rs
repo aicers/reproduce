@@ -15,7 +15,7 @@ use giganto_client::{
 };
 use quinn::Endpoint;
 use reproduce::config::GigantoConfig;
-use reproduce::sender::{CHANNEL_CLOSE_TIMESTAMP, REQUIRED_GIGANTO_VERSION};
+use reproduce::sender::{CHANNEL_CLOSE_TIMESTAMP, REQUIRED_GIGANTO_VERSION, ReconnectOutcome};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tempfile::tempdir;
 use tokio::time::timeout;
@@ -86,9 +86,11 @@ impl PipelineSender for MockSender {
         Ok(())
     }
 
-    async fn reconnect(&mut self) -> std::result::Result<(), reproduce::sender::SenderError> {
+    async fn reconnect(
+        &mut self,
+    ) -> std::result::Result<ReconnectOutcome, reproduce::sender::SenderError> {
         self.reconnect_calls += 1;
-        Ok(())
+        Ok(ReconnectOutcome::Reconnected)
     }
 }
 

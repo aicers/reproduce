@@ -16,6 +16,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   committed after the replacement endpoint completes the next handshake and
   stream setup; a valid-but-incompatible TLS rotation now preserves the
   last-known-good endpoint and keeps the reload pending for the next retry.
+  When a write-driven reconnect rebuilds the reload candidate but its
+  handshake or stream setup fails, the sender falls back to the last-known-good
+  endpoint and reports a deferred-reload outcome so the daemon keeps
+  delivering events while the reload intent remains pending; only a failure
+  on the last-known-good endpoint surfaces as a fatal reconnect error.
   Signal registration failures are now surfaced from `install_signal_handlers`
   instead of panicking inside a background task.
 - Added support for sysmon files exported from Giganto.

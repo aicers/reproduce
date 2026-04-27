@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use giganto_client::{RawEventKind, frame::SendError};
 use thiserror::Error;
 use tokio::sync::watch;
+use tracing::warn;
 
 use crate::collector::{Collector, CollectorError};
-use crate::sender::{GigantoSender, SenderError};
+use crate::sender::{GigantoSender, ReconnectOutcome, SenderError};
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -27,7 +28,7 @@ pub trait PipelineSender {
     ) -> std::result::Result<(), SenderError>;
     async fn send_batch(&mut self, events: &[(i64, Vec<u8>)])
     -> std::result::Result<(), SendError>;
-    async fn reconnect(&mut self) -> std::result::Result<(), SenderError>;
+    async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError>;
 }
 
 #[async_trait]
@@ -46,7 +47,7 @@ impl PipelineSender for GigantoSender {
         GigantoSender::send_batch(self, events).await
     }
 
-    async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+    async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
         GigantoSender::reconnect(self).await
     }
 }
@@ -89,7 +90,7 @@ where
             if let Err(error) = sender.ensure_header_sent(batch.kind).await {
                 match error {
                     SenderError::Send(SendError::WriteError(_)) => {
-                        sender.reconnect().await?;
+                        log_reconnect_outcome(sender.reconnect().await?);
                         continue;
                     }
                     other => return Err(PipelineError::Sender(other)),
@@ -98,7 +99,7 @@ where
             match sender.send_batch(&batch.events).await {
                 Ok(()) => break,
                 Err(SendError::WriteError(_)) => {
-                    sender.reconnect().await?;
+                    log_reconnect_outcome(sender.reconnect().await?);
                 }
                 Err(error) => return Err(PipelineError::Send(error)),
             }
@@ -120,6 +121,16 @@ where
     }
 
     Ok(())
+}
+
+fn log_reconnect_outcome(outcome: ReconnectOutcome) {
+    if let ReconnectOutcome::ReloadDeferred(error) = outcome {
+        warn!(
+            "QUIC endpoint reload deferred; \
+             reconnected via last-known-good endpoint and \
+             reload intent remains pending: {error}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -188,10 +199,10 @@ mod tests {
             Ok(())
         }
 
-        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             self.reconnects += 1;
             let _ = self.shutdown.send(true);
-            Ok(())
+            Ok(ReconnectOutcome::Reconnected)
         }
     }
 
@@ -253,9 +264,9 @@ mod tests {
             Ok(())
         }
 
-        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             self.reconnects += 1;
-            Ok(())
+            Ok(ReconnectOutcome::Reconnected)
         }
     }
 
@@ -313,9 +324,9 @@ mod tests {
             )))
         }
 
-        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             let _ = self.shutdown.send(true);
-            Ok(())
+            Ok(ReconnectOutcome::Reconnected)
         }
     }
 
@@ -370,7 +381,7 @@ mod tests {
             )))
         }
 
-        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             self.reconnects += 1;
             Err(SenderError::Context {
                 context: "reconnect failed",
@@ -423,9 +434,9 @@ mod tests {
             Err(serialization_failure("non-write failure"))
         }
 
-        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             self.reconnects += 1;
-            Ok(())
+            Ok(ReconnectOutcome::Reconnected)
         }
     }
 
@@ -482,10 +493,10 @@ mod tests {
             Err(serialization_failure("shutdown flush failed"))
         }
 
-        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             self.reconnects += 1;
             let _ = self.shutdown.send(true);
-            Ok(())
+            Ok(ReconnectOutcome::Reconnected)
         }
     }
 
@@ -530,11 +541,11 @@ mod tests {
             Ok(())
         }
 
-        async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             self.reconnects += 1;
             self.init_msg = true;
             let _ = self.shutdown.send(true);
-            Ok(())
+            Ok(ReconnectOutcome::Reconnected)
         }
     }
 
@@ -568,6 +579,72 @@ mod tests {
             sender.header_violations, 0,
             "shutdown flush must not send a batch before the record header"
         );
+    }
+
+    struct ReloadDeferredSender {
+        send_attempts: usize,
+        reconnects: usize,
+        header_sends: usize,
+    }
+
+    #[async_trait]
+    impl PipelineSender for ReloadDeferredSender {
+        async fn ensure_header_sent(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            self.header_sends += 1;
+            Ok(())
+        }
+
+        async fn send_batch(
+            &mut self,
+            _events: &[(i64, Vec<u8>)],
+        ) -> std::result::Result<(), SendError> {
+            self.send_attempts += 1;
+            if self.send_attempts == 1 {
+                return Err(SendError::WriteError(WriteError::Stopped(
+                    VarInt::from_u32(0),
+                )));
+            }
+            Ok(())
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
+            self.reconnects += 1;
+            // Mirror the production fallback: rebuilt reload candidate
+            // failed, but the last-known-good endpoint reconnected, so the
+            // pipeline must keep running with reload intent still pending.
+            Ok(ReconnectOutcome::ReloadDeferred(SenderError::Context {
+                context: "reload candidate handshake failed",
+                source: anyhow::anyhow!("reload candidate handshake failed"),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_deferred_reconnect_keeps_pipeline_running() {
+        let next_pos = b"reload-deferred".to_vec();
+        let (_shutdown_tx, shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: next_pos.clone(),
+        };
+        let mut sender = ReloadDeferredSender {
+            send_attempts: 0,
+            reconnects: 0,
+            header_sends: 0,
+        };
+
+        run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+            .await
+            .expect("ReloadDeferred must not be propagated as a pipeline error");
+
+        assert_eq!(collector.position(), next_pos);
+        assert_eq!(sender.reconnects, 1);
+        assert_eq!(sender.send_attempts, 2);
+        assert_eq!(sender.header_sends, 2);
     }
 
     #[tokio::test]
