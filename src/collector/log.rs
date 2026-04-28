@@ -79,6 +79,10 @@ impl LogCollector {
 
 #[async_trait]
 impl Collector for LogCollector {
+    fn kind(&self) -> RawEventKind {
+        RawEventKind::Log
+    }
+
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {
             self.committed_cnt = position;
