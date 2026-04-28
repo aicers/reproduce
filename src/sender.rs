@@ -2072,9 +2072,7 @@ mod tests {
             .expect("reconnect must succeed via the last-known-good endpoint fallback");
         match outcome {
             ReconnectOutcome::ReloadDeferred(SenderError::Handshake(_)) => {}
-            other => panic!(
-                "reconnect should report ReloadDeferred(Handshake), got {other:?}"
-            ),
+            other => panic!("reconnect should report ReloadDeferred(Handshake), got {other:?}"),
         }
 
         let endpoint_addr_after_reconnect = sender
