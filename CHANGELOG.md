@@ -8,21 +8,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Handle `SIGHUP` as a reload trigger for the Giganto QUIC client so rotated TLS
-  material is applied on the next reconnect without restarting the process.
-  `SIGINT` and `SIGTERM` remain termination signals, and reconnect/shutdown
-  flush paths preserve the required header and retry behavior for this reload
-  flow. The rebuilt QUIC endpoint and the cleared reload intent are only
-  committed after the replacement endpoint completes the next handshake and
-  stream setup; a valid-but-incompatible TLS rotation now preserves the
-  last-known-good endpoint and keeps the reload pending for the next retry.
-  When a write-driven reconnect rebuilds the reload candidate but its
-  handshake or stream setup fails, the sender falls back to the last-known-good
-  endpoint and reports a deferred-reload outcome so the daemon keeps
-  delivering events while the reload intent remains pending; only a failure
-  on the last-known-good endpoint surfaces as a fatal reconnect error.
-  Signal registration failures are now surfaced from `install_signal_handlers`
-  instead of panicking inside a background task.
+- Handle `SIGHUP` as a reload trigger for the Giganto QUIC client so rotated
+  TLS material is applied on the next reconnect without restarting the process.
+  `SIGINT` and `SIGTERM` remain termination signals. Reload failures preserve
+  the last-known-good connection state and keep reload intent pending for a
+  later retry.
 - Added support for sysmon files exported from Giganto.
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.

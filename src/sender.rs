@@ -41,6 +41,26 @@ pub const INTERVAL: u64 = 5;
 /// Limits the maximum number of events to accumulate before flushing a batch.
 pub const BATCH_SIZE: usize = 100;
 
+/// Selects how the connect helper should react to QUIC handshake/idle
+/// timeouts (`quinn::ConnectionError::TimedOut`).
+///
+/// `RetryForever` matches the legacy behavior used for the
+/// last-known-good endpoint: when the server is briefly unreachable, the
+/// helper sleeps for `INTERVAL` seconds and retries indefinitely so the
+/// daemon eventually reconnects on its own.
+///
+/// `ReturnOnTimeout` is used for the reload candidate path. A failed
+/// reload must not strand the daemon retrying the candidate forever —
+/// surfacing the timeout lets `reconnect()` fall back to the
+/// last-known-good endpoint and report `ReloadDeferred` so the daemon
+/// keeps delivering events while the reload retries on a later
+/// reconnect.
+#[derive(Debug, Clone, Copy)]
+enum TimeoutPolicy {
+    RetryForever,
+    ReturnOnTimeout,
+}
+
 /// Categorizes the outcome of a successful `GigantoSender::reconnect()`
 /// call.
 ///
@@ -185,8 +205,13 @@ impl GigantoSender {
         .map_err(|source| {
             SenderError::context("failed to join endpoint creation task", source)
         })??;
-        let (conn, send, finish_checker) =
-            connect_stream(&endpoint, server_addr, server_name).await?;
+        let (conn, send, finish_checker) = connect_stream(
+            &endpoint,
+            server_addr,
+            server_name,
+            TimeoutPolicy::RetryForever,
+        )
+        .await?;
         info!("Connected to data store ingest server at {server_addr}");
 
         Ok(Self {
@@ -292,9 +317,15 @@ impl GigantoSender {
     /// when the last-known-good endpoint also cannot reconnect does
     /// `reconnect()` return a fatal `SenderError`.
     ///
-    /// On `TimedOut` the connect path retries indefinitely. After a
-    /// successful reconnection `init_msg` is reset to `true` so that the
-    /// next call to `ensure_header_sent` will write the record header.
+    /// The two paths use different timeout policies. The reload candidate
+    /// uses `TimeoutPolicy::ReturnOnTimeout` so a hung handshake on the
+    /// rebuilt endpoint surfaces as an error and triggers the
+    /// last-known-good fallback rather than retrying forever. The
+    /// last-known-good path keeps the legacy
+    /// `TimeoutPolicy::RetryForever` behavior so transient server
+    /// outages reconnect on their own. After a successful reconnection
+    /// `init_msg` is reset to `true` so that the next call to
+    /// `ensure_header_sent` will write the record header.
     ///
     /// # Errors
     ///
@@ -315,7 +346,14 @@ impl GigantoSender {
             info!("Reload requested, rebuilding QUIC endpoint from fresh TLS material");
             match self.try_rebuild_endpoint().await {
                 Ok(candidate) => {
-                    match connect_stream(&candidate, self.server_addr, &self.name).await {
+                    match connect_stream(
+                        &candidate,
+                        self.server_addr,
+                        &self.name,
+                        TimeoutPolicy::ReturnOnTimeout,
+                    )
+                    .await
+                    {
                         Ok((conn, send, finish_checker)) => {
                             self.endpoint = candidate;
                             self.reload_requested.store(false, Ordering::SeqCst);
@@ -347,8 +385,13 @@ impl GigantoSender {
             }
         }
 
-        let (conn, send, finish_checker) =
-            connect_stream(&self.endpoint, self.server_addr, &self.name).await?;
+        let (conn, send, finish_checker) = connect_stream(
+            &self.endpoint,
+            self.server_addr,
+            &self.name,
+            TimeoutPolicy::RetryForever,
+        )
+        .await?;
         self.conn = conn;
         self.sender = send;
         self.init_msg = true;
@@ -394,8 +437,9 @@ async fn connect_stream(
     endpoint: &Endpoint,
     server_addr: SocketAddr,
     server_name: &str,
+    timeout_policy: TimeoutPolicy,
 ) -> std::result::Result<(Connection, SendStream, Arc<AtomicBool>), SenderError> {
-    let conn = connect_with_retry(endpoint, server_addr, server_name).await?;
+    let conn = connect_with_retry(endpoint, server_addr, server_name, timeout_policy).await?;
     client_handshake(&conn, REQUIRED_GIGANTO_VERSION)
         .await
         .map_err(|source| SenderError::Handshake(source.into()))?;
@@ -414,11 +458,15 @@ async fn connect_stream(
     Ok((conn, send, finish_checker_send))
 }
 
-/// Connects to the server, retrying on timeout to preserve the legacy behavior.
+/// Connects to the server, dispatching on the configured `TimeoutPolicy`
+/// to either retry forever (legacy behavior, used for the last-known-good
+/// endpoint) or surface the timeout (used for reload-candidate connects so
+/// `reconnect()` can fall back without looping forever).
 async fn connect_with_retry(
     endpoint: &Endpoint,
     server_addr: SocketAddr,
     server_name: &str,
+    timeout_policy: TimeoutPolicy,
 ) -> std::result::Result<Connection, SenderError> {
     loop {
         match endpoint
@@ -427,10 +475,15 @@ async fn connect_with_retry(
             .await
         {
             Ok(conn) => return Ok(conn),
-            Err(quinn::ConnectionError::TimedOut) => {
-                info!("Server timeout, reconnecting...");
-                sleep(Duration::from_secs(INTERVAL)).await;
-            }
+            Err(quinn::ConnectionError::TimedOut) => match timeout_policy {
+                TimeoutPolicy::RetryForever => {
+                    info!("Server timeout, reconnecting...");
+                    sleep(Duration::from_secs(INTERVAL)).await;
+                }
+                TimeoutPolicy::ReturnOnTimeout => {
+                    return Err(SenderError::Connection(quinn::ConnectionError::TimedOut));
+                }
+            },
             Err(error) => return Err(SenderError::Connection(error)),
         }
     }
@@ -619,7 +672,7 @@ mod tests {
         frame::recv_raw,
         ingest::receive_record_header,
     };
-    use quinn::{Connection, RecvStream, SendStream};
+    use quinn::{Connection, IdleTimeout, RecvStream, SendStream, VarInt};
     use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
     use tempfile::tempdir;
     use tokio::time::{Duration, timeout};
@@ -2086,6 +2139,116 @@ mod tests {
         assert!(
             sender.reload_requested.load(Ordering::SeqCst),
             "reload_requested must stay set so the next reconnect retries the reload"
+        );
+    }
+
+    /// Builds a client `Endpoint` whose QUIC `max_idle_timeout` is short
+    /// enough that connecting to a non-responsive UDP address times out
+    /// within a test budget instead of the default ~30 s. Used by the
+    /// `TimeoutPolicy` regression tests.
+    fn build_short_idle_client_endpoint() -> Result<Endpoint> {
+        let cert_path = fixture_path(TEST_CERT_PEM);
+        let key_path = fixture_path(TEST_KEY_PEM);
+        let root_path = fixture_path(TEST_ROOT_PEM);
+
+        let (cert_pem, key_pem) =
+            read_identity_files(&cert_path, &key_path).context("fixture identity should load")?;
+        let pv_key =
+            parse_private_key(&key_path, key_pem).context("fixture private key should parse")?;
+        let cert_chain = parse_cert_chain(&cert_path, cert_pem)
+            .context("fixture certificate chain should parse")?;
+        let server_root =
+            to_root_cert(&[root_path]).context("fixture root certificate should load")?;
+        let client_crypto = rustls::ClientConfig::builder()
+            .with_root_certificates(server_root)
+            .with_client_auth_cert(cert_chain, pv_key)
+            .context("fixture client config should build")?;
+
+        let mut transport = TransportConfig::default();
+        let idle = IdleTimeout::from(VarInt::from_u32(500));
+        transport.max_idle_timeout(Some(idle));
+
+        let mut client_config = quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+                .context("short-idle QUIC client config should build")?,
+        ));
+        client_config.transport_config(Arc::new(transport));
+
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let mut endpoint =
+            quinn::Endpoint::client(bind_addr).context("short-idle client endpoint should bind")?;
+        endpoint.set_default_client_config(client_config);
+        Ok(endpoint)
+    }
+
+    /// Regression test for the timeout-shaped reload-candidate failure:
+    /// `ReturnOnTimeout` must surface a `quinn::ConnectionError::TimedOut`
+    /// instead of looping forever the way `RetryForever` does. Without
+    /// this distinction, a hung handshake on the rebuilt reload candidate
+    /// would prevent `reconnect()` from ever falling back to the
+    /// last-known-good endpoint.
+    #[tokio::test]
+    async fn connect_with_retry_returns_on_timeout_when_policy_is_return_on_timeout() {
+        let endpoint =
+            build_short_idle_client_endpoint().expect("short-idle endpoint should build");
+
+        // Bind a UDP socket that never speaks QUIC. The client handshake
+        // gets no response and times out after `max_idle_timeout`.
+        let dummy_socket =
+            std::net::UdpSocket::bind("127.0.0.1:0").expect("dummy UDP socket should bind");
+        let dummy_addr = dummy_socket
+            .local_addr()
+            .expect("dummy UDP socket should have a local address");
+
+        let result = timeout(
+            Duration::from_secs(5),
+            connect_with_retry(
+                &endpoint,
+                dummy_addr,
+                TEST_SERVER_NAME,
+                TimeoutPolicy::ReturnOnTimeout,
+            ),
+        )
+        .await
+        .expect("ReturnOnTimeout policy must surface the timeout instead of retrying forever");
+
+        match result {
+            Err(SenderError::Connection(quinn::ConnectionError::TimedOut)) => {}
+            other => {
+                panic!("ReturnOnTimeout must report a TimedOut connection error, got {other:?}")
+            }
+        }
+    }
+
+    /// Companion to the test above: the legacy `RetryForever` policy must
+    /// keep looping on `TimedOut` so transient server outages eventually
+    /// reconnect. The outer `tokio::time::timeout` is the assertion: if
+    /// the helper returns an error within the budget, the regression
+    /// would be that the legacy retry-forever behavior was lost.
+    #[tokio::test]
+    async fn connect_with_retry_keeps_retrying_when_policy_is_retry_forever() {
+        let endpoint =
+            build_short_idle_client_endpoint().expect("short-idle endpoint should build");
+
+        let dummy_socket =
+            std::net::UdpSocket::bind("127.0.0.1:0").expect("dummy UDP socket should bind");
+        let dummy_addr = dummy_socket
+            .local_addr()
+            .expect("dummy UDP socket should have a local address");
+
+        let elapsed = timeout(
+            Duration::from_secs(2),
+            connect_with_retry(
+                &endpoint,
+                dummy_addr,
+                TEST_SERVER_NAME,
+                TimeoutPolicy::RetryForever,
+            ),
+        )
+        .await;
+        assert!(
+            elapsed.is_err(),
+            "RetryForever must keep looping on TimedOut, but the helper returned: {elapsed:?}"
         );
     }
 }
