@@ -82,6 +82,13 @@ pub struct CollectedBatch {
 /// Produces batches of parsed events from a data source.
 #[async_trait]
 pub trait Collector: Send {
+    /// Returns the Giganto raw event kind that this collector emits.
+    ///
+    /// The pipeline uses this to send the stream header even when the source
+    /// has no records, so the receiver can recognize the raw event kind
+    /// before the stream is finished.
+    fn kind(&self) -> RawEventKind;
+
     /// Returns the next batch of events, or `None` when the source is
     /// exhausted (not polling or shutdown requested).
     ///

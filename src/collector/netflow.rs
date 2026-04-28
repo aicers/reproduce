@@ -154,6 +154,10 @@ impl<T> Collector for NetflowCollector<T>
 where
     T: Serialize + ParseNetflowDatasets + Unpin + Debug + Send,
 {
+    fn kind(&self) -> RawEventKind {
+        self.protocol
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if self.pending_events.is_empty()

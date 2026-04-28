@@ -80,6 +80,10 @@ impl<T> Collector for GigantoImportCollector<T>
 where
     T: Serialize + TryFromGigantoRecord + Unpin + Debug + Send,
 {
+    fn kind(&self) -> RawEventKind {
+        self.protocol
+    }
+
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {
             self.committed_line = position;
