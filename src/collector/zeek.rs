@@ -83,6 +83,10 @@ impl<T> Collector for ZeekCollector<T>
 where
     T: Serialize + TryFromZeekRecord + Unpin + Debug + Send,
 {
+    fn kind(&self) -> RawEventKind {
+        self.protocol
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {

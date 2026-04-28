@@ -72,6 +72,10 @@ impl OplogCollector {
 
 #[async_trait]
 impl Collector for OplogCollector {
+    fn kind(&self) -> RawEventKind {
+        RawEventKind::OpLog
+    }
+
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {
             self.committed_cnt = position;

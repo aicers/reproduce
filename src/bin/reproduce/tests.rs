@@ -662,6 +662,35 @@ async fn run_with_sender_processes_directory_input_and_finishes() {
 }
 
 #[tokio::test]
+async fn run_operation_log_sends_header_for_empty_input() {
+    // Regression test for issue #870: even when the oplog input file has no
+    // lines, the OpLog stream header must precede the channel-close marker so
+    // that data-store does not log `unknown raw event kind`.
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "manager.log", "");
+    let mut sender = MockSender::default();
+
+    run_operation_log(
+        &path,
+        default_run_options(),
+        &mut sender,
+        report_for(&path, OPERATION_LOG),
+    )
+    .await
+    .expect("empty operation log input should still dispatch successfully");
+
+    assert!(
+        sender.batch_sizes.is_empty(),
+        "empty operation log input should not produce any batches",
+    );
+    assert_eq!(
+        sender.ensured_protocols,
+        vec![RawEventKind::OpLog],
+        "empty operation log input must still send the OpLog stream header",
+    );
+}
+
+#[tokio::test]
 async fn run_single_processes_operation_log_and_saves_checkpoint() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(&temp_dir, "manager.log", &format!("{OPLOG_LINE}\n"));
@@ -876,9 +905,11 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
             sender.batch_sizes.is_empty(),
             "empty zeek input should not send any batches",
         );
-        assert!(
-            sender.ensured_protocols.is_empty(),
-            "empty zeek input should not send a record header",
+        assert_eq!(
+            sender.ensured_protocols.len(),
+            1,
+            "empty zeek input should still send the stream header so the \
+             receiver can recognize the raw event kind before finish",
         );
     }
 
@@ -976,9 +1007,11 @@ async fn run_sysmon_kind_dispatches_all_supported_kinds_without_records() {
             sender.batch_sizes.is_empty(),
             "header-only sysmon input should not send any batches",
         );
-        assert!(
-            sender.ensured_protocols.is_empty(),
-            "header-only sysmon input should not send a record header",
+        assert_eq!(
+            sender.ensured_protocols.len(),
+            1,
+            "header-only sysmon input should still send the stream header so \
+             the receiver can recognize the raw event kind before finish",
         );
     }
 }

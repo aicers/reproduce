@@ -70,6 +70,12 @@ where
     S: PipelineSender + ?Sized,
     F: FnMut(usize) + ?Sized,
 {
+    // Send the stream header up front so the receiver can recognize the raw
+    // event kind even when the collector has nothing to send. Without this,
+    // an empty input would make the sender emit only the channel-close
+    // marker, which the data store rejects with `unknown raw event kind`.
+    sender.ensure_header_sent(collector.kind()).await?;
+
     while let Some(batch) = collector.next_batch().await? {
         for &bytes in &batch.record_bytes {
             on_record_bytes(bytes);
@@ -151,6 +157,10 @@ mod tests {
 
     #[async_trait]
     impl Collector for OneBatchCollector {
+        fn kind(&self) -> RawEventKind {
+            RawEventKind::Log
+        }
+
         async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
             if self.yielded {
                 return Ok(None);
@@ -295,7 +305,9 @@ mod tests {
         assert_eq!(seen_bytes, vec![128]);
         assert_eq!(sender.send_attempts, 3);
         assert_eq!(sender.reconnects, 2);
-        assert_eq!(sender.header_sends, 3);
+        // One pre-pipeline header send, one per batch attempt, and one per
+        // reconnect retry.
+        assert_eq!(sender.header_sends, 4);
     }
 
     struct FailingSender {

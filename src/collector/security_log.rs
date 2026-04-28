@@ -83,6 +83,10 @@ impl<T> Collector for SecurityLogCollector<T>
 where
     T: Serialize + ParseSecurityLog + Unpin + Debug + Send,
 {
+    fn kind(&self) -> RawEventKind {
+        RawEventKind::SecuLog
+    }
+
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {
             self.committed_cnt = position;
