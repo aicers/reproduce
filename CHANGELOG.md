@@ -8,6 +8,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Handle `SIGHUP` as a reload trigger for the Giganto QUIC client so rotated
+  TLS material is applied on the next reconnect without restarting the process.
+  `SIGINT` and `SIGTERM` remain termination signals. Reload failures preserve
+  the last-known-good connection state and keep reload intent pending for a
+  later retry.
 - Added support for sysmon files exported from Giganto.
 - Added `report_dir` configuration field to specify the directory where
   report files are written. When `report = true`, `report_dir` is required.

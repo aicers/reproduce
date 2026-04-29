@@ -4,6 +4,7 @@ use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use async_trait::async_trait;
 use giganto_client::{
@@ -14,7 +15,7 @@ use giganto_client::{
 };
 use quinn::Endpoint;
 use reproduce::config::GigantoConfig;
-use reproduce::sender::{CHANNEL_CLOSE_TIMESTAMP, REQUIRED_GIGANTO_VERSION};
+use reproduce::sender::{CHANNEL_CLOSE_TIMESTAMP, REQUIRED_GIGANTO_VERSION, ReconnectOutcome};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tempfile::tempdir;
 use tokio::time::timeout;
@@ -85,9 +86,11 @@ impl PipelineSender for MockSender {
         Ok(())
     }
 
-    async fn reconnect(&mut self) -> std::result::Result<(), reproduce::sender::SenderError> {
+    async fn reconnect(
+        &mut self,
+    ) -> std::result::Result<ReconnectOutcome, reproduce::sender::SenderError> {
         self.reconnect_calls += 1;
-        Ok(())
+        Ok(ReconnectOutcome::Reconnected)
     }
 }
 
@@ -151,7 +154,7 @@ fn controller_for_file(
         None,
         last_transfer_line_suffix.map(str::to_string),
     ));
-    Controller::new(config)
+    Controller::new(config, Arc::new(AtomicBool::new(false)))
 }
 
 fn controller_for_directory(input: &Path, kind: &str, prefix: Option<&str>) -> Controller {
@@ -160,7 +163,7 @@ fn controller_for_directory(input: &Path, kind: &str, prefix: Option<&str>) -> C
         file_prefix: prefix.map(str::to_string),
         polling_mode: false,
     });
-    Controller::new(config)
+    Controller::new(config, Arc::new(AtomicBool::new(false)))
 }
 
 fn write_text_file(dir: &tempfile::TempDir, name: &str, contents: &str) -> PathBuf {
@@ -772,7 +775,10 @@ async fn run_uses_real_sender_for_single_log_input() {
     let (server_endpoint, server_addr) =
         build_server_endpoint().expect("test server endpoint should be created");
     let server_task = tokio::spawn(async move { serve_single_connection(server_endpoint).await });
-    let controller = Controller::new(giganto_config(&path, "custom", server_addr));
+    let controller = Controller::new(
+        giganto_config(&path, "custom", server_addr),
+        Arc::new(AtomicBool::new(false)),
+    );
 
     controller
         .run()
@@ -813,7 +819,7 @@ async fn run_uses_real_sender_for_directory_input() {
         file_prefix: Some("keep_".to_string()),
         polling_mode: false,
     });
-    let controller = Controller::new(config);
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
 
     controller
         .run()
@@ -1155,7 +1161,7 @@ async fn run_single_rejects_directory_input() {
 async fn run_with_sender_rejects_elastic_input() {
     let mut config = test_config(Path::new("elastic"), "process_create");
     config.input = "elastic".to_string();
-    let controller = Controller::new(config);
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
     let mut sender = MockSender::default();
 
     let err = controller
@@ -1171,7 +1177,10 @@ async fn run_with_sender_rejects_elastic_input() {
 #[tokio::test]
 async fn run_split_requires_directory_configuration() {
     let temp_dir = tempdir().expect("temporary directory should be created");
-    let controller = Controller::new(test_config(temp_dir.path(), "custom"));
+    let controller = Controller::new(
+        test_config(temp_dir.path(), "custom"),
+        Arc::new(AtomicBool::new(false)),
+    );
     let mut sender = MockSender::default();
 
     let err = controller
@@ -1203,7 +1212,7 @@ async fn run_split_returns_ok_for_empty_directory_without_polling() {
 async fn run_requires_elastic_configuration_for_elastic_input() {
     let mut config = test_config(Path::new("elastic"), "process_create");
     config.input = "elastic".to_string();
-    let controller = Controller::new(config);
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
 
     let err = controller
         .run()
@@ -1230,7 +1239,7 @@ async fn run_single_requires_file_configuration() {
     let path = write_text_file(&temp_dir, "input.log", "line1\n");
     let mut config = test_config(&path, "custom");
     config.file = None;
-    let controller = Controller::new(config);
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
     let mut sender = MockSender::default();
 
     let err = controller
@@ -1299,7 +1308,7 @@ async fn dir_polling_creates_per_file_checkpoints() {
         file_prefix: None,
         polling_mode: false,
     });
-    let controller = Controller::new(config);
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
     let mut sender = MockSender::default();
 
     controller

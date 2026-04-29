@@ -2,7 +2,8 @@ use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use std::{env, process::exit};
 
@@ -87,7 +88,9 @@ async fn main() -> anyhow::Result<()> {
     let config_filename = parse();
     let config = config::Config::new(config_filename.as_ref())?;
     let _guard = init_tracing(config.log_path.as_deref())?;
-    let controller = Controller::new(config);
+    let reload_requested = Arc::new(AtomicBool::new(false));
+    install_signal_handlers(Arc::clone(&reload_requested))?;
+    let controller = Controller::new(config, reload_requested);
     tracing::info!("Data Broker started");
     if let Err(error) = controller.run().await {
         tracing::error!("Terminated with error: {error}");
@@ -738,14 +741,18 @@ where
 
 struct Controller {
     config: Config,
+    reload_requested: Arc<AtomicBool>,
 }
 
 static SHUTDOWN_SENDER: OnceLock<watch::Sender<bool>> = OnceLock::new();
 
 impl Controller {
     #[must_use]
-    fn new(config: Config) -> Self {
-        Self { config }
+    fn new(config: Config, reload_requested: Arc<AtomicBool>) -> Self {
+        Self {
+            config,
+            reload_requested,
+        }
     }
 
     /// # Errors
@@ -756,10 +763,11 @@ impl Controller {
         let input_type = input_type(&self.config.input);
 
         if input_type == InputType::Elastic {
-            let shutdown = shutdown_receiver()?;
+            let shutdown = shutdown_receiver();
             self.run_elastic_with_shutdown(shutdown).await?;
         } else {
-            let mut sender = create_sender(&self.config).await?;
+            let mut sender =
+                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
             self.run_with_sender(&mut sender).await?;
         }
 
@@ -788,7 +796,7 @@ impl Controller {
     where
         S: ControllerSender + ?Sized,
     {
-        let shutdown = shutdown_receiver()?;
+        let shutdown = shutdown_receiver();
         self.run_split_with_shutdown(sender, shutdown).await
     }
 
@@ -865,7 +873,8 @@ impl Controller {
 
         files.sort_unstable();
         for file in files {
-            let mut sender = create_sender(&self.config).await?;
+            let mut sender =
+                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
             info!("File: {file:?}");
             let kind = file_to_kind(&file)?;
             self.run_single_with_shutdown(
@@ -893,7 +902,7 @@ impl Controller {
     where
         S: ControllerSender + ?Sized,
     {
-        let shutdown = shutdown_receiver()?;
+        let shutdown = shutdown_receiver();
         self.run_single_with_shutdown(filename, sender, kind, dir_polling_mode, shutdown)
             .await
     }
@@ -1079,21 +1088,95 @@ async fn wait_for_shutdown_or_timeout(
     }
 }
 
-fn shutdown_receiver() -> Result<watch::Receiver<bool>> {
+/// Installs process-wide signal handlers:
+///
+/// * `SIGHUP` sets `reload_requested` so the next reconnect rebuilds the
+///   QUIC endpoint from fresh TLS material. The process keeps running.
+/// * `SIGINT` and `SIGTERM` request shutdown via the shared
+///   `SHUTDOWN_SENDER` channel.
+///
+/// `ctrlc` is not used because its `termination` feature would also
+/// catch `SIGHUP` and terminate the process, defeating the reload path.
+fn install_signal_handlers(reload_requested: Arc<AtomicBool>) -> Result<()> {
+    let (sender, _receiver) = watch::channel(false);
+    SHUTDOWN_SENDER
+        .set(sender.clone())
+        .map_err(|_| anyhow!("signal handlers were already installed"))?;
+
+    spawn_sighup_handler(reload_requested)?;
+    spawn_termination_handlers(sender)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn spawn_sighup_handler(reload_requested: Arc<AtomicBool>) -> Result<()> {
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .context("failed to register SIGHUP handler")?;
+    tokio::spawn(async move {
+        loop {
+            sighup.recv().await;
+            reload_requested.store(true, Ordering::SeqCst);
+            info!("SIGHUP received, reload requested");
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn spawn_sighup_handler(_reload_requested: Arc<AtomicBool>) -> Result<()> {
+    // SIGHUP is not available on non-Unix platforms.
+    Ok(())
+}
+
+#[cfg(unix)]
+fn spawn_termination_handlers(sender: watch::Sender<bool>) -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sigint =
+        signal(SignalKind::interrupt()).context("failed to register SIGINT handler")?;
+    let mut sigterm =
+        signal(SignalKind::terminate()).context("failed to register SIGTERM handler")?;
+
+    let sigint_sender = sender.clone();
+    tokio::spawn(async move {
+        if sigint.recv().await.is_some() {
+            info!("SIGINT received, shutting down");
+            let _ = sigint_sender.send(true);
+        }
+    });
+
+    tokio::spawn(async move {
+        if sigterm.recv().await.is_some() {
+            info!("SIGTERM received, shutting down");
+            let _ = sender.send(true);
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn spawn_termination_handlers(sender: watch::Sender<bool>) -> Result<()> {
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            info!("Ctrl-C received, shutting down");
+            let _ = sender.send(true);
+        }
+    });
+    Ok(())
+}
+
+fn shutdown_receiver() -> watch::Receiver<bool> {
     if let Some(sender) = SHUTDOWN_SENDER.get() {
-        return Ok(sender.subscribe());
+        return sender.subscribe();
     }
 
+    // When signal handlers have not been installed (e.g. in unit tests),
+    // fall back to a detached, never-triggered channel so callers still
+    // get a valid receiver.
     let (sender, receiver) = watch::channel(false);
-    let handler_sender = sender.clone();
-    ctrlc::set_handler(move || {
-        let _ = handler_sender.send(true);
-    })
-    .context("failed to install Ctrl-C handler")?;
-
     match SHUTDOWN_SENDER.set(sender) {
-        Ok(()) => Ok(receiver),
-        Err(existing) => Ok(existing.subscribe()),
+        Ok(()) => receiver,
+        Err(existing) => existing.subscribe(),
     }
 }
 
@@ -1190,7 +1273,10 @@ pub(crate) fn input_type(input: &str) -> InputType {
     }
 }
 
-async fn create_sender(config: &Config) -> Result<GigantoSender> {
+async fn create_sender(
+    config: &Config,
+    reload_requested: Arc<AtomicBool>,
+) -> Result<GigantoSender> {
     debug!("output type=GIGANTO");
     GigantoSender::new(
         &config.giganto.cert,
@@ -1198,6 +1284,7 @@ async fn create_sender(config: &Config) -> Result<GigantoSender> {
         &config.giganto.ca_certs,
         config.giganto.ingest_srv_addr,
         &config.giganto.name,
+        reload_requested,
     )
     .await
     .map_err(anyhow::Error::from)
