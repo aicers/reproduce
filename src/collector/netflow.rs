@@ -129,7 +129,6 @@ impl<T> NetflowCollector<T> {
         }
 
         Some(CollectedBatch {
-            kind: self.protocol,
             events,
             record_bytes,
         })
@@ -595,7 +594,6 @@ mod tests {
             .await?
             .expect("collector should emit the first packet before exhausting");
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.kind, RawEventKind::Netflow5);
         assert!(collector.next_batch().await?.is_none());
         assert_eq!(collector.position(), b"1".to_vec());
         Ok(())

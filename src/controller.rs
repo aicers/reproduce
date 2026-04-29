@@ -22,10 +22,8 @@ pub enum PipelineError {
 /// Defines the sender operations required by the common pipeline.
 #[async_trait]
 pub trait PipelineSender {
-    async fn ensure_header_sent(
-        &mut self,
-        protocol: RawEventKind,
-    ) -> std::result::Result<(), SenderError>;
+    async fn send_header(&mut self, protocol: RawEventKind)
+    -> std::result::Result<(), SenderError>;
     async fn send_batch(&mut self, events: &[(i64, Vec<u8>)])
     -> std::result::Result<(), SendError>;
     async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError>;
@@ -33,11 +31,11 @@ pub trait PipelineSender {
 
 #[async_trait]
 impl PipelineSender for GigantoSender {
-    async fn ensure_header_sent(
+    async fn send_header(
         &mut self,
         protocol: RawEventKind,
     ) -> std::result::Result<(), SenderError> {
-        GigantoSender::ensure_header_sent(self, protocol).await
+        GigantoSender::send_header(self, protocol).await
     }
 
     async fn send_batch(
@@ -70,11 +68,10 @@ where
     S: PipelineSender + ?Sized,
     F: FnMut(usize) + ?Sized,
 {
-    // Send the stream header up front so the receiver can recognize the raw
-    // event kind even when the collector has nothing to send. Without this,
-    // an empty input would make the sender emit only the channel-close
-    // marker, which the data store rejects with `unknown raw event kind`.
-    sender.ensure_header_sent(collector.kind()).await?;
+    // Emit the stream header before any batch so every transfer starts with a
+    // raw event kind, even when the collector yields nothing.
+    let kind = collector.kind();
+    ensure_header_with_reconnect(sender, kind).await?;
 
     while let Some(batch) = collector.next_batch().await? {
         for &bytes in &batch.record_bytes {
@@ -88,37 +85,22 @@ where
                 shutdown_requested = true;
                 break;
             }
-            // Both the header and the batch must be reconnect-retryable,
-            // because a broken stream is observed at the first write on
-            // that stream — which is the header, not the batch. Propagating
-            // a header-level `WriteError` instead of reconnecting skips the
-            // reload path and defeats `SIGHUP`-driven TLS rotation.
-            if let Err(error) = sender.ensure_header_sent(batch.kind).await {
-                match error {
-                    SenderError::Send(SendError::WriteError(_)) => {
-                        log_reconnect_outcome(sender.reconnect().await?);
-                        continue;
-                    }
-                    other => return Err(PipelineError::Sender(other)),
-                }
-            }
             match sender.send_batch(&batch.events).await {
                 Ok(()) => break,
                 Err(SendError::WriteError(_)) => {
                     log_reconnect_outcome(sender.reconnect().await?);
+                    ensure_header_with_reconnect(sender, kind).await?;
                 }
                 Err(error) => return Err(PipelineError::Send(error)),
             }
         }
 
         if shutdown_requested {
-            // The reconnect path resets `init_msg = true`, so a fresh
-            // post-reconnect stream still requires the record header before
-            // any payload write. Send it here so the final flush obeys the
-            // same header-first invariant as the normal send path.
-            if let Err(error) = sender.ensure_header_sent(batch.kind).await {
-                return Err(PipelineError::Sender(error));
-            }
+            // The reconnect path opens a fresh stream that has not yet seen a
+            // record header, so emit one before the final flush so the
+            // shutdown path obeys the same header-first invariant as the
+            // normal send path.
+            ensure_header_with_reconnect(sender, kind).await?;
             match sender.send_batch(&batch.events).await {
                 Ok(()) => {}
                 Err(error) => return Err(PipelineError::Send(error)),
@@ -127,6 +109,27 @@ where
     }
 
     Ok(())
+}
+
+// A broken stream may surface first as a header write failure rather than a
+// batch write failure, so header sends use the same reconnect-and-retry path
+// that batches do.
+async fn ensure_header_with_reconnect<S>(
+    sender: &mut S,
+    kind: RawEventKind,
+) -> std::result::Result<(), PipelineError>
+where
+    S: PipelineSender + ?Sized,
+{
+    loop {
+        match sender.send_header(kind).await {
+            Ok(()) => return Ok(()),
+            Err(SenderError::Send(SendError::WriteError(_))) => {
+                log_reconnect_outcome(sender.reconnect().await?);
+            }
+            Err(error) => return Err(PipelineError::Sender(error)),
+        }
+    }
 }
 
 fn log_reconnect_outcome(outcome: ReconnectOutcome) {
@@ -168,7 +171,6 @@ mod tests {
             self.yielded = true;
             self.pos = self.next_pos.clone();
             Ok(Some(CollectedBatch {
-                kind: RawEventKind::Log,
                 events: vec![(1, vec![7_u8; 3])],
                 record_bytes: vec![128],
             }))
@@ -188,7 +190,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ScriptedSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -253,7 +255,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for MultiRetrySender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -305,9 +307,8 @@ mod tests {
         assert_eq!(seen_bytes, vec![128]);
         assert_eq!(sender.send_attempts, 3);
         assert_eq!(sender.reconnects, 2);
-        // One pre-pipeline header send, one per batch attempt, and one per
-        // reconnect retry.
-        assert_eq!(sender.header_sends, 4);
+        // One pre-pipeline header send plus one per reconnect retry.
+        assert_eq!(sender.header_sends, 3);
     }
 
     struct FailingSender {
@@ -318,7 +319,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for FailingSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -377,7 +378,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ReconnectFailingSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -431,7 +432,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for NonWriteErrorSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -485,7 +486,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ShutdownNonWriteErrorSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -512,11 +513,11 @@ mod tests {
         }
     }
 
-    /// Models the real sender's header-first invariant: `send_batch` must be
-    /// preceded by `ensure_header_sent` on a fresh post-reconnect stream, and
-    /// `reconnect` resets `init_msg` so the header must be re-sent.
+    /// Models the real sender's header-first invariant: every fresh stream
+    /// requires a `send_header` call before any `send_batch`, and `reconnect`
+    /// produces a fresh stream so the header must be re-sent.
     struct HeaderStateSender {
-        init_msg: bool,
+        header_pending: bool,
         send_attempts: usize,
         reconnects: usize,
         header_sends: usize,
@@ -526,14 +527,12 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for HeaderStateSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
-            if self.init_msg {
-                self.header_sends += 1;
-                self.init_msg = false;
-            }
+            self.header_sends += 1;
+            self.header_pending = false;
             Ok(())
         }
 
@@ -541,7 +540,7 @@ mod tests {
             &mut self,
             _events: &[(i64, Vec<u8>)],
         ) -> std::result::Result<(), SendError> {
-            if self.init_msg {
+            if self.header_pending {
                 self.header_violations += 1;
             }
             self.send_attempts += 1;
@@ -555,7 +554,7 @@ mod tests {
 
         async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
             self.reconnects += 1;
-            self.init_msg = true;
+            self.header_pending = true;
             let _ = self.shutdown.send(true);
             Ok(ReconnectOutcome::Reconnected)
         }
@@ -570,7 +569,7 @@ mod tests {
             next_pos: b"99".to_vec(),
         };
         let mut sender = HeaderStateSender {
-            init_msg: true,
+            header_pending: true,
             send_attempts: 0,
             reconnects: 0,
             header_sends: 0,
@@ -601,7 +600,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ReloadDeferredSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -683,5 +682,135 @@ mod tests {
             error.to_string().contains("SerializationFailure"),
             "unexpected error: {error}",
         );
+    }
+
+    struct HeaderWriteErrorSender {
+        header_attempts: usize,
+        send_attempts: usize,
+        reconnects: usize,
+        fail_until_attempt: usize,
+    }
+
+    #[async_trait]
+    impl PipelineSender for HeaderWriteErrorSender {
+        async fn send_header(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            self.header_attempts += 1;
+            if self.header_attempts < self.fail_until_attempt {
+                return Err(SenderError::Send(SendError::WriteError(
+                    WriteError::Stopped(VarInt::from_u32(0)),
+                )));
+            }
+            Ok(())
+        }
+
+        async fn send_batch(
+            &mut self,
+            _events: &[(i64, Vec<u8>)],
+        ) -> std::result::Result<(), SendError> {
+            self.send_attempts += 1;
+            Ok(())
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
+            self.reconnects += 1;
+            Ok(ReconnectOutcome::Reconnected)
+        }
+    }
+
+    #[tokio::test]
+    async fn pre_pipeline_header_write_error_triggers_reconnect_and_retries() {
+        let (_shutdown_tx, shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: b"21".to_vec(),
+        };
+        let mut sender = HeaderWriteErrorSender {
+            header_attempts: 0,
+            send_attempts: 0,
+            reconnects: 0,
+            fail_until_attempt: 3,
+        };
+
+        run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+            .await
+            .expect("header write errors should be retried after reconnect");
+
+        assert_eq!(sender.header_attempts, 3);
+        assert_eq!(sender.reconnects, 2);
+        assert_eq!(sender.send_attempts, 1);
+    }
+
+    struct PostReconnectHeaderFailureSender {
+        header_attempts: usize,
+        send_attempts: usize,
+        reconnects: usize,
+    }
+
+    #[async_trait]
+    impl PipelineSender for PostReconnectHeaderFailureSender {
+        async fn send_header(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            self.header_attempts += 1;
+            // First header send (pre-pipeline) succeeds. The header that
+            // follows the reconnect for the batch retry fails once with a
+            // WriteError, then succeeds.
+            if self.header_attempts == 2 {
+                return Err(SenderError::Send(SendError::WriteError(
+                    WriteError::Stopped(VarInt::from_u32(0)),
+                )));
+            }
+            Ok(())
+        }
+
+        async fn send_batch(
+            &mut self,
+            _events: &[(i64, Vec<u8>)],
+        ) -> std::result::Result<(), SendError> {
+            self.send_attempts += 1;
+            if self.send_attempts == 1 {
+                return Err(SendError::WriteError(WriteError::Stopped(
+                    VarInt::from_u32(0),
+                )));
+            }
+            Ok(())
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
+            self.reconnects += 1;
+            Ok(ReconnectOutcome::Reconnected)
+        }
+    }
+
+    #[tokio::test]
+    async fn post_reconnect_header_write_error_triggers_another_reconnect() {
+        let (_shutdown_tx, shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: b"99".to_vec(),
+        };
+        let mut sender = PostReconnectHeaderFailureSender {
+            header_attempts: 0,
+            send_attempts: 0,
+            reconnects: 0,
+        };
+
+        run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+            .await
+            .expect("header retries after reconnect should succeed eventually");
+
+        // Pre-pipeline header (ok) + post-batch-WriteError header (fails) +
+        // post-second-reconnect header (ok) = 3 header attempts; one
+        // reconnect for the batch WriteError plus one for the header
+        // WriteError = 2 reconnects.
+        assert_eq!(sender.header_attempts, 3);
+        assert_eq!(sender.reconnects, 2);
+        assert_eq!(sender.send_attempts, 2);
     }
 }
