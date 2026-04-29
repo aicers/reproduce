@@ -513,7 +513,6 @@ struct FileRunPlan<'a> {
 
 struct KindRunResult {
     checkpoint: Vec<u8>,
-    reset_header: bool,
 }
 
 fn classify_kind(kind: &str) -> ClassifiedKind<'_> {
@@ -564,17 +563,12 @@ where
 #[async_trait]
 trait ControllerSender: PipelineSender {
     async fn finish(&mut self) -> Result<()>;
-    fn reset_header(&mut self);
 }
 
 #[async_trait]
 impl ControllerSender for GigantoSender {
     async fn finish(&mut self) -> Result<()> {
         Ok(GigantoSender::finish(self).await?)
-    }
-
-    fn reset_header(&mut self) {
-        GigantoSender::reset_header(self);
     }
 }
 
@@ -972,9 +966,6 @@ impl Controller {
         let result =
             run_classified_kind(filename, kind, import_from_giganto, options, sender, report)
                 .await?;
-        if result.reset_header {
-            sender.reset_header();
-        }
         save_checkpoint(checkpoint.as_ref(), &result.checkpoint);
         Ok(())
     }
@@ -995,8 +986,8 @@ async fn run_classified_kind<S>(
 where
     S: ControllerSender + ?Sized,
 {
-    let (checkpoint, reset_header) = match kind {
-        ClassifiedKind::Zeek(kind) => (
+    let checkpoint = match kind {
+        ClassifiedKind::Zeek(kind) => {
             run_zeek_kind(
                 filename,
                 kind.as_str(),
@@ -1005,14 +996,12 @@ where
                 sender,
                 report,
             )
-            .await?,
-            false,
-        ),
-        ClassifiedKind::OperationLog => (
-            run_operation_log(filename, options, sender, report).await?,
-            false,
-        ),
-        ClassifiedKind::Sysmon(kind) => (
+            .await?
+        }
+        ClassifiedKind::OperationLog => {
+            run_operation_log(filename, options, sender, report).await?
+        }
+        ClassifiedKind::Sysmon(kind) => {
             run_sysmon_kind(
                 filename,
                 kind.as_str(),
@@ -1021,28 +1010,19 @@ where
                 sender,
                 report,
             )
-            .await?,
-            true,
-        ),
+            .await?
+        }
         #[cfg(feature = "netflow")]
-        ClassifiedKind::Netflow(kind) => (
-            run_netflow_kind(filename, kind.as_str(), options, sender, report).await?,
-            false,
-        ),
-        ClassifiedKind::Security(kind) => (
-            run_security_kind(filename, kind.as_str(), options, sender, report).await?,
-            false,
-        ),
-        ClassifiedKind::Log(kind) => (
-            run_log_kind(filename, kind, options, sender, report).await?,
-            false,
-        ),
+        ClassifiedKind::Netflow(kind) => {
+            run_netflow_kind(filename, kind.as_str(), options, sender, report).await?
+        }
+        ClassifiedKind::Security(kind) => {
+            run_security_kind(filename, kind.as_str(), options, sender, report).await?
+        }
+        ClassifiedKind::Log(kind) => run_log_kind(filename, kind, options, sender, report).await?,
     };
 
-    Ok(KindRunResult {
-        checkpoint,
-        reset_header,
-    })
+    Ok(KindRunResult { checkpoint })
 }
 
 fn save_checkpoint(checkpoint: Option<&Checkpoint>, position: &[u8]) {
