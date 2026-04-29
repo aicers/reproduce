@@ -21,10 +21,8 @@ pub enum PipelineError {
 /// Defines the sender operations required by the common pipeline.
 #[async_trait]
 pub trait PipelineSender {
-    async fn ensure_header_sent(
-        &mut self,
-        protocol: RawEventKind,
-    ) -> std::result::Result<(), SenderError>;
+    async fn send_header(&mut self, protocol: RawEventKind)
+    -> std::result::Result<(), SenderError>;
     async fn send_batch(&mut self, events: &[(i64, Vec<u8>)])
     -> std::result::Result<(), SendError>;
     async fn reconnect(&mut self) -> std::result::Result<(), SenderError>;
@@ -32,11 +30,11 @@ pub trait PipelineSender {
 
 #[async_trait]
 impl PipelineSender for GigantoSender {
-    async fn ensure_header_sent(
+    async fn send_header(
         &mut self,
         protocol: RawEventKind,
     ) -> std::result::Result<(), SenderError> {
-        GigantoSender::ensure_header_sent(self, protocol).await
+        GigantoSender::send_header(self, protocol).await
     }
 
     async fn send_batch(
@@ -73,14 +71,14 @@ where
     // event kind even when the collector has nothing to send. Without this,
     // an empty input would make the sender emit only the channel-close
     // marker, which the data store rejects with `unknown raw event kind`.
-    sender.ensure_header_sent(collector.kind()).await?;
+    let kind = collector.kind();
+    sender.send_header(kind).await?;
 
     while let Some(batch) = collector.next_batch().await? {
         for &bytes in &batch.record_bytes {
             on_record_bytes(bytes);
         }
 
-        sender.ensure_header_sent(batch.kind).await?;
         let mut shutdown_requested = false;
 
         loop {
@@ -92,7 +90,7 @@ where
                 Ok(()) => break,
                 Err(SendError::WriteError(_)) => {
                     sender.reconnect().await?;
-                    sender.ensure_header_sent(batch.kind).await?;
+                    sender.send_header(kind).await?;
                 }
                 Err(error) => return Err(PipelineError::Send(error)),
             }
@@ -138,7 +136,6 @@ mod tests {
             self.yielded = true;
             self.pos = self.next_pos.clone();
             Ok(Some(CollectedBatch {
-                kind: RawEventKind::Log,
                 events: vec![(1, vec![7_u8; 3])],
                 record_bytes: vec![128],
             }))
@@ -158,7 +155,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ScriptedSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -223,7 +220,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for MultiRetrySender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -275,9 +272,8 @@ mod tests {
         assert_eq!(seen_bytes, vec![128]);
         assert_eq!(sender.send_attempts, 3);
         assert_eq!(sender.reconnects, 2);
-        // One pre-pipeline header send, one per batch attempt, and one per
-        // reconnect retry.
-        assert_eq!(sender.header_sends, 4);
+        // One pre-pipeline header send plus one per reconnect retry.
+        assert_eq!(sender.header_sends, 3);
     }
 
     struct FailingSender {
@@ -288,7 +284,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for FailingSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -347,7 +343,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ReconnectFailingSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -401,7 +397,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for NonWriteErrorSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {
@@ -455,7 +451,7 @@ mod tests {
 
     #[async_trait]
     impl PipelineSender for ShutdownNonWriteErrorSender {
-        async fn ensure_header_sent(
+        async fn send_header(
             &mut self,
             _protocol: RawEventKind,
         ) -> std::result::Result<(), SenderError> {

@@ -122,7 +122,6 @@ where
                                     self.pos = next_pos;
                                     self.pending_commit = Some(self.pos.line());
                                     return Ok(Some(CollectedBatch {
-                                        kind: self.protocol,
                                         events: buf,
                                         record_bytes,
                                     }));
@@ -178,7 +177,6 @@ where
 
         self.pending_commit = Some(self.pos.line());
         Ok(Some(CollectedBatch {
-            kind: self.protocol,
             events: buf,
             record_bytes,
         }))
@@ -358,7 +356,6 @@ mod tests {
             .expect("collector should emit one event before hitting the count limit");
 
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.kind, RawEventKind::Conn);
         assert!(
             collector
                 .next_batch()

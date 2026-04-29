@@ -45,38 +45,21 @@ const WAPPLES_LINE: &str = "<182>Jan 9 09:26:09 host wplogd: WAPPLES INTRUSION W
     SQL Injection WAPPLES (client 192.168.1.100 WAPPLES) -> \
     (server 10.0.0.1:80)";
 
+#[derive(Default)]
 struct MockSender {
     batch_sizes: Vec<usize>,
-    ensured_protocols: Vec<RawEventKind>,
+    sent_headers: Vec<RawEventKind>,
     finish_calls: usize,
     reconnect_calls: usize,
-    reset_header_calls: usize,
-    header_pending: bool,
-}
-
-impl Default for MockSender {
-    fn default() -> Self {
-        Self {
-            batch_sizes: Vec::new(),
-            ensured_protocols: Vec::new(),
-            finish_calls: 0,
-            reconnect_calls: 0,
-            reset_header_calls: 0,
-            header_pending: true,
-        }
-    }
 }
 
 #[async_trait]
 impl PipelineSender for MockSender {
-    async fn ensure_header_sent(
+    async fn send_header(
         &mut self,
         protocol: RawEventKind,
     ) -> std::result::Result<(), reproduce::sender::SenderError> {
-        if self.header_pending {
-            self.ensured_protocols.push(protocol);
-            self.header_pending = false;
-        }
+        self.sent_headers.push(protocol);
         Ok(())
     }
 
@@ -96,11 +79,6 @@ impl ControllerSender for MockSender {
     async fn finish(&mut self) -> Result<()> {
         self.finish_calls += 1;
         Ok(())
-    }
-
-    fn reset_header(&mut self) {
-        self.reset_header_calls += 1;
-        self.header_pending = true;
     }
 }
 
@@ -635,7 +613,7 @@ async fn run_with_sender_processes_log_input_and_finishes() {
         .expect("log input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1, 1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Log]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Log]);
     assert_eq!(sender.finish_calls, 1);
 }
 
@@ -654,7 +632,13 @@ async fn run_with_sender_processes_directory_input_and_finishes() {
         .expect("directory input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1, 1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Log]);
+    assert_eq!(
+        sender.sent_headers,
+        vec![RawEventKind::Log, RawEventKind::Log],
+        "each file's pipeline run asks the sender to (re)send the stream \
+         header; the real sender deduplicates so consecutive same-kind \
+         requests share a single on-the-wire header",
+    );
     assert_eq!(sender.finish_calls, 1);
 }
 
@@ -681,7 +665,7 @@ async fn run_operation_log_sends_header_for_empty_input() {
         "empty operation log input should not produce any batches",
     );
     assert_eq!(
-        sender.ensured_protocols,
+        sender.sent_headers,
         vec![RawEventKind::OpLog],
         "empty operation log input must still send the OpLog stream header",
     );
@@ -703,12 +687,12 @@ async fn run_single_processes_operation_log_and_saves_checkpoint() {
     let checkpoint_contents =
         std::fs::read_to_string(&checkpoint).expect("checkpoint file should be written");
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::OpLog]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::OpLog]);
     assert_eq!(checkpoint_contents, "1");
 }
 
 #[tokio::test]
-async fn run_single_processes_sysmon_and_resets_header() {
+async fn run_single_processes_sysmon_input() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(
         &temp_dir,
@@ -724,8 +708,7 @@ async fn run_single_processes_sysmon_and_resets_header() {
         .expect("sysmon input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::ProcessCreate]);
-    assert_eq!(sender.reset_header_calls, 1);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::ProcessCreate]);
 }
 
 #[tokio::test]
@@ -741,7 +724,7 @@ async fn run_single_processes_zeek_input() {
         .expect("zeek input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Conn]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Conn]);
 }
 
 #[tokio::test]
@@ -757,7 +740,7 @@ async fn run_single_processes_giganto_import_input() {
         .expect("giganto import input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Conn]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Conn]);
 }
 
 #[tokio::test]
@@ -773,7 +756,7 @@ async fn run_single_processes_security_log_input() {
         .expect("security log input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::SecuLog]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::SecuLog]);
 }
 
 #[cfg(feature = "netflow")]
@@ -791,7 +774,7 @@ async fn run_single_processes_netflow_input() {
         .expect("netflow input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Netflow5]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Netflow5]);
 }
 
 #[tokio::test]
@@ -900,7 +883,7 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
             "empty zeek input should not send any batches",
         );
         assert_eq!(
-            sender.ensured_protocols.len(),
+            sender.sent_headers.len(),
             1,
             "empty zeek input should still send the stream header so the \
              receiver can recognize the raw event kind before finish",
@@ -1002,7 +985,7 @@ async fn run_sysmon_kind_dispatches_all_supported_kinds_without_records() {
             "header-only sysmon input should not send any batches",
         );
         assert_eq!(
-            sender.ensured_protocols.len(),
+            sender.sent_headers.len(),
             1,
             "header-only sysmon input should still send the stream header so \
              the receiver can recognize the raw event kind before finish",
