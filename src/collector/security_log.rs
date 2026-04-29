@@ -128,7 +128,6 @@ where
                 if buf.len() >= BATCH_SIZE {
                     self.pending_commit = Some(self.cnt);
                     return Ok(Some(CollectedBatch {
-                        kind: RawEventKind::SecuLog,
                         events: buf,
                         record_bytes,
                     }));
@@ -162,7 +161,6 @@ where
 
         self.pending_commit = Some(self.cnt);
         Ok(Some(CollectedBatch {
-            kind: RawEventKind::SecuLog,
             events: buf,
             record_bytes,
         }))
@@ -344,7 +342,6 @@ mod tests {
             .expect("collector should emit one record before exhausting");
 
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.kind, RawEventKind::SecuLog);
         assert!(
             collector
                 .next_batch()

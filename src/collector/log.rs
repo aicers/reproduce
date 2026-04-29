@@ -144,7 +144,6 @@ impl Collector for LogCollector {
 
             self.pending_commit = Some(self.conv_cnt);
             return Ok(Some(CollectedBatch {
-                kind: RawEventKind::Log,
                 events: vec![(timestamp, record_data)],
                 record_bytes,
             }));
@@ -377,7 +376,6 @@ mod tests {
 
         assert_eq!(batch.events.len(), 1);
         assert_eq!(batch.record_bytes, vec![4]);
-        assert_eq!(batch.kind, RawEventKind::Log);
         assert!(
             collector
                 .next_batch()
