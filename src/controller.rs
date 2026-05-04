@@ -96,11 +96,10 @@ where
         }
 
         if shutdown_requested {
-            // The reconnect path opens a fresh stream that has not yet seen a
-            // record header, so emit one before the final flush so the
-            // shutdown path obeys the same header-first invariant as the
-            // normal send path.
-            ensure_header_with_reconnect(sender, kind).await?;
+            // The header has already been written on the current stream —
+            // either by the pre-pipeline send or by the post-reconnect send
+            // inside the inner loop — so the shutdown flush only needs to
+            // emit the pending batch.
             match sender.send_batch(&batch.events).await {
                 Ok(()) => {}
                 Err(error) => return Err(PipelineError::Send(error)),

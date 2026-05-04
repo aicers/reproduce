@@ -229,14 +229,12 @@ impl GigantoSender {
         })
     }
 
-    /// Writes the record header for `protocol` to the current stream if the
-    /// stream does not already carry that kind.
+    /// Writes the record header for `protocol` to the current stream, or
+    /// returns immediately if the stream already carries that kind.
     ///
-    /// The pipeline calls this at the start of every transfer and after every
-    /// reconnect; the sender deduplicates so consecutive calls for the same
-    /// kind on the same stream are no-ops, and a stream is never followed by a
-    /// second raw-event-kind header (which the data store would interpret as
-    /// part of a batch).
+    /// Each transfer calls this before sending any batch, and again after
+    /// reconnecting. Deduplication ensures a single stream is not prefixed
+    /// twice with a header for the same kind.
     ///
     /// # Errors
     ///
