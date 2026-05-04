@@ -638,18 +638,16 @@ async fn run_with_sender_processes_directory_input_and_finishes() {
     assert_eq!(
         sender.sent_headers,
         vec![RawEventKind::Log, RawEventKind::Log],
-        "each file's pipeline run asks the sender to (re)send the stream \
-         header; the real sender deduplicates so consecutive same-kind \
-         requests share a single on-the-wire header",
+        "each per-file pipeline run requests a stream header; the real \
+         sender deduplicates same-kind requests on a single stream",
     );
     assert_eq!(sender.finish_calls, 1);
 }
 
 #[tokio::test]
 async fn run_operation_log_sends_header_for_empty_input() {
-    // Regression test for issue #870: even when the oplog input file has no
-    // lines, the OpLog stream header must precede the channel-close marker so
-    // that data-store does not log `unknown raw event kind`.
+    // Regression test for issue #870: an empty oplog input must still emit
+    // the OpLog stream header before the transfer is finished.
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(&temp_dir, "manager.log", "");
     let mut sender = MockSender::default();
@@ -712,6 +710,50 @@ async fn run_single_processes_sysmon_input() {
 
     assert_eq!(sender.batch_sizes, vec![1]);
     assert_eq!(sender.sent_headers, vec![RawEventKind::ProcessCreate]);
+}
+
+#[tokio::test]
+async fn run_sysmon_kind_resends_header_on_same_sender_when_kind_changes() {
+    // When two sysmon kinds are dispatched on the same sender, reproduce must
+    // request a stream header for each kind so the receiver knows which kind
+    // the following batches belong to.
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let process_create_path = write_text_file(
+        &temp_dir,
+        "event1_log.csv",
+        &format!("{SYSMON_HEADER}\n{SYSMON_PC_1}\n"),
+    );
+    let file_create_time_path =
+        write_text_file(&temp_dir, "event2_log.csv", &format!("{SYSMON_HEADER}\n"));
+    let mut sender = MockSender::default();
+
+    run_sysmon_kind(
+        &process_create_path,
+        "process_create",
+        false,
+        default_run_options(),
+        &mut sender,
+        report_for(&process_create_path, "process_create"),
+    )
+    .await
+    .expect("first sysmon kind should dispatch");
+
+    run_sysmon_kind(
+        &file_create_time_path,
+        "file_create_time",
+        false,
+        default_run_options(),
+        &mut sender,
+        report_for(&file_create_time_path, "file_create_time"),
+    )
+    .await
+    .expect("second sysmon kind should dispatch on the same sender");
+
+    assert_eq!(
+        sender.sent_headers,
+        vec![RawEventKind::ProcessCreate, RawEventKind::FileCreateTime],
+        "switching kinds on the same sender must request the header for the next kind",
+    );
 }
 
 #[tokio::test]
@@ -891,8 +933,7 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
         assert_eq!(
             sender.sent_headers.len(),
             1,
-            "empty zeek input should still send the stream header so the \
-             receiver can recognize the raw event kind before finish",
+            "empty zeek input must still emit the stream header before finishing",
         );
     }
 
@@ -993,8 +1034,7 @@ async fn run_sysmon_kind_dispatches_all_supported_kinds_without_records() {
         assert_eq!(
             sender.sent_headers.len(),
             1,
-            "header-only sysmon input should still send the stream header so \
-             the receiver can recognize the raw event kind before finish",
+            "header-only sysmon input must still emit the stream header before finishing",
         );
     }
 }
