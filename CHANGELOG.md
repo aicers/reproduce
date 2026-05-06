@@ -61,7 +61,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   no data row was consumed. The checkpoint now correctly remains at zero.
 - Fixed transfers omitting the raw event kind header when the input file
   contained no records. The header is now emitted at the start of every
-  transfer, even when the collector yields nothing.
+  transfer, even when the collector yields nothing. The header retry path
+  also honors the shutdown signal so a receiver that keeps rejecting header
+  writes can no longer prevent the pipeline from exiting.
 
 ## [0.23.0] - 2025-11-26
 
