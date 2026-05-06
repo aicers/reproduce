@@ -2068,16 +2068,13 @@ mod tests {
         );
     }
 
-    // Simulates a valid-but-incompatible TLS rotation: the rebuilt
-    // endpoint is created from a syntactically valid TLS triple (so
-    // `try_rebuild_endpoint` succeeds) and even completes the QUIC/TLS
-    // transport handshake, but the subsequent application-level
-    // handshake fails. The reconnect must fall back to the
-    // last-known-good endpoint to obtain a working stream and report
-    // `ReloadDeferred` so the daemon can keep running while a later
-    // reconnect retries the reload with fresh material.
+    // Simulates a reload candidate whose endpoint rebuild succeeds and whose
+    // QUIC/TLS transport handshake completes, but whose Giganto application
+    // handshake fails. The reconnect must fall back to the last-known-good
+    // endpoint to obtain a working stream and report `ReloadDeferred` so the
+    // daemon can keep running while a later reconnect retries the reload.
     #[tokio::test]
-    async fn reconnect_with_successful_rebuild_but_failed_handshake_preserves_state() {
+    async fn reconnect_with_successful_rebuild_but_failed_app_handshake_preserves_state() {
         let (mut sender, session) = connect_stream_sender()
             .await
             .expect("sender should connect to the test server");
