@@ -41,6 +41,55 @@ pub const INTERVAL: u64 = 5;
 /// Limits the maximum number of events to accumulate before flushing a batch.
 pub const BATCH_SIZE: usize = 100;
 
+/// Selects how the connect helper should react to QUIC handshake/idle
+/// timeouts (`quinn::ConnectionError::TimedOut`).
+///
+/// `RetryForever` matches the legacy behavior used for the
+/// last-known-good endpoint: when the server is briefly unreachable, the
+/// helper sleeps for `INTERVAL` seconds and retries indefinitely so the
+/// daemon eventually reconnects on its own.
+///
+/// `ReturnOnTimeout` is used for the reload candidate path. A failed
+/// reload must not strand the daemon retrying the candidate forever —
+/// surfacing the timeout lets `reconnect()` fall back to the
+/// last-known-good endpoint and report `ReloadDeferred` so the daemon
+/// keeps delivering events while the reload retries on a later
+/// reconnect.
+#[derive(Debug, Clone, Copy)]
+enum TimeoutPolicy {
+    RetryForever,
+    ReturnOnTimeout,
+}
+
+/// Categorizes the outcome of a successful `GigantoSender::reconnect()`
+/// call.
+///
+/// `Reconnected` means the sender now has a working stream that
+/// reflects the operator's reload intent: either no reload was
+/// requested, or a requested reload was fully applied (the rebuilt
+/// endpoint completed handshake/stream setup and was committed,
+/// clearing `reload_requested`).
+///
+/// `ReloadDeferred` means the sender now has a working stream against
+/// the **last-known-good** endpoint, but a requested reload could not
+/// be applied because the rebuilt endpoint failed handshake/stream
+/// setup. The last-known-good endpoint is kept and `reload_requested`
+/// remains set so a later reconnect can retry the reload with fresh
+/// material. This is *not* a fatal error: the daemon must keep running
+/// to expose that retry opportunity, which is why this is reported as a
+/// successful outcome rather than an error.
+#[derive(Debug)]
+pub enum ReconnectOutcome {
+    /// The reconnect fully succeeded, including any pending reload.
+    Reconnected,
+
+    /// The reconnect succeeded against the last-known-good endpoint
+    /// after the reload candidate failed handshake/stream setup. The
+    /// carried error describes why the candidate was rejected, so the
+    /// caller can log it; `reload_requested` remains set.
+    ReloadDeferred(SenderError),
+}
+
 #[derive(Debug, Error)]
 pub enum SenderError {
     #[error("failed to connect Giganto")]
@@ -113,6 +162,10 @@ pub struct GigantoSender {
     sender: SendStream,
     init_msg: bool,
     finish_checker: Arc<AtomicBool>,
+    cert_path: String,
+    key_path: String,
+    ca_cert_paths: Vec<String>,
+    reload_requested: Arc<AtomicBool>,
 }
 
 impl GigantoSender {
@@ -122,6 +175,10 @@ impl GigantoSender {
     /// Combines endpoint creation with the initial
     /// connection handshake and bidirectional stream setup. If the server is
     /// temporarily unreachable (`TimedOut`), retries indefinitely.
+    ///
+    /// The `reload_requested` flag is checked on each reconnect; when set,
+    /// the endpoint is rebuilt from fresh cert/key/CA files before the next
+    /// handshake.
     ///
     /// # Errors
     ///
@@ -133,17 +190,28 @@ impl GigantoSender {
         ca_certs: &[String],
         server_addr: SocketAddr,
         server_name: &str,
+        reload_requested: Arc<AtomicBool>,
     ) -> std::result::Result<Self, SenderError> {
         let cert = cert.to_owned();
         let key = key.to_owned();
         let ca_certs = ca_certs.to_vec();
-        let endpoint = task::spawn_blocking(move || create_endpoint(&cert, &key, &ca_certs))
-            .await
-            .map_err(|source| {
-                SenderError::context("failed to join endpoint creation task", source)
-            })??;
-        let (conn, send, finish_checker) =
-            connect_stream(&endpoint, server_addr, server_name).await?;
+        let endpoint = task::spawn_blocking({
+            let cert = cert.clone();
+            let key = key.clone();
+            let ca_certs = ca_certs.clone();
+            move || create_endpoint(&cert, &key, &ca_certs)
+        })
+        .await
+        .map_err(|source| {
+            SenderError::context("failed to join endpoint creation task", source)
+        })??;
+        let (conn, send, finish_checker) = connect_stream(
+            &endpoint,
+            server_addr,
+            server_name,
+            TimeoutPolicy::RetryForever,
+        )
+        .await?;
         info!("Connected to data store ingest server at {server_addr}");
 
         Ok(Self {
@@ -154,6 +222,10 @@ impl GigantoSender {
             sender: send,
             init_msg: true,
             finish_checker,
+            cert_path: cert,
+            key_path: key,
+            ca_cert_paths: ca_certs,
+            reload_requested,
         })
     }
 
@@ -232,22 +304,117 @@ impl GigantoSender {
     /// Tears down the current QUIC stream and establishes a fresh one,
     /// performing the handshake again.
     ///
-    /// On `TimedOut` the method retries indefinitely. After a successful
-    /// reconnection `init_msg` is reset to `true` so that the next call to
+    /// When `reload_requested` is set, a replacement endpoint is built
+    /// from the configured cert/key/CA paths and used for the next
+    /// handshake so that externally rotated certificates take effect.
+    /// The replacement endpoint is only committed and `reload_requested`
+    /// is only cleared after `connect_stream` succeeds with it. If the
+    /// rebuild itself fails, or if the rebuilt endpoint cannot complete
+    /// the next handshake or stream setup, the method falls back to the
+    /// last-known-good endpoint to obtain a working stream and reports
+    /// `ReconnectOutcome::ReloadDeferred` so the caller can keep the
+    /// daemon running and let a later reconnect retry the reload. Only
+    /// when the last-known-good endpoint also cannot reconnect does
+    /// `reconnect()` return a fatal `SenderError`.
+    ///
+    /// The two paths use different timeout policies. The reload candidate
+    /// uses `TimeoutPolicy::ReturnOnTimeout` so a hung handshake on the
+    /// rebuilt endpoint surfaces as an error and triggers the
+    /// last-known-good fallback rather than retrying forever. The
+    /// last-known-good path keeps the legacy
+    /// `TimeoutPolicy::RetryForever` behavior so transient server
+    /// outages reconnect on their own. After a successful reconnection
+    /// `init_msg` is reset to `true` so that the next call to
     /// `ensure_header_sent` will write the record header.
     ///
     /// # Errors
     ///
-    /// Returns an error if the handshake or stream opening fails.
-    pub async fn reconnect(&mut self) -> std::result::Result<(), SenderError> {
+    /// Returns an error only when the last-known-good endpoint also
+    /// fails handshake or stream opening (i.e. the reconnect cannot
+    /// produce a working stream by any path).
+    pub async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
         sleep(Duration::from_secs(2)).await;
-        let (conn, send, finish_checker) =
-            connect_stream(&self.endpoint, self.server_addr, &self.name).await?;
+
+        // If a reload was requested, attempt the candidate path first.
+        // The replacement endpoint is committed and `reload_requested`
+        // is cleared *only* if `connect_stream` against it succeeds;
+        // otherwise we fall through to the last-known-good endpoint so
+        // that a valid-but-incompatible TLS rotation cannot strand the
+        // daemon without a working connection.
+        let mut deferred_reload_error: Option<SenderError> = None;
+        if self.reload_requested.load(Ordering::SeqCst) {
+            info!("Reload requested, rebuilding QUIC endpoint from fresh TLS material");
+            match self.try_rebuild_endpoint().await {
+                Ok(candidate) => {
+                    match connect_stream(
+                        &candidate,
+                        self.server_addr,
+                        &self.name,
+                        TimeoutPolicy::ReturnOnTimeout,
+                    )
+                    .await
+                    {
+                        Ok((conn, send, finish_checker)) => {
+                            self.endpoint = candidate;
+                            self.reload_requested.store(false, Ordering::SeqCst);
+                            info!("QUIC endpoint rebuilt successfully");
+                            self.conn = conn;
+                            self.sender = send;
+                            self.init_msg = true;
+                            self.finish_checker = finish_checker;
+                            return Ok(ReconnectOutcome::Reconnected);
+                        }
+                        Err(error) => {
+                            warn!(
+                                "Reload candidate handshake/stream setup failed; \
+                                 falling back to last-known-good endpoint and \
+                                 leaving reload pending: {error}"
+                            );
+                            deferred_reload_error = Some(error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        "Failed to rebuild QUIC endpoint; keeping \
+                         last-known-good endpoint and leaving reload \
+                         pending: {error}"
+                    );
+                    deferred_reload_error = Some(error);
+                }
+            }
+        }
+
+        let (conn, send, finish_checker) = connect_stream(
+            &self.endpoint,
+            self.server_addr,
+            &self.name,
+            TimeoutPolicy::RetryForever,
+        )
+        .await?;
         self.conn = conn;
         self.sender = send;
         self.init_msg = true;
         self.finish_checker = finish_checker;
-        Ok(())
+
+        Ok(match deferred_reload_error {
+            Some(error) => ReconnectOutcome::ReloadDeferred(error),
+            None => ReconnectOutcome::Reconnected,
+        })
+    }
+
+    /// Attempts to rebuild the QUIC endpoint from the configured TLS file
+    /// paths. This is called when a reload has been requested (e.g. via
+    /// `SIGHUP`) so that externally rotated certificates are picked up.
+    async fn try_rebuild_endpoint(&self) -> std::result::Result<Endpoint, SenderError> {
+        let cert = self.cert_path.clone();
+        let key = self.key_path.clone();
+        let ca_certs = self.ca_cert_paths.clone();
+        task::spawn_blocking(move || create_endpoint(&cert, &key, &ca_certs))
+            .await
+            .map_err(|source| {
+                SenderError::context("failed to join endpoint rebuild task", source)
+            })?
     }
 
     /// Sends the channel-close sentinel message to signal the server that
@@ -270,8 +437,9 @@ async fn connect_stream(
     endpoint: &Endpoint,
     server_addr: SocketAddr,
     server_name: &str,
+    timeout_policy: TimeoutPolicy,
 ) -> std::result::Result<(Connection, SendStream, Arc<AtomicBool>), SenderError> {
-    let conn = connect_with_retry(endpoint, server_addr, server_name).await?;
+    let conn = connect_with_retry(endpoint, server_addr, server_name, timeout_policy).await?;
     client_handshake(&conn, REQUIRED_GIGANTO_VERSION)
         .await
         .map_err(|source| SenderError::Handshake(source.into()))?;
@@ -290,11 +458,15 @@ async fn connect_stream(
     Ok((conn, send, finish_checker_send))
 }
 
-/// Connects to the server, retrying on timeout to preserve the legacy behavior.
+/// Connects to the server, dispatching on the configured `TimeoutPolicy`
+/// to either retry forever (legacy behavior, used for the last-known-good
+/// endpoint) or surface the timeout (used for reload-candidate connects so
+/// `reconnect()` can fall back without looping forever).
 async fn connect_with_retry(
     endpoint: &Endpoint,
     server_addr: SocketAddr,
     server_name: &str,
+    timeout_policy: TimeoutPolicy,
 ) -> std::result::Result<Connection, SenderError> {
     loop {
         match endpoint
@@ -303,10 +475,15 @@ async fn connect_with_retry(
             .await
         {
             Ok(conn) => return Ok(conn),
-            Err(quinn::ConnectionError::TimedOut) => {
-                info!("Server timeout, reconnecting...");
-                sleep(Duration::from_secs(INTERVAL)).await;
-            }
+            Err(quinn::ConnectionError::TimedOut) => match timeout_policy {
+                TimeoutPolicy::RetryForever => {
+                    info!("Server timeout, reconnecting...");
+                    sleep(Duration::from_secs(INTERVAL)).await;
+                }
+                TimeoutPolicy::ReturnOnTimeout => {
+                    return Err(SenderError::Connection(quinn::ConnectionError::TimedOut));
+                }
+            },
             Err(error) => return Err(SenderError::Connection(error)),
         }
     }
@@ -495,7 +672,7 @@ mod tests {
         frame::recv_raw,
         ingest::receive_record_header,
     };
-    use quinn::{Connection, RecvStream, SendStream};
+    use quinn::{Connection, IdleTimeout, RecvStream, SendStream, VarInt};
     use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
     use tempfile::tempdir;
     use tokio::time::{Duration, timeout};
@@ -615,6 +792,10 @@ mod tests {
                 sender: client_send,
                 init_msg: true,
                 finish_checker: finish_checker_send,
+                cert_path: cert,
+                key_path: key,
+                ca_cert_paths: roots.to_vec(),
+                reload_requested: Arc::new(AtomicBool::new(false)),
             },
             ServerSession {
                 server_endpoint,
@@ -1011,7 +1192,14 @@ mod tests {
         let roots = [root];
 
         let (sender_result, server_result) = tokio::join!(
-            GigantoSender::new(&cert, &key, &roots, server_addr, TEST_SERVER_NAME),
+            GigantoSender::new(
+                &cert,
+                &key,
+                &roots,
+                server_addr,
+                TEST_SERVER_NAME,
+                Arc::new(AtomicBool::new(false)),
+            ),
             async {
                 let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept())
                     .await
@@ -1065,9 +1253,16 @@ mod tests {
             Ok::<_, anyhow::Error>(connection)
         });
 
-        let mut sender = GigantoSender::new(&cert, &key, &roots, server_addr, TEST_SERVER_NAME)
-            .await
-            .expect("compatible server should accept sender creation");
+        let mut sender = GigantoSender::new(
+            &cert,
+            &key,
+            &roots,
+            server_addr,
+            TEST_SERVER_NAME,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .expect("compatible server should accept sender creation");
         let connection = server_task
             .await
             .expect("server task should join cleanly")
@@ -1685,5 +1880,372 @@ mod tests {
 
         client_result.expect("split-CA mTLS client handshake should succeed");
         server_result.expect("split-CA mTLS server handshake should succeed");
+    }
+
+    #[tokio::test]
+    async fn reconnect_reuses_endpoint_without_reload() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let server_task = tokio::spawn(async move {
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept a reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("sender reconnect should complete QUIC setup")?;
+            server_handshake(&connection, REQUIRED_GIGANTO_VERSION).await?;
+            Ok::<_, anyhow::Error>(connection)
+        });
+
+        assert!(
+            !sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested should be false initially"
+        );
+        sender
+            .reconnect()
+            .await
+            .expect("reconnect without reload should succeed");
+        server_task
+            .await
+            .expect("server task should join")
+            .expect("server handshake should succeed");
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint should be reused when reload is not requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_causes_endpoint_rebuild_on_next_reconnect() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        // Simulate SIGHUP by setting the reload flag.
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let server_task = tokio::spawn(async move {
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept a reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("sender reconnect should complete QUIC setup")?;
+            server_handshake(&connection, REQUIRED_GIGANTO_VERSION).await?;
+            Ok::<_, anyhow::Error>(connection)
+        });
+
+        sender
+            .reconnect()
+            .await
+            .expect("reconnect with reload should succeed");
+        server_task
+            .await
+            .expect("server task should join")
+            .expect("server handshake should succeed");
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_ne!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint should be rebuilt when reload was requested"
+        );
+        assert!(
+            !sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested should be cleared after successful rebuild"
+        );
+    }
+
+    #[tokio::test]
+    async fn rebuild_failure_preserves_last_known_good_endpoint() {
+        let (mut sender, _session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        // Point cert/key at invalid paths so rebuild will fail.
+        sender.cert_path = "/nonexistent/cert.pem".to_string();
+        sender.key_path = "/nonexistent/key.pem".to_string();
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        // try_rebuild_endpoint should fail, but the endpoint stays.
+        let result = sender.try_rebuild_endpoint().await;
+        assert!(
+            result.is_err(),
+            "rebuild should fail with invalid cert paths"
+        );
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint should be preserved after rebuild failure"
+        );
+        assert!(
+            sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested should remain set after rebuild failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnect_with_failed_rebuild_preserves_endpoint_and_leaves_reload_pending() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        // Simulate a TLS rotation race where the new files are not yet on
+        // disk: reload is requested, but the paths can't be read. The
+        // reconnect must still succeed using the existing endpoint, and
+        // `reload_requested` must remain set so a later reconnect can
+        // retry the rebuild.
+        sender.cert_path = "/nonexistent/cert.pem".to_string();
+        sender.key_path = "/nonexistent/key.pem".to_string();
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let server_task = tokio::spawn(async move {
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept the fallback reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("fallback reconnect should complete QUIC setup")?;
+            server_handshake(&connection, REQUIRED_GIGANTO_VERSION).await?;
+            Ok::<_, anyhow::Error>(connection)
+        });
+
+        sender
+            .reconnect()
+            .await
+            .expect("reconnect must succeed with the preserved endpoint");
+        server_task
+            .await
+            .expect("server task should join")
+            .expect("server handshake should succeed against preserved endpoint");
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint must be preserved when rebuild fails during reconnect"
+        );
+        assert!(
+            sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested must stay set so the next reconnect retries rebuild"
+        );
+    }
+
+    // Simulates a reload candidate whose endpoint rebuild succeeds and whose
+    // QUIC/TLS transport handshake completes, but whose Giganto application
+    // handshake fails. The reconnect must fall back to the last-known-good
+    // endpoint to obtain a working stream and report `ReloadDeferred` so the
+    // daemon can keep running while a later reconnect retries the reload.
+    #[tokio::test]
+    async fn reconnect_with_successful_rebuild_but_failed_app_handshake_preserves_state() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        let endpoint_addr = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+
+        sender.reload_requested.store(true, Ordering::SeqCst);
+
+        let accept_timeout = TEST_TIMEOUT + Duration::from_secs(3);
+        let (reconnect_result, server_result) = tokio::join!(sender.reconnect(), async {
+            // First accept: the rebuilt reload candidate connects but
+            // the test server rejects the application handshake.
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept the reload candidate in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let candidate_connection = incoming
+                .await
+                .context("reload candidate should complete QUIC setup")?;
+            let candidate_err = server_handshake(&candidate_connection, "0.0.1")
+                .await
+                .expect_err("server should reject the reload candidate version");
+            drop(candidate_connection);
+
+            // Second accept: the fallback to the last-known-good
+            // endpoint connects and completes the handshake so the
+            // sender ends up with a working stream.
+            let incoming = timeout(accept_timeout, session.server_endpoint.accept())
+                .await
+                .context("test server should accept the fallback reconnect in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let fallback_connection = incoming
+                .await
+                .context("fallback reconnect should complete QUIC setup")?;
+            server_handshake(&fallback_connection, REQUIRED_GIGANTO_VERSION)
+                .await
+                .context("fallback handshake should succeed")?;
+            Ok::<_, anyhow::Error>((candidate_err, fallback_connection))
+        });
+
+        server_result.expect("server reconnect task should complete");
+        let outcome = reconnect_result
+            .expect("reconnect must succeed via the last-known-good endpoint fallback");
+        match outcome {
+            ReconnectOutcome::ReloadDeferred(SenderError::Handshake(_)) => {}
+            other => panic!("reconnect should report ReloadDeferred(Handshake), got {other:?}"),
+        }
+
+        let endpoint_addr_after_reconnect = sender
+            .endpoint
+            .local_addr()
+            .expect("endpoint should have a local address");
+        assert_eq!(
+            endpoint_addr, endpoint_addr_after_reconnect,
+            "endpoint must stay the last-known-good one when the rebuilt endpoint's handshake fails"
+        );
+        assert!(
+            sender.reload_requested.load(Ordering::SeqCst),
+            "reload_requested must stay set so the next reconnect retries the reload"
+        );
+    }
+
+    /// Builds a client `Endpoint` whose QUIC `max_idle_timeout` is short
+    /// enough that connecting to a non-responsive UDP address times out
+    /// within a test budget instead of the default ~30 s. Used by the
+    /// `TimeoutPolicy` regression tests.
+    fn build_short_idle_client_endpoint() -> Result<Endpoint> {
+        let cert_path = fixture_path(TEST_CERT_PEM);
+        let key_path = fixture_path(TEST_KEY_PEM);
+        let root_path = fixture_path(TEST_ROOT_PEM);
+
+        let (cert_pem, key_pem) =
+            read_identity_files(&cert_path, &key_path).context("fixture identity should load")?;
+        let pv_key =
+            parse_private_key(&key_path, key_pem).context("fixture private key should parse")?;
+        let cert_chain = parse_cert_chain(&cert_path, cert_pem)
+            .context("fixture certificate chain should parse")?;
+        let server_root =
+            to_root_cert(&[root_path]).context("fixture root certificate should load")?;
+        let client_crypto = rustls::ClientConfig::builder()
+            .with_root_certificates(server_root)
+            .with_client_auth_cert(cert_chain, pv_key)
+            .context("fixture client config should build")?;
+
+        let mut transport = TransportConfig::default();
+        let idle = IdleTimeout::from(VarInt::from_u32(500));
+        transport.max_idle_timeout(Some(idle));
+
+        let mut client_config = quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+                .context("short-idle QUIC client config should build")?,
+        ));
+        client_config.transport_config(Arc::new(transport));
+
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let mut endpoint =
+            quinn::Endpoint::client(bind_addr).context("short-idle client endpoint should bind")?;
+        endpoint.set_default_client_config(client_config);
+        Ok(endpoint)
+    }
+
+    /// Regression test for the timeout-shaped reload-candidate failure:
+    /// `ReturnOnTimeout` must surface a `quinn::ConnectionError::TimedOut`
+    /// instead of looping forever the way `RetryForever` does. Without
+    /// this distinction, a hung handshake on the rebuilt reload candidate
+    /// would prevent `reconnect()` from ever falling back to the
+    /// last-known-good endpoint.
+    #[tokio::test]
+    async fn connect_with_retry_returns_on_timeout_when_policy_is_return_on_timeout() {
+        let endpoint =
+            build_short_idle_client_endpoint().expect("short-idle endpoint should build");
+
+        // Bind a UDP socket that never speaks QUIC. The client handshake
+        // gets no response and times out after `max_idle_timeout`.
+        let dummy_socket =
+            std::net::UdpSocket::bind("127.0.0.1:0").expect("dummy UDP socket should bind");
+        let dummy_addr = dummy_socket
+            .local_addr()
+            .expect("dummy UDP socket should have a local address");
+
+        let result = timeout(
+            Duration::from_secs(5),
+            connect_with_retry(
+                &endpoint,
+                dummy_addr,
+                TEST_SERVER_NAME,
+                TimeoutPolicy::ReturnOnTimeout,
+            ),
+        )
+        .await
+        .expect("ReturnOnTimeout policy must surface the timeout instead of retrying forever");
+
+        match result {
+            Err(SenderError::Connection(quinn::ConnectionError::TimedOut)) => {}
+            other => {
+                panic!("ReturnOnTimeout must report a TimedOut connection error, got {other:?}")
+            }
+        }
+    }
+
+    /// Companion to the test above: the legacy `RetryForever` policy must
+    /// keep looping on `TimedOut` so transient server outages eventually
+    /// reconnect. The outer `tokio::time::timeout` is the assertion: if
+    /// the helper returns an error within the budget, the regression
+    /// would be that the legacy retry-forever behavior was lost.
+    #[tokio::test]
+    async fn connect_with_retry_keeps_retrying_when_policy_is_retry_forever() {
+        let endpoint =
+            build_short_idle_client_endpoint().expect("short-idle endpoint should build");
+
+        let dummy_socket =
+            std::net::UdpSocket::bind("127.0.0.1:0").expect("dummy UDP socket should bind");
+        let dummy_addr = dummy_socket
+            .local_addr()
+            .expect("dummy UDP socket should have a local address");
+
+        let elapsed = timeout(
+            Duration::from_secs(2),
+            connect_with_retry(
+                &endpoint,
+                dummy_addr,
+                TEST_SERVER_NAME,
+                TimeoutPolicy::RetryForever,
+            ),
+        )
+        .await;
+        assert!(
+            elapsed.is_err(),
+            "RetryForever must keep looping on TimedOut, but the helper returned: {elapsed:?}"
+        );
     }
 }
