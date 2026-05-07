@@ -83,6 +83,10 @@ impl<T> Collector for ZeekCollector<T>
 where
     T: Serialize + TryFromZeekRecord + Unpin + Debug + Send,
 {
+    fn kind(&self) -> RawEventKind {
+        self.protocol
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {
@@ -152,7 +156,6 @@ where
                                     self.pos = next_pos;
                                     self.pending_commit = Some(self.pos.line());
                                     return Ok(Some(CollectedBatch {
-                                        kind: self.protocol,
                                         events: buf,
                                         record_bytes,
                                     }));
@@ -210,7 +213,6 @@ where
 
         self.pending_commit = Some(self.pos.line());
         Ok(Some(CollectedBatch {
-            kind: self.protocol,
             events: buf,
             record_bytes,
         }))
@@ -430,7 +432,6 @@ mod tests {
             .expect("collector should emit one record before exhausting");
 
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.kind, RawEventKind::Conn);
         assert!(
             collector
                 .next_batch()

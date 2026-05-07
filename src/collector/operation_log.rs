@@ -72,6 +72,10 @@ impl OplogCollector {
 
 #[async_trait]
 impl Collector for OplogCollector {
+    fn kind(&self) -> RawEventKind {
+        RawEventKind::OpLog
+    }
+
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {
             self.committed_cnt = position;
@@ -107,7 +111,6 @@ impl Collector for OplogCollector {
                 if buf.len() >= BATCH_SIZE {
                     self.pending_commit = Some(self.cnt);
                     return Ok(Some(CollectedBatch {
-                        kind: RawEventKind::OpLog,
                         events: buf,
                         record_bytes,
                     }));
@@ -141,7 +144,6 @@ impl Collector for OplogCollector {
 
         self.pending_commit = Some(self.cnt);
         Ok(Some(CollectedBatch {
-            kind: RawEventKind::OpLog,
             events: buf,
             record_bytes,
         }))
@@ -309,7 +311,6 @@ mod tests {
             .expect("collector should emit one record before exhausting");
 
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.kind, RawEventKind::OpLog);
         assert!(
             collector
                 .next_batch()
