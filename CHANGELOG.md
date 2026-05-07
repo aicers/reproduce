@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.0] - 2026-04-21
 
 ### Added
 
@@ -30,7 +30,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `Kerberos::service_name` to `sname`, and
   `OpLog::agent_name` to `service_name`, and adding the
   `options` field to `Dhcp` record parsing.
-- Bumped `REQUIRED_GIGANTO_VERSION` version to 0.27.0-alpha.1.
+- Bumped `REQUIRED_GIGANTO_VERSION` version to 0.27.0.
 - Migrated from `chrono` to `jiff` crate for datetime handling, providing more
   ergonomic APIs and better timezone support.
 
@@ -486,7 +486,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
-[Unreleased]: https://github.com/aicers/reproduce/compare/0.23.0...main
+[0.24.0]: https://github.com/aicers/reproduce/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/aicers/reproduce/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/aicers/reproduce/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/aicers/reproduce/compare/0.21.2...0.22.0
