@@ -270,11 +270,29 @@ impl GigantoSender {
     /// If no ACK is received within roughly 15 seconds (150 iterations of
     /// 100 ms), the connection is closed anyway.
     ///
+    /// When the current stream has no record header on it
+    /// (`current_stream_kind == None`) the channel-close sentinel is skipped
+    /// and the QUIC stream/connection are torn down directly. The receiver
+    /// would otherwise observe the close marker before any record kind and
+    /// log "unknown raw event kind"; this is the same class of bug a
+    /// pre-pipeline header send guards against, applied at the other end of
+    /// the transfer.
+    ///
     /// # Errors
     ///
     /// Returns an error if the channel-close message cannot be sent or the
     /// stream cannot be finished.
     pub async fn finish(&mut self) -> std::result::Result<(), SenderError> {
+        if self.current_stream_kind.is_none() {
+            self.sender
+                .finish()
+                .map_err(|source| SenderError::context("failed to finish stream", source))?;
+            self.conn.close(0u32.into(), b"log_done");
+            self.endpoint.wait_idle().await;
+            info!("Data Store ended");
+            return Ok(());
+        }
+
         self.send_finish().await?;
         let mut force_finish_count = 0;
         loop {
@@ -1059,10 +1077,19 @@ mod tests {
             .await
             .expect("sender should connect to the test server");
 
+        assert!(
+            sender.current_stream_kind.is_none(),
+            "a freshly-created sender must start without a header on the stream",
+        );
         sender
             .send_header(RawEventKind::Dns)
             .await
             .expect("header send should succeed");
+        assert_eq!(
+            sender.current_stream_kind,
+            Some(RawEventKind::Dns),
+            "a successful header send should record the kind on the stream",
+        );
         let (_server_send, mut server_recv) = accept_server_stream(&session.connection)
             .await
             .expect("server should observe the sender stream after a header write");
@@ -1071,6 +1098,81 @@ mod tests {
             .await
             .expect("server should receive the first record header");
         assert_eq!(header, u32::from(RawEventKind::Dns).to_le_bytes());
+    }
+
+    #[tokio::test]
+    async fn send_header_is_no_op_for_same_kind() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+
+        sender
+            .send_header(RawEventKind::Dns)
+            .await
+            .expect("first header send should succeed");
+        let (_server_send, mut server_recv) = accept_server_stream(&session.connection)
+            .await
+            .expect("server should observe the sender stream after a header write");
+        let mut header = [0_u8; std::mem::size_of::<u32>()];
+        receive_record_header(&mut server_recv, &mut header)
+            .await
+            .expect("server should receive the first record header");
+        assert_eq!(header, u32::from(RawEventKind::Dns).to_le_bytes());
+
+        sender
+            .send_header(RawEventKind::Dns)
+            .await
+            .expect("second header send for the same kind should be a no-op");
+        assert_eq!(
+            sender.current_stream_kind,
+            Some(RawEventKind::Dns),
+            "a no-op header send must leave the recorded kind unchanged",
+        );
+        let mut duplicate_header = [0_u8; std::mem::size_of::<u32>()];
+        assert!(
+            timeout(
+                Duration::from_millis(100),
+                receive_record_header(&mut server_recv, &mut duplicate_header),
+            )
+            .await
+            .is_err(),
+            "a same-kind send_header must not write a second header on the same stream",
+        );
+    }
+
+    #[tokio::test]
+    async fn send_header_writes_new_header_for_different_kind() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+
+        sender
+            .send_header(RawEventKind::Dns)
+            .await
+            .expect("first header send should succeed");
+        let (_server_send, mut server_recv) = accept_server_stream(&session.connection)
+            .await
+            .expect("server should observe the sender stream after a header write");
+        let mut first_header = [0_u8; std::mem::size_of::<u32>()];
+        receive_record_header(&mut server_recv, &mut first_header)
+            .await
+            .expect("server should receive the first record header");
+        assert_eq!(first_header, u32::from(RawEventKind::Dns).to_le_bytes());
+
+        sender
+            .send_header(RawEventKind::Http)
+            .await
+            .expect("send_header with a different kind should write a new header");
+        assert_eq!(
+            sender.current_stream_kind,
+            Some(RawEventKind::Http),
+            "a kind switch must update the recorded current_stream_kind",
+        );
+        let mut second_header = [0_u8; std::mem::size_of::<u32>()];
+        receive_record_header(&mut server_recv, &mut second_header)
+            .await
+            .expect("server should receive the second record header");
+        assert_eq!(second_header, u32::from(RawEventKind::Http).to_le_bytes());
     }
 
     #[tokio::test]
@@ -1103,10 +1205,20 @@ mod tests {
             .await
             .expect("sender should connect to the test server");
 
+        sender
+            .send_header(RawEventKind::Dns)
+            .await
+            .expect("header send should succeed before finish");
         let finish_handle = tokio::spawn(async move { sender.finish().await });
         let (mut server_send, mut server_recv) = accept_server_stream(&session.connection)
             .await
             .expect("server should observe the sender stream after finish starts");
+
+        let mut header = [0_u8; std::mem::size_of::<u32>()];
+        receive_record_header(&mut server_recv, &mut header)
+            .await
+            .expect("server should receive the record header before the close marker");
+        assert_eq!(header, u32::from(RawEventKind::Dns).to_le_bytes());
 
         let mut buf = Vec::new();
         recv_raw(&mut server_recv, &mut buf)
@@ -1133,6 +1245,50 @@ mod tests {
             .await
             .expect("finish task should join cleanly")
             .expect("finish should return after receiving the close ACK");
+    }
+
+    #[tokio::test]
+    async fn finish_skips_close_marker_when_stream_has_no_header() {
+        let (mut sender, session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+
+        // Open the stream on the server side by sending a header, then clear
+        // the recorded kind to model the post-reconnect-no-header state the
+        // pipeline leaves behind when shutdown is observed during header
+        // recovery. The server has the stream open, so we can observe whether
+        // finish writes any record payload before shutting down.
+        sender
+            .send_header(RawEventKind::Dns)
+            .await
+            .expect("header send should succeed before clearing the kind");
+        let (_server_send, mut server_recv) = accept_server_stream(&session.connection)
+            .await
+            .expect("server should accept the sender stream after the header write");
+        let mut header = [0_u8; std::mem::size_of::<u32>()];
+        receive_record_header(&mut server_recv, &mut header)
+            .await
+            .expect("server should receive the original header");
+        assert_eq!(header, u32::from(RawEventKind::Dns).to_le_bytes());
+
+        sender.current_stream_kind = None;
+        sender
+            .finish()
+            .await
+            .expect("finish on a header-less stream should succeed");
+
+        // No record payload should follow the header — finish must not have
+        // written the channel-close marker on a stream the receiver could no
+        // longer route to a record kind. Either a clean stream-finish or a
+        // connection-closed error proves no payload was sent.
+        let mut buf = Vec::new();
+        let outcome = recv_raw(&mut server_recv, &mut buf).await;
+        assert!(
+            outcome.is_err(),
+            "finish on a header-less stream must not emit a record payload; \
+             got payload of {} bytes",
+            buf.len(),
+        );
     }
 
     #[tokio::test]
@@ -1305,6 +1461,11 @@ mod tests {
             .send_header(RawEventKind::Dns)
             .await
             .expect("initial sender should write a header");
+        assert_eq!(
+            sender.current_stream_kind,
+            Some(RawEventKind::Dns),
+            "initial header send should record the stream kind",
+        );
         let (_old_send, mut old_recv) = accept_server_stream(&session.connection)
             .await
             .expect("server should accept the original sender stream");
@@ -1331,6 +1492,11 @@ mod tests {
             .reconnect()
             .await
             .expect("compatible server should allow reconnect");
+        assert!(
+            sender.current_stream_kind.is_none(),
+            "reconnect must clear current_stream_kind so the next send_header writes a fresh \
+             header on the post-reconnect stream",
+        );
 
         let connection = server_task
             .await

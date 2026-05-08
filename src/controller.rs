@@ -55,6 +55,11 @@ impl PipelineSender for GigantoSender {
 /// `on_record_bytes` is called once per record with the raw byte size used by
 /// the binary-level report implementation.
 ///
+/// On a clean shutdown observed during header recovery the sender is left with
+/// `current_stream_kind == None` (cleared by `reconnect`); the caller's
+/// `finish()` skips the channel-close marker in that state so the receiver
+/// never sees a record on a header-less stream.
+///
 /// # Errors
 ///
 /// Returns an error if the collector, sender, or reconnection logic fails.
@@ -69,10 +74,25 @@ where
     F: FnMut(usize) + ?Sized,
 {
     // Emit the stream header before any batch so every transfer starts with a
-    // raw event kind, even when the collector yields nothing.
+    // raw event kind, even when the collector yields nothing. Header writes
+    // share the batch path's reconnect-and-retry semantics because a broken
+    // stream may surface first as a header write failure. Shutdown is checked
+    // after the reconnect so a header send that succeeds despite an in-flight
+    // shutdown still completes; otherwise a pathological case where reconnect
+    // keeps succeeding but the next header write keeps failing would loop
+    // forever.
     let kind = collector.kind();
-    if !ensure_header_with_reconnect(sender, kind, &shutdown).await? {
-        return Ok(());
+    loop {
+        match sender.send_header(kind).await {
+            Ok(()) => break,
+            Err(SenderError::Send(SendError::WriteError(_))) => {
+                log_reconnect_outcome(sender.reconnect().await?);
+                if *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+            Err(error) => return Err(PipelineError::Sender(error)),
+        }
     }
 
     while let Some(batch) = collector.next_batch().await? {
@@ -91,11 +111,19 @@ where
                 Ok(()) => break,
                 Err(SendError::WriteError(_)) => {
                     log_reconnect_outcome(sender.reconnect().await?);
-                    if !ensure_header_with_reconnect(sender, kind, &shutdown).await? {
-                        // Shutdown requested while retrying the header on a
-                        // fresh post-reconnect stream — the stream lacks a
-                        // header, so no batch can safely be flushed.
-                        return Ok(());
+                    // Reconnect cleared the stream's record kind; re-send the
+                    // header so the next batch arrives on a typed stream.
+                    loop {
+                        match sender.send_header(kind).await {
+                            Ok(()) => break,
+                            Err(SenderError::Send(SendError::WriteError(_))) => {
+                                log_reconnect_outcome(sender.reconnect().await?);
+                                if *shutdown.borrow() {
+                                    return Ok(());
+                                }
+                            }
+                            Err(error) => return Err(PipelineError::Sender(error)),
+                        }
                     }
                 }
                 Err(error) => return Err(PipelineError::Send(error)),
@@ -115,40 +143,6 @@ where
     }
 
     Ok(())
-}
-
-// A broken stream may surface first as a header write failure rather than a
-// batch write failure, so header sends use the same reconnect-and-retry path
-// that batches do.
-//
-// Returns `Ok(true)` once the header has been written, `Ok(false)` if the
-// shutdown signal is observed after a header write failure — callers must
-// treat the latter as "no header on the current stream" and stop the pipeline
-// rather than flushing batches that would arrive without a raw event kind.
-// The shutdown check sits after the reconnect so a header send that succeeds
-// despite an in-flight shutdown still completes; without that, the pipeline
-// could loop forever when the receiver is unreachable, since header writes
-// keep failing while reconnect keeps succeeding.
-async fn ensure_header_with_reconnect<S>(
-    sender: &mut S,
-    kind: RawEventKind,
-    shutdown: &watch::Receiver<bool>,
-) -> std::result::Result<bool, PipelineError>
-where
-    S: PipelineSender + ?Sized,
-{
-    loop {
-        match sender.send_header(kind).await {
-            Ok(()) => return Ok(true),
-            Err(SenderError::Send(SendError::WriteError(_))) => {
-                log_reconnect_outcome(sender.reconnect().await?);
-                if *shutdown.borrow() {
-                    return Ok(false);
-                }
-            }
-            Err(error) => return Err(PipelineError::Sender(error)),
-        }
-    }
 }
 
 fn log_reconnect_outcome(outcome: ReconnectOutcome) {
