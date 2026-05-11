@@ -270,13 +270,11 @@ impl GigantoSender {
     /// If no ACK is received within roughly 15 seconds (150 iterations of
     /// 100 ms), the connection is closed anyway.
     ///
-    /// When the current stream has no record header on it
-    /// (`current_stream_kind == None`) the channel-close sentinel is skipped
-    /// and the QUIC stream/connection are torn down directly. The receiver
-    /// would otherwise observe the close marker before any record kind and
-    /// log "unknown raw event kind"; this is the same class of bug a
-    /// pre-pipeline header send guards against, applied at the other end of
-    /// the transfer.
+    /// When the current stream has no record header
+    /// (`current_stream_kind == None`), the channel-close sentinel is skipped
+    /// and the QUIC stream/connection are torn down directly. This preserves
+    /// reproduce's transfer invariant that the channel-close marker is only
+    /// sent on a stream that has already emitted a raw event kind header.
     ///
     /// # Errors
     ///

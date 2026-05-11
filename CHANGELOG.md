@@ -62,9 +62,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed transfers omitting the raw event kind header when the input file
   contained no records. The header is now emitted at the start of every
   transfer, even when the collector yields nothing, and header retries now
-  stop when shutdown is requested. When shutdown stops header recovery on a
-  freshly-reconnected stream, `finish` skips the channel-close marker so the
-  receiver no longer sees a record on a header-less stream.
+  stop when shutdown is requested. `finish` now skips the channel-close marker
+  on streams where no raw event kind header was emitted.
 
 ## [0.23.0] - 2025-11-26
 

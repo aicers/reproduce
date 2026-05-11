@@ -55,11 +55,6 @@ impl PipelineSender for GigantoSender {
 /// `on_record_bytes` is called once per record with the raw byte size used by
 /// the binary-level report implementation.
 ///
-/// On a clean shutdown observed during header recovery the sender is left with
-/// `current_stream_kind == None` (cleared by `reconnect`); the caller's
-/// `finish()` skips the channel-close marker in that state so the receiver
-/// never sees a record on a header-less stream.
-///
 /// # Errors
 ///
 /// Returns an error if the collector, sender, or reconnection logic fails.
