@@ -71,8 +71,6 @@ pub type CollectorResult<T> = std::result::Result<T, CollectorError>;
 
 /// Stores a batch of parsed events ready for sending.
 pub struct CollectedBatch {
-    /// Stores the Giganto protocol kind for the serialized events in this batch.
-    pub kind: RawEventKind,
     /// Stores parsed events as `(timestamp_nanos, serialized_record)` pairs.
     pub events: Vec<(i64, Vec<u8>)>,
     /// Stores per-record source byte sizes for per-record report accounting.
@@ -82,6 +80,9 @@ pub struct CollectedBatch {
 /// Produces batches of parsed events from a data source.
 #[async_trait]
 pub trait Collector: Send {
+    /// Returns the Giganto raw event kind that this collector emits.
+    fn kind(&self) -> RawEventKind;
+
     /// Returns the next batch of events, or `None` when the source is
     /// exhausted (not polling or shutdown requested).
     ///

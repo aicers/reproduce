@@ -15,11 +15,6 @@ use crate::parser::sysmon_csv::TryFromSysmonRecord;
 use crate::sender::BATCH_SIZE;
 
 /// Collects Sysmon CSV records, parsing and batching them for sending.
-///
-/// After the source is exhausted, callers should check
-/// [`SysmonCollector::needs_header_reset`] to determine whether the transport
-/// header needs to be reset (matching the original `Producer::send_sysmon`
-/// behaviour).
 #[allow(clippy::struct_excessive_bools)]
 pub struct SysmonCollector<T> {
     iter: Option<StringRecordsIntoIter<File>>,
@@ -76,15 +71,6 @@ impl<T> SysmonCollector<T> {
         }
     }
 
-    /// Returns `true` if the source has been fully consumed.
-    ///
-    /// When this returns `true`, the caller should reset the transport header
-    /// before switching to a different sysmon event type.
-    #[must_use]
-    pub fn needs_header_reset(&self) -> bool {
-        self.exhausted
-    }
-
     /// Returns the number of successful and failed records observed so far.
     #[must_use]
     pub fn stats(&self) -> (u64, u64) {
@@ -97,6 +83,10 @@ impl<T> Collector for SysmonCollector<T>
 where
     T: Serialize + TryFromSysmonRecord + Unpin + Debug + Send,
 {
+    fn kind(&self) -> RawEventKind {
+        self.protocol
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if let Some(position) = self.pending_commit.take() {
@@ -169,7 +159,6 @@ where
                                     self.pos = next_pos;
                                     self.pending_commit = Some(self.pos.line());
                                     return Ok(Some(CollectedBatch {
-                                        kind: self.protocol,
                                         events: buf,
                                         record_bytes,
                                     }));
@@ -225,7 +214,6 @@ where
 
         self.pending_commit = Some(self.pos.line());
         Ok(Some(CollectedBatch {
-            kind: self.protocol,
             events: buf,
             record_bytes,
         }))
@@ -354,7 +342,6 @@ mod tests {
         );
         assert_eq!(collector.position(), b"4".to_vec());
         assert_eq!(collector.stats(), (0, 3));
-        assert!(collector.needs_header_reset());
     }
 
     #[tokio::test]
@@ -365,7 +352,6 @@ mod tests {
         assert!(collector.next_batch().await.expect("next_batch").is_none());
         assert_eq!(collector.position(), b"3".to_vec());
         assert_eq!(collector.stats(), (0, 0));
-        assert!(collector.needs_header_reset());
     }
 
     #[tokio::test]
@@ -402,7 +388,6 @@ mod tests {
             format!("{}", BATCH_SIZE + 2).into_bytes()
         );
         assert_eq!(collector.stats(), (expected_success, 1));
-        assert!(collector.needs_header_reset());
     }
 
     #[tokio::test]
@@ -452,8 +437,6 @@ mod tests {
             .expect("collector should emit one record before exhausting");
 
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.kind, RawEventKind::ProcessCreate);
-        assert!(collector.needs_header_reset());
         assert!(
             collector
                 .next_batch()
@@ -483,7 +466,6 @@ mod tests {
         {}
 
         assert_eq!(collector.stats(), (2, 1));
-        assert!(collector.needs_header_reset());
     }
 
     #[tokio::test]
@@ -499,7 +481,6 @@ mod tests {
                 .expect("stopped collector should not fail")
                 .is_none()
         );
-        assert!(collector.needs_header_reset());
         assert_eq!(collector.stats(), (0, 0));
     }
 
@@ -536,6 +517,5 @@ mod tests {
                 .expect("collector should then exhaust")
                 .is_none()
         );
-        assert!(collector.needs_header_reset());
     }
 }

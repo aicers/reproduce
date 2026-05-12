@@ -129,7 +129,6 @@ impl<T> NetflowCollector<T> {
         }
 
         Some(CollectedBatch {
-            kind: self.protocol,
             events,
             record_bytes,
         })
@@ -154,6 +153,10 @@ impl<T> Collector for NetflowCollector<T>
 where
     T: Serialize + ParseNetflowDatasets + Unpin + Debug + Send,
 {
+    fn kind(&self) -> RawEventKind {
+        self.protocol
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn next_batch(&mut self) -> CollectorResult<Option<CollectedBatch>> {
         if self.pending_events.is_empty()
@@ -591,7 +594,6 @@ mod tests {
             .await?
             .expect("collector should emit the first packet before exhausting");
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.kind, RawEventKind::Netflow5);
         assert!(collector.next_batch().await?.is_none());
         assert_eq!(collector.position(), b"1".to_vec());
         Ok(())

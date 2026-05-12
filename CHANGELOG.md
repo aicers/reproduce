@@ -59,6 +59,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed CSV-based collectors (`SysmonCollector`, `ZeekCollector`,
   `GigantoImportCollector`) persisting checkpoint `1` for empty inputs where
   no data row was consumed. The checkpoint now correctly remains at zero.
+- Fixed transfers omitting the raw event kind header when the input file
+  contained no records. The header is now emitted at the start of every
+  transfer, even when the collector yields nothing, and header retries now
+  stop when shutdown is requested. `finish` now skips the channel-close marker
+  on streams where no raw event kind header was emitted.
 
 ## [0.23.0] - 2025-11-26
 

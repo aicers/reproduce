@@ -46,38 +46,21 @@ const WAPPLES_LINE: &str = "<182>Jan 9 09:26:09 host wplogd: WAPPLES INTRUSION W
     SQL Injection WAPPLES (client 192.168.1.100 WAPPLES) -> \
     (server 10.0.0.1:80)";
 
+#[derive(Default)]
 struct MockSender {
     batch_sizes: Vec<usize>,
-    ensured_protocols: Vec<RawEventKind>,
+    sent_headers: Vec<RawEventKind>,
     finish_calls: usize,
     reconnect_calls: usize,
-    reset_header_calls: usize,
-    header_pending: bool,
-}
-
-impl Default for MockSender {
-    fn default() -> Self {
-        Self {
-            batch_sizes: Vec::new(),
-            ensured_protocols: Vec::new(),
-            finish_calls: 0,
-            reconnect_calls: 0,
-            reset_header_calls: 0,
-            header_pending: true,
-        }
-    }
 }
 
 #[async_trait]
 impl PipelineSender for MockSender {
-    async fn ensure_header_sent(
+    async fn send_header(
         &mut self,
         protocol: RawEventKind,
     ) -> std::result::Result<(), reproduce::sender::SenderError> {
-        if self.header_pending {
-            self.ensured_protocols.push(protocol);
-            self.header_pending = false;
-        }
+        self.sent_headers.push(protocol);
         Ok(())
     }
 
@@ -99,11 +82,6 @@ impl ControllerSender for MockSender {
     async fn finish(&mut self) -> Result<()> {
         self.finish_calls += 1;
         Ok(())
-    }
-
-    fn reset_header(&mut self) {
-        self.reset_header_calls += 1;
-        self.header_pending = true;
     }
 }
 
@@ -638,7 +616,7 @@ async fn run_with_sender_processes_log_input_and_finishes() {
         .expect("log input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1, 1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Log]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Log]);
     assert_eq!(sender.finish_calls, 1);
 }
 
@@ -657,8 +635,41 @@ async fn run_with_sender_processes_directory_input_and_finishes() {
         .expect("directory input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1, 1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Log]);
+    assert_eq!(
+        sender.sent_headers,
+        vec![RawEventKind::Log, RawEventKind::Log],
+        "each per-file pipeline run requests a stream header; the real \
+         sender deduplicates same-kind requests on a single stream",
+    );
     assert_eq!(sender.finish_calls, 1);
+}
+
+#[tokio::test]
+async fn run_operation_log_sends_header_for_empty_input() {
+    // Regression test for issue #870: an empty oplog input must still emit
+    // the OpLog stream header before the transfer is finished.
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "manager.log", "");
+    let mut sender = MockSender::default();
+
+    run_operation_log(
+        &path,
+        default_run_options(),
+        &mut sender,
+        report_for(&path, OPERATION_LOG),
+    )
+    .await
+    .expect("empty operation log input should still dispatch successfully");
+
+    assert!(
+        sender.batch_sizes.is_empty(),
+        "empty operation log input should not produce any batches",
+    );
+    assert_eq!(
+        sender.sent_headers,
+        vec![RawEventKind::OpLog],
+        "empty operation log input must still send the OpLog stream header",
+    );
 }
 
 #[tokio::test]
@@ -677,12 +688,12 @@ async fn run_single_processes_operation_log_and_saves_checkpoint() {
     let checkpoint_contents =
         std::fs::read_to_string(&checkpoint).expect("checkpoint file should be written");
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::OpLog]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::OpLog]);
     assert_eq!(checkpoint_contents, "1");
 }
 
 #[tokio::test]
-async fn run_single_processes_sysmon_and_resets_header() {
+async fn run_single_processes_sysmon_input() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let path = write_text_file(
         &temp_dir,
@@ -698,8 +709,51 @@ async fn run_single_processes_sysmon_and_resets_header() {
         .expect("sysmon input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::ProcessCreate]);
-    assert_eq!(sender.reset_header_calls, 1);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::ProcessCreate]);
+}
+
+#[tokio::test]
+async fn run_sysmon_kind_resends_header_on_same_sender_when_kind_changes() {
+    // When two sysmon kinds are dispatched on the same sender, reproduce must
+    // request a stream header for each kind so the receiver knows which kind
+    // the following batches belong to.
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let process_create_path = write_text_file(
+        &temp_dir,
+        "event1_log.csv",
+        &format!("{SYSMON_HEADER}\n{SYSMON_PC_1}\n"),
+    );
+    let file_create_time_path =
+        write_text_file(&temp_dir, "event2_log.csv", &format!("{SYSMON_HEADER}\n"));
+    let mut sender = MockSender::default();
+
+    run_sysmon_kind(
+        &process_create_path,
+        "process_create",
+        false,
+        default_run_options(),
+        &mut sender,
+        report_for(&process_create_path, "process_create"),
+    )
+    .await
+    .expect("first sysmon kind should dispatch");
+
+    run_sysmon_kind(
+        &file_create_time_path,
+        "file_create_time",
+        false,
+        default_run_options(),
+        &mut sender,
+        report_for(&file_create_time_path, "file_create_time"),
+    )
+    .await
+    .expect("second sysmon kind should dispatch on the same sender");
+
+    assert_eq!(
+        sender.sent_headers,
+        vec![RawEventKind::ProcessCreate, RawEventKind::FileCreateTime],
+        "switching kinds on the same sender must request the header for the next kind",
+    );
 }
 
 #[tokio::test]
@@ -715,7 +769,7 @@ async fn run_single_processes_zeek_input() {
         .expect("zeek input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Conn]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Conn]);
 }
 
 #[tokio::test]
@@ -731,7 +785,7 @@ async fn run_single_processes_giganto_import_input() {
         .expect("giganto import input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Conn]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Conn]);
 }
 
 #[tokio::test]
@@ -747,7 +801,7 @@ async fn run_single_processes_security_log_input() {
         .expect("security log input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::SecuLog]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::SecuLog]);
 }
 
 #[cfg(feature = "netflow")]
@@ -765,7 +819,7 @@ async fn run_single_processes_netflow_input() {
         .expect("netflow input should be processed");
 
     assert_eq!(sender.batch_sizes, vec![1]);
-    assert_eq!(sender.ensured_protocols, vec![RawEventKind::Netflow5]);
+    assert_eq!(sender.sent_headers, vec![RawEventKind::Netflow5]);
 }
 
 #[tokio::test]
@@ -876,9 +930,10 @@ async fn run_zeek_kind_dispatches_all_supported_kinds_without_records() {
             sender.batch_sizes.is_empty(),
             "empty zeek input should not send any batches",
         );
-        assert!(
-            sender.ensured_protocols.is_empty(),
-            "empty zeek input should not send a record header",
+        assert_eq!(
+            sender.sent_headers.len(),
+            1,
+            "empty zeek input must still emit the stream header before finishing",
         );
     }
 
@@ -976,9 +1031,10 @@ async fn run_sysmon_kind_dispatches_all_supported_kinds_without_records() {
             sender.batch_sizes.is_empty(),
             "header-only sysmon input should not send any batches",
         );
-        assert!(
-            sender.ensured_protocols.is_empty(),
-            "header-only sysmon input should not send a record header",
+        assert_eq!(
+            sender.sent_headers.len(),
+            1,
+            "header-only sysmon input must still emit the stream header before finishing",
         );
     }
 }
