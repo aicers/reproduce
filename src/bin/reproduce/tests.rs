@@ -1404,3 +1404,94 @@ async fn dir_polling_creates_per_file_checkpoints() {
         "directory-level checkpoint should not be created"
     );
 }
+
+/// The watch-based shutdown signal is the canonical termination source
+/// for controller/main/collector. This test asserts that when that watch
+/// is flipped to `true` — exactly what the `SIGINT`/`SIGTERM`/`Ctrl-C`
+/// handlers do — the bridged `CancellationToken` is cancelled and a
+/// sender awaiting `token.cancelled()` is woken. Test 2 (the ctrlc
+/// path) is the same code path: the OS-signal handlers are factored as
+/// `watch_sender.send(true)`, so invoking that directly is equivalent
+/// to receiving the signal without installing a real OS handler.
+#[tokio::test]
+async fn shutdown_bridge_cancels_token_and_wakes_producer() {
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let token = tokio_util::sync::CancellationToken::new();
+    spawn_shutdown_bridge(token.clone(), shutdown_rx);
+
+    let producer_token = token.clone();
+    let producer = tokio::spawn(async move {
+        producer_token.cancelled().await;
+    });
+
+    // Sanity-check: nothing has fired yet, so the producer is still
+    // parked on `cancelled().await`.
+    assert!(!token.is_cancelled());
+
+    shutdown_tx
+        .send(true)
+        .expect("watch receivers must still be alive");
+
+    timeout(Duration::from_secs(5), producer)
+        .await
+        .expect("producer should be woken once the token is cancelled")
+        .expect("producer task should not panic");
+    assert!(token.is_cancelled());
+}
+
+/// `Controller::producer_token` must hand out a token that is wired to
+/// the controller's shutdown bridge: pushing `true` on the watch
+/// sender the controller subscribes to — which is what the real signal
+/// handlers do via `SHUTDOWN_SENDER` — must cancel the token returned
+/// to the producer. The test injects its own watch channel via
+/// `Controller::with_shutdown` so it does not have to mutate the
+/// process-wide `SHUTDOWN_SENDER` and disturb parallel tests.
+#[tokio::test]
+async fn producer_token_observes_watch_shutdown_through_controller() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "alpha\nbeta\n");
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let controller = Controller::with_shutdown(
+        test_config(&path, "custom"),
+        Arc::new(AtomicBool::new(false)),
+        shutdown_rx,
+    );
+
+    let producer_token = controller.producer_token();
+    let producer = tokio::spawn(async move {
+        producer_token.cancelled().await;
+    });
+
+    shutdown_tx
+        .send(true)
+        .expect("watch receivers must still be alive");
+
+    timeout(Duration::from_secs(5), producer)
+        .await
+        .expect("producer token should be cancelled when watch shutdown fires")
+        .expect("producer task should not panic");
+    assert!(controller.producer_token().is_cancelled());
+}
+
+/// Dropping the watch sender (e.g. a controller torn down without an
+/// explicit shutdown) must also cancel the token so producers awaiting
+/// `cancelled()` are not left hanging.
+#[tokio::test]
+async fn producer_token_cancels_when_watch_sender_is_dropped() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    spawn_shutdown_bridge(token.clone(), shutdown_rx);
+
+    let producer_token = token.clone();
+    let producer = tokio::spawn(async move {
+        producer_token.cancelled().await;
+    });
+
+    drop(shutdown_tx);
+
+    timeout(Duration::from_secs(5), producer)
+        .await
+        .expect("dropping the watch sender should still cancel the token")
+        .expect("producer task should not panic");
+    assert!(token.is_cancelled());
+}

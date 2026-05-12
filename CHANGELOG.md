@@ -14,6 +14,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stop when shutdown is requested. `finish` now skips the channel-close marker
   on streams where no raw event kind header was emitted.
 
+## Unreleased
+
+### Added
+
+- Bridged the controller's `watch::Receiver<bool>` shutdown signal into a
+  shared `tokio_util::sync::CancellationToken` and exposed it through
+  `Controller::producer_token`. The existing watch-based shutdown remains the
+  canonical termination source for controller, main, and collector code paths;
+  sender-side code can now `.cancelled().await` on the token instead of
+  polling, and `SIGINT`/`SIGTERM` (or `Ctrl-C` on non-Unix) cancel the token
+  via the same handler that already flips the watch value.
+
 ## [0.24.0] - 2026-05-08
 
 ### Added
