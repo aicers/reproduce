@@ -9,7 +9,53 @@ on:
       - main
 
 jobs:
+  changes:
+    name: Change Filter
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.decide.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Filter Paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docs:
+              - "docs/**"
+              - "**/*.md"
+              - "mkdocs.yml"
+              - ".markdownlint*"
+            code:
+              - "src/**"
+              - "tests/**"
+              - "scripts/**"
+              - "Cargo.toml"
+              - "Cargo.lock"
+              - ".github/workflows/**"
+
+      - name: Decide Docs-Only
+        id: decide
+        run: |
+          if [ "${{ steps.filter.outputs.docs }}" = "true" ] && [ "${{ steps.filter.outputs.code }}" != "true" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  markdownlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v21
+        with:
+          globs: '**/*.md'
+
   check:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Install libraries
@@ -19,18 +65,35 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install MkDocs
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install mkdocs-material mkdocs-static-i18n
+      - name: Cache Docs Theme
+        uses: actions/cache@v4
+        with:
+          path: docs/.theme
+          key: docs-theme-${{ runner.os }}-${{ hashFiles('docs/theme.toml') }}
+      - name: Fetch Docs Theme
+        run: ./scripts/fetch-theme.sh
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
       - name: Clippy
         run: cargo clippy --tests -- -D warnings
       - name: Detect Cargo.lock changes
         run: git diff-index --quiet HEAD --
-      - name: markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v21
-        with:
-          globs: '**/*.md'
+      - name: Build Docs
+        run: mkdocs build --strict
 
   test:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Install libraries
@@ -46,6 +109,8 @@ jobs:
         run: cargo test --verbose
 
   coverage:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Install libraries

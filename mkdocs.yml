@@ -1,0 +1,37 @@
+site_name: REproduce Manual
+site_description: REproduce user manual (EN/KR)
+repo_url: https://github.com/aicers/reproduce
+site_url: ""
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      languages:
+        - locale: en
+          name: English
+          build: true
+          default: true
+          nav:
+            - Overview: index.md
+        - locale: ko
+          name: 한국어
+          build: true
+          nav:
+            - Overview: index.md
+          nav_translations:
+            Overview: 개요
+
+extra_css:
+  - .theme/styles/lists.css
+  - .theme/styles/pdf.css

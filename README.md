@@ -273,6 +273,86 @@ Note: For unstructured logs, `kind` is not empty; it can be any user-defined
 kind. The chosen `kind` is used to send data to the data store and to identify
 it for storage and queries.
 
+## Documentation
+
+The user manual is built with [MkDocs](https://www.mkdocs.org/) using the
+shared [aicers/docs-theme](https://github.com/aicers/docs-theme) assets. The
+theme version and template are pinned in `docs/theme.toml`.
+
+### Prerequisites
+
+- Python 3 and `pip` (e.g., `brew install python` on macOS).
+- GitHub CLI (`gh`), authenticated via `gh auth login`. The theme is fetched
+  from a private GitHub release, so an authenticated `gh` (or a `GH_TOKEN`
+  environment variable in CI) is required.
+
+### Setup
+
+Create a virtualenv and install the MkDocs tooling once per clone:
+
+```sh
+python3 -m venv .venv
+# bash/zsh:
+source .venv/bin/activate
+# fish:
+source .venv/bin/activate.fish
+pip install mkdocs-material mkdocs-static-i18n
+pip install mkdocs-with-pdf PyYAML
+```
+
+`mkdocs-with-pdf` and `PyYAML` are only required when building the PDF
+manuals via `scripts/build-docs-pdf.sh`.
+
+### Fetching the theme
+
+```sh
+./scripts/fetch-theme.sh
+```
+
+This downloads the theme release pinned in `docs/theme.toml` into
+`docs/.theme/`. The directory is gitignored. Subsequent runs are no-ops when
+the installed version already matches.
+
+### Local preview
+
+```sh
+mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload
+```
+
+### Building
+
+```sh
+mkdocs build --strict
+```
+
+The HTML output is written to `site/`. To build PDF manuals:
+
+```sh
+./scripts/build-docs-pdf.sh en
+./scripts/build-docs-pdf.sh ko
+```
+
+PDF outputs are written under `site-pdf-<locale>/` and `site/pdf/`.
+
+### Troubleshooting
+
+- `gh release download` fails with an authentication error: run
+  `gh auth login` (locally) or ensure the `GH_TOKEN` repo secret is set (CI).
+- `mkdocs build --strict` complains about missing CSS under `.theme/`: run
+  `./scripts/fetch-theme.sh` first.
+- `build-docs-pdf.sh` fails with `docs/.theme not found`: run
+  `./scripts/fetch-theme.sh` first.
+
+### CI
+
+The `Docs` workflow (`.github/workflows/docs.yml`) builds the docs on push
+to `main` and on pull requests targeting `main`. The shared `CI` workflow
+fetches the theme, caches `docs/.theme/` keyed by `docs/theme.toml`, and
+skips the Rust jobs when only documentation files change. The CI uses
+`GH_TOKEN` (provided automatically as `github.token`) to fetch the theme
+release; if the theme repo is private, ensure the workflow has access or
+configure a dedicated `GH_TOKEN` repository secret.
+
 ## License
 
 Copyright 2021-2026 ClumL Inc.

@@ -1,0 +1,12 @@
+globs:
+  - "**/*.md"
+ignores:
+  - "node_modules/**"
+  - "secrets/**"
+  - ".github/**"
+  - ".venv/**"
+config:
+  MD013:
+    tables: false
+  MD024:
+    siblings_only: true
