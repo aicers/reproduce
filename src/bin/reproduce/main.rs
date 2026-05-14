@@ -735,29 +735,13 @@ where
 }
 
 /// Owns the process-wide shutdown signal and exposes it to senders.
-///
-/// Shutdown ownership boundary:
-///
-/// * The existing `watch::Receiver<bool>` channel remains the canonical
-///   shutdown source for the controller, `main`, and the collector loops.
-///   Termination signals (`SIGINT`, `SIGTERM`, or `Ctrl-C` on non-Unix)
-///   flip the watch value to `true` exactly as before.
-/// * The controller additionally owns a [`CancellationToken`] and bridges
-///   the watch channel into it: a background task awaits the watch
-///   becoming `true` (or the sender being dropped) and then calls
-///   [`CancellationToken::cancel`]. Senders that need to await
-///   cancellation directly can obtain a clone via
-///   [`Controller::producer_token`] and `.cancelled().await` on it,
-///   instead of polling a `watch::Receiver<bool>` or an `AtomicBool`.
-///
-/// The bridge is one-way (watch -> token) and additive: no existing
-/// watch-based shutdown path is removed.
 struct Controller {
     config: Config,
     reload_requested: Arc<AtomicBool>,
-    // Held so the bridge task can hand out clones via `producer_token`;
-    // current sender code still uses the watch channel, so production
-    // call sites do not read the token yet.
+    /// Sender-side cancellation token bridged from the existing watch
+    /// shutdown signal; see [`spawn_shutdown_bridge`]. Current sender
+    /// code still uses the watch channel, so production call sites do
+    /// not read the token yet.
     #[allow(dead_code)]
     token: CancellationToken,
 }
@@ -798,7 +782,7 @@ impl Controller {
     // the API surface that new/refactored sender code will consume.
     #[allow(dead_code)]
     #[must_use]
-    pub fn producer_token(&self) -> CancellationToken {
+    pub fn sender_token(&self) -> CancellationToken {
         self.token.clone()
     }
 
@@ -1205,6 +1189,20 @@ fn spawn_termination_handlers(sender: watch::Sender<bool>) -> Result<()> {
 /// so any sender awaiting `token.cancelled()` is woken. Calling `cancel`
 /// more than once is a no-op, so termination signals racing the bridge
 /// task are safe.
+///
+/// Shutdown ownership boundary:
+///
+/// * The existing `watch::Receiver<bool>` channel remains the canonical
+///   shutdown source for the controller, `main`, and the collector loops.
+///   Termination signals (`SIGINT`, `SIGTERM`, or `Ctrl-C` on non-Unix)
+///   flip the watch value to `true` exactly as before.
+/// * The [`CancellationToken`] is owned by [`Controller`] and handed to
+///   senders via [`Controller::sender_token`]. Senders that need to await
+///   cancellation directly can `.cancelled().await` on a clone instead of
+///   polling a `watch::Receiver<bool>` or an `AtomicBool`.
+///
+/// The bridge is one-way (watch -> token) and additive: no existing
+/// watch-based shutdown path is removed.
 fn spawn_shutdown_bridge(token: CancellationToken, mut shutdown: watch::Receiver<bool>) {
     tokio::spawn(async move {
         if *shutdown.borrow_and_update() {

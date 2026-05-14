@@ -20,7 +20,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Bridged the controller's `watch::Receiver<bool>` shutdown signal into a
   shared `tokio_util::sync::CancellationToken` and exposed it through
-  `Controller::producer_token`. The existing watch-based shutdown remains the
+  `Controller::sender_token`. The existing watch-based shutdown remains the
   canonical termination source for controller, main, and collector code paths;
   sender-side code can now `.cancelled().await` on the token instead of
   polling, and `SIGINT`/`SIGTERM` (or `Ctrl-C` on non-Unix) cancel the token
