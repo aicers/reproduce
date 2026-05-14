@@ -275,83 +275,48 @@ it for storage and queries.
 
 ## Documentation
 
-The user manual is built with [MkDocs](https://www.mkdocs.org/) using the
-shared [aicers/docs-theme](https://github.com/aicers/docs-theme) assets. The
-theme version and template are pinned in `docs/theme.toml`.
+Build and preview the documentation locally:
 
-### Prerequisites
-
-- Python 3 and `pip` (e.g., `brew install python` on macOS).
-- GitHub CLI (`gh`), authenticated via `gh auth login`. The theme is fetched
-  from a private GitHub release, so an authenticated `gh` (or a `GH_TOKEN`
-  environment variable in CI) is required.
-
-### Setup
-
-Create a virtualenv and install the MkDocs tooling once per clone:
-
-```sh
+```bash
+brew install python gh
 python3 -m venv .venv
-# bash/zsh:
 source .venv/bin/activate
-# fish:
-source .venv/bin/activate.fish
-pip install mkdocs-material mkdocs-static-i18n
-pip install mkdocs-with-pdf PyYAML
-```
-
-`mkdocs-with-pdf` and `PyYAML` are only required when building the PDF
-manuals via `scripts/build-docs-pdf.sh`.
-
-### Fetching the theme
-
-```sh
+pip install mkdocs-material mkdocs-static-i18n mkdocs-with-pdf PyYAML
 ./scripts/fetch-theme.sh
-```
-
-This downloads the theme release pinned in `docs/theme.toml` into
-`docs/.theme/`. The directory is gitignored. Subsequent runs are no-ops when
-the installed version already matches.
-
-### Local preview
-
-```sh
 mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload
 ```
 
-### Building
+Command notes:
 
-```sh
-mkdocs build --strict
+- `brew install python gh`: installs Python and GitHub CLI, once per machine.
+  `gh` is required to fetch the shared docs theme.
+- `python3 -m venv .venv`: creates a local virtualenv for this repo.
+- `source .venv/bin/activate`: activates the virtualenv for the current shell.
+- `pip install ...`: installs MkDocs tooling into the virtualenv. Run once after
+  creating the virtualenv per clone. `mkdocs-with-pdf` and `PyYAML` are only
+  needed for PDF builds.
+- `./scripts/fetch-theme.sh`: fetches the shared docs theme from
+  `aicers/docs-theme`. The version and template are declared in
+  `docs/theme.toml`. Subsequent runs skip the download if the installed version
+  already matches.
+- `mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload`: runs a local docs
+  preview server with live reload.
+- `mkdocs build --strict`: builds static files into `site/`.
+
+### PDF generation
+
+PDF rendering requires native graphics libraries. On macOS:
+
+```bash
+brew install cairo pango gdk-pixbuf libffi
 ```
 
-The HTML output is written to `site/`. To build PDF manuals:
+Then build a PDF for a specific locale:
 
-```sh
+```bash
 ./scripts/build-docs-pdf.sh en
 ./scripts/build-docs-pdf.sh ko
 ```
-
-PDF outputs are written under `site-pdf-<locale>/` and `site/pdf/`.
-
-### Troubleshooting
-
-- `gh release download` fails with an authentication error: run
-  `gh auth login` (locally) or ensure the `GH_TOKEN` repo secret is set (CI).
-- `mkdocs build --strict` complains about missing CSS under `.theme/`: run
-  `./scripts/fetch-theme.sh` first.
-- `build-docs-pdf.sh` fails with `docs/.theme not found`: run
-  `./scripts/fetch-theme.sh` first.
-
-### CI
-
-The `Docs` workflow (`.github/workflows/docs.yml`) builds the docs on push
-to `main` and on pull requests targeting `main`. The shared `CI` workflow
-fetches the theme, caches `docs/.theme/` keyed by `docs/theme.toml`, and
-skips the Rust jobs when only documentation files change. The CI uses
-`GH_TOKEN` (provided automatically as `github.token`) to fetch the theme
-release; if the theme repo is private, ensure the workflow has access or
-configure a dedicated `GH_TOKEN` repository secret.
 
 ## License
 

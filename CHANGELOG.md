@@ -30,14 +30,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Added a MkDocs documentation site that uses the shared
-  [aicers/docs-theme](https://github.com/aicers/docs-theme) manual template.
-  The theme version and template are pinned in `docs/theme.toml` and fetched
-  by `scripts/fetch-theme.sh` (requires the `gh` CLI). English and Korean
-  placeholder pages live under `docs/en/` and `docs/ko/`, and PDF manuals can
-  be built with `scripts/build-docs-pdf.sh`. A new `Docs` workflow builds the
-  site on pushes to `main` and on pull requests; the existing `CI` workflow
-  now skips Rust jobs for documentation-only changes.
+- Set up MkDocs documentation skeleton with bilingual (EN/KO) support,
+  shared `aicers/docs-theme` integration, PDF generation script, and
+  docs CI workflow.
+
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.0...main
 
 ## [0.24.0] - 2026-05-08
 
@@ -555,5 +552,3 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 [0.9.5]: https://github.com/aicers/reproduce/compare/0.9.4...0.9.5
 [0.9.4]: https://github.com/aicers/reproduce/compare/0.9.3...0.9.4
 [0.9.3]: https://github.com/aicers/reproduce/compare/0.9.2...0.9.3
-
-[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.0...main

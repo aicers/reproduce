@@ -8,10 +8,6 @@ on:
     branches:
       - main
 
-concurrency:
-  group: docs-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     name: Build Docs
@@ -30,7 +26,7 @@ jobs:
           python3 -m pip install mkdocs-material mkdocs-static-i18n
 
       - name: Cache Docs Theme
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: docs/.theme
           key: docs-theme-${{ runner.os }}-${{ hashFiles('docs/theme.toml') }}
@@ -38,7 +34,7 @@ jobs:
       - name: Fetch Docs Theme
         run: ./scripts/fetch-theme.sh
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
 
       - name: Build
         run: mkdocs build --strict
