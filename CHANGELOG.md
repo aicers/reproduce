@@ -34,8 +34,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   shared `aicers/docs-theme` integration, PDF generation script, and
   docs CI workflow.
 
-[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.0...main
-
 ## [0.24.0] - 2026-05-08
 
 ### Added
@@ -520,6 +518,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 [Unreleased]: https://github.com/aicers/reproduce/compare/0.24.1...HEAD
 [0.24.1]: https://github.com/aicers/reproduce/compare/0.24.0...0.24.1
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.0...main
 [0.24.0]: https://github.com/aicers/reproduce/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/aicers/reproduce/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/aicers/reproduce/compare/0.22.0...0.22.1
