@@ -291,7 +291,8 @@ Command notes:
 - `brew install python gh`: installs Python and GitHub CLI, once per machine.
   `gh` is required to fetch the shared docs theme.
 - `python3 -m venv .venv`: creates a local virtualenv for this repo.
-- `source .venv/bin/activate`: activates the virtualenv for the current shell.
+- `source .venv/bin/activate`: activates the virtualenv for the current shell (bash/zsh).
+- `source .venv/bin/activate.fish`: activates the virtualenv for Fish shell users.
 - `pip install ...`: installs MkDocs tooling into the virtualenv. Run once after
   creating the virtualenv per clone. `mkdocs-with-pdf` and `PyYAML` are only
   needed for PDF builds.
