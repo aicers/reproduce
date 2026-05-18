@@ -126,8 +126,7 @@ report_dir = "/var/lib/reproduce/reports"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "data-store"
-  # Data kind (see `Network Events` section).
-  kind = "dns"
+  kind = "dns"                             # Data kind (see `Network Events` section).
   input = "/path/to/zeek_file"
   ```
 
@@ -155,8 +154,7 @@ report_dir = "/var/lib/reproduce/reports"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "data-store"
-  # Data kind (see `Network Events` section).
-  kind = "http"
+  kind = "http"                            # Data kind (see `Network Events` section).
   input = "/path/to/giganto_export_file"
 
   [file]

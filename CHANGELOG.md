@@ -15,6 +15,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   sender-side code can now `.cancelled().await` on the token instead of
   polling, and `SIGINT`/`SIGTERM` (or `Ctrl-C` on non-Unix) cancel the token
   via the same handler that already flips the watch value.
+- Set up MkDocs documentation skeleton with bilingual (EN/KO) support,
+  shared `aicers/docs-theme` integration, PDF generation script, and
+  docs CI workflow.
 
 ## [0.24.1] - 2026-05-13
 
@@ -25,14 +28,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   transfer, even when the collector yields nothing, and header retries now
   stop when shutdown is requested. `finish` now skips the channel-close marker
   on streams where no raw event kind header was emitted.
-
-## [Unreleased]
-
-### Added
-
-- Set up MkDocs documentation skeleton with bilingual (EN/KO) support,
-  shared `aicers/docs-theme` integration, PDF generation script, and
-  docs CI workflow.
 
 ## [0.24.0] - 2026-05-08
 
@@ -518,7 +513,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 [Unreleased]: https://github.com/aicers/reproduce/compare/0.24.1...HEAD
 [0.24.1]: https://github.com/aicers/reproduce/compare/0.24.0...0.24.1
-[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.0...main
 [0.24.0]: https://github.com/aicers/reproduce/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/aicers/reproduce/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/aicers/reproduce/compare/0.22.0...0.22.1
