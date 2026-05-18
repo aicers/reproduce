@@ -4,16 +4,6 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.24.1] - 2026-05-13
-
-### Fixed
-
-- Fixed transfers omitting the raw event kind header when the input file
-  contained no records. The header is now emitted at the start of every
-  transfer, even when the collector yields nothing, and header retries now
-  stop when shutdown is requested. `finish` now skips the channel-close marker
-  on streams where no raw event kind header was emitted.
-
 ## Unreleased
 
 ### Added
@@ -25,6 +15,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   sender-side code can now `.cancelled().await` on the token instead of
   polling, and `SIGINT`/`SIGTERM` (or `Ctrl-C` on non-Unix) cancel the token
   via the same handler that already flips the watch value.
+
+## [0.24.1] - 2026-05-13
+
+### Fixed
+
+- Fixed transfers omitting the raw event kind header when the input file
+  contained no records. The header is now emitted at the start of every
+  transfer, even when the collector yields nothing, and header retries now
+  stop when shutdown is requested. `finish` now skips the channel-close marker
+  on streams where no raw event kind header was emitted.
 
 ## [0.24.0] - 2026-05-08
 
