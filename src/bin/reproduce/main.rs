@@ -134,6 +134,9 @@ fn version() -> String {
 ///
 /// Logs will be written to the file specified by `log_path` if provided.
 /// If `log_path` is `None`, logs will be printed to stdout.
+///
+/// Both branches default to INFO when `RUST_LOG` is unset; set `RUST_LOG` to
+/// override the default level.
 fn init_tracing(log_path: Option<&std::path::Path>) -> anyhow::Result<WorkerGuard> {
     let (layer, guard) = if let Some(log_path) = log_path {
         let file = OpenOptions::new()
@@ -160,7 +163,11 @@ fn init_tracing(log_path: Option<&std::path::Path>) -> anyhow::Result<WorkerGuar
             fmt::Layer::default()
                 .with_ansi(true)
                 .with_writer(stdout_writer)
-                .with_filter(EnvFilter::from_default_env()),
+                .with_filter(
+                    EnvFilter::builder()
+                        .with_default_directive(LevelFilter::INFO.into())
+                        .from_env_lossy(),
+                ),
             stdout_guard,
         )
     };
