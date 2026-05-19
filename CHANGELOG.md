@@ -19,6 +19,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   shared `aicers/docs-theme` integration, PDF generation script, and
   docs CI workflow.
 
+### Changed
+
+- Refactored `GigantoSender` shutdown and reconnect handling to track ACK
+  receiver tasks explicitly, await the channel-close ACK with a timeout, and
+  cancel in-flight sender work when shutdown or reconnect is requested.
+
 ## [0.24.1] - 2026-05-13
 
 ### Fixed

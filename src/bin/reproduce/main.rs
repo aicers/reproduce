@@ -797,8 +797,12 @@ impl Controller {
             let shutdown = shutdown_receiver();
             self.run_elastic_with_shutdown(shutdown).await?;
         } else {
-            let mut sender =
-                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
+            let mut sender = create_sender(
+                &self.config,
+                Arc::clone(&self.reload_requested),
+                self.sender_token(),
+            )
+            .await?;
             self.run_with_sender(&mut sender).await?;
         }
 
@@ -904,8 +908,12 @@ impl Controller {
 
         files.sort_unstable();
         for file in files {
-            let mut sender =
-                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
+            let mut sender = create_sender(
+                &self.config,
+                Arc::clone(&self.reload_requested),
+                self.sender_token(),
+            )
+            .await?;
             info!("File: {file:?}");
             let kind = file_to_kind(&file)?;
             self.run_single_with_shutdown(
@@ -1333,6 +1341,7 @@ pub(crate) fn input_type(input: &str) -> InputType {
 async fn create_sender(
     config: &Config,
     reload_requested: Arc<AtomicBool>,
+    sender_token: CancellationToken,
 ) -> Result<GigantoSender> {
     debug!("output type=GIGANTO");
     GigantoSender::new(
@@ -1342,6 +1351,7 @@ async fn create_sender(
         config.giganto.ingest_srv_addr,
         &config.giganto.name,
         reload_requested,
+        sender_token,
     )
     .await
     .map_err(anyhow::Error::from)
