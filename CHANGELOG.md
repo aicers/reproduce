@@ -6,6 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Aligned stdout logging with file logging: both now default to INFO when
+  `RUST_LOG` is unset. `RUST_LOG` continues to override the default in either
+  case.
+
 ### Added
 
 - Set up MkDocs documentation skeleton with bilingual (EN/KO) support,
