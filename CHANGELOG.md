@@ -4,6 +4,18 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Bridged the controller's `watch::Receiver<bool>` shutdown signal into a
+  shared `tokio_util::sync::CancellationToken` and exposed it through
+  `Controller::sender_token`. The existing watch-based shutdown remains the
+  canonical termination source for controller, main, and collector code paths;
+  sender-side code can now `.cancelled().await` on the token instead of
+  polling, and `SIGINT`/`SIGTERM` (or `Ctrl-C` on non-Unix) cancel the token
+  via the same handler that already flips the watch value.
+
 ## [0.24.1] - 2026-05-13
 
 ### Fixed
@@ -496,6 +508,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.1...HEAD
 [0.24.1]: https://github.com/aicers/reproduce/compare/0.24.0...0.24.1
 [0.24.0]: https://github.com/aicers/reproduce/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/aicers/reproduce/compare/0.22.1...0.23.0

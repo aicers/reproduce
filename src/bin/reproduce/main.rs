@@ -56,6 +56,7 @@ use reproduce::parser::zeek::{TryFromZeekRecord, open_raw_event_log_file};
 use reproduce::sender::GigantoSender;
 use serde::Serialize;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -733,9 +734,16 @@ where
     }
 }
 
+/// Owns the process-wide shutdown signal and exposes it to senders.
 struct Controller {
     config: Config,
     reload_requested: Arc<AtomicBool>,
+    /// Sender-side cancellation token bridged from the existing watch
+    /// shutdown signal; see [`spawn_shutdown_bridge`]. Current sender
+    /// code still uses the watch channel, so production call sites do
+    /// not read the token yet.
+    #[allow(dead_code)]
+    token: CancellationToken,
 }
 
 static SHUTDOWN_SENDER: OnceLock<watch::Sender<bool>> = OnceLock::new();
@@ -743,10 +751,39 @@ static SHUTDOWN_SENDER: OnceLock<watch::Sender<bool>> = OnceLock::new();
 impl Controller {
     #[must_use]
     fn new(config: Config, reload_requested: Arc<AtomicBool>) -> Self {
+        Self::with_shutdown(config, reload_requested, shutdown_receiver())
+    }
+
+    /// Constructs a controller bridged to a caller-provided watch
+    /// receiver. Used by `new` (with the process-wide shutdown channel)
+    /// and by tests that need to drive the watch sender themselves
+    /// without mutating the global `SHUTDOWN_SENDER`.
+    fn with_shutdown(
+        config: Config,
+        reload_requested: Arc<AtomicBool>,
+        shutdown: watch::Receiver<bool>,
+    ) -> Self {
+        let token = CancellationToken::new();
+        spawn_shutdown_bridge(token.clone(), shutdown);
         Self {
             config,
             reload_requested,
+            token,
         }
+    }
+
+    /// Returns a clone of the cancellation token that senders can await.
+    ///
+    /// The token is cancelled when the controller's watch shutdown signal
+    /// becomes `true` (which is what termination signals trigger) or when
+    /// the watch sender is dropped. Callers should `.cancelled().await`
+    /// on the returned token rather than polling.
+    // Production senders still use the watch channel; this accessor is
+    // the API surface that new/refactored sender code will consume.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn sender_token(&self) -> CancellationToken {
+        self.token.clone()
     }
 
     /// # Errors
@@ -1143,6 +1180,46 @@ fn spawn_termination_handlers(sender: watch::Sender<bool>) -> Result<()> {
         }
     });
     Ok(())
+}
+
+/// Bridges the watch-based shutdown channel into a [`CancellationToken`].
+///
+/// Spawns a task that resolves once `shutdown` reports `true` or the
+/// underlying sender is dropped, then calls [`CancellationToken::cancel`]
+/// so any sender awaiting `token.cancelled()` is woken. Calling `cancel`
+/// more than once is a no-op, so termination signals racing the bridge
+/// task are safe.
+///
+/// Shutdown ownership boundary:
+///
+/// * The existing `watch::Receiver<bool>` channel remains the canonical
+///   shutdown source for the controller, `main`, and the collector loops.
+///   Termination signals (`SIGINT`, `SIGTERM`, or `Ctrl-C` on non-Unix)
+///   flip the watch value to `true` exactly as before.
+/// * The [`CancellationToken`] is owned by [`Controller`] and handed to
+///   senders via [`Controller::sender_token`]. Senders that need to await
+///   cancellation directly can `.cancelled().await` on a clone instead of
+///   polling a `watch::Receiver<bool>` or an `AtomicBool`.
+///
+/// The bridge is one-way (watch -> token) and additive: no existing
+/// watch-based shutdown path is removed.
+fn spawn_shutdown_bridge(token: CancellationToken, mut shutdown: watch::Receiver<bool>) {
+    tokio::spawn(async move {
+        if *shutdown.borrow_and_update() {
+            token.cancel();
+            return;
+        }
+        while shutdown.changed().await.is_ok() {
+            if *shutdown.borrow_and_update() {
+                token.cancel();
+                return;
+            }
+        }
+        // The watch sender was dropped without ever signalling shutdown;
+        // treat sender loss as cancellation so awaiting senders are not
+        // left hanging.
+        token.cancel();
+    });
 }
 
 fn shutdown_receiver() -> watch::Receiver<bool> {
