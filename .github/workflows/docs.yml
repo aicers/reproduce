@@ -1,0 +1,40 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install MkDocs
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install mkdocs-material mkdocs-static-i18n
+
+      - name: Cache Docs Theme
+        uses: actions/cache@v5
+        with:
+          path: docs/.theme
+          key: docs-theme-${{ runner.os }}-${{ hashFiles('docs/theme.toml') }}
+
+      - name: Fetch Docs Theme
+        run: ./scripts/fetch-theme.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build
+        run: mkdocs build --strict

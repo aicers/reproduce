@@ -126,7 +126,7 @@ report_dir = "/var/lib/reproduce/reports"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "data-store"
-  kind = "dns"                                # Data kind (see `Network Events` section).
+  kind = "dns"                             # Data kind (see `Network Events` section).
   input = "/path/to/zeek_file"
   ```
 
@@ -154,7 +154,7 @@ report_dir = "/var/lib/reproduce/reports"
   ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
   giganto_ingest_srv_addr = "127.0.0.1:38370"
   giganto_name = "data-store"
-  kind = "http"                               # Data kind (see `Network Events` section).
+  kind = "http"                            # Data kind (see `Network Events` section).
   input = "/path/to/giganto_export_file"
 
   [file]
@@ -272,6 +272,52 @@ report_dir = "/var/lib/reproduce/reports"
 Note: For unstructured logs, `kind` is not empty; it can be any user-defined
 kind. The chosen `kind` is used to send data to the data store and to identify
 it for storage and queries.
+
+## Documentation
+
+Build and preview the documentation locally:
+
+```bash
+brew install python gh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install mkdocs-material mkdocs-static-i18n mkdocs-with-pdf PyYAML
+./scripts/fetch-theme.sh
+mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload
+```
+
+Command notes:
+
+- `brew install python gh`: installs Python and GitHub CLI, once per machine.
+  `gh` is required to fetch the shared docs theme.
+- `python3 -m venv .venv`: creates a local virtualenv for this repo.
+- `source .venv/bin/activate`: activates the virtualenv for the current shell (bash/zsh).
+- `source .venv/bin/activate.fish`: activates the virtualenv for Fish shell users.
+- `pip install ...`: installs MkDocs tooling into the virtualenv. Run once after
+  creating the virtualenv per clone. `mkdocs-with-pdf` and `PyYAML` are only
+  needed for PDF builds.
+- `./scripts/fetch-theme.sh`: fetches the shared docs theme from
+  `aicers/docs-theme`. The version and template are declared in
+  `docs/theme.toml`. Subsequent runs skip the download if the installed version
+  already matches.
+- `mkdocs serve -a 127.0.0.1:8000 --livereload --dirtyreload`: runs a local docs
+  preview server with live reload.
+- `mkdocs build --strict`: builds static files into `site/`.
+
+### PDF generation
+
+PDF rendering requires native graphics libraries. On macOS:
+
+```bash
+brew install cairo pango gdk-pixbuf libffi
+```
+
+Then build a PDF for a specific locale:
+
+```bash
+./scripts/build-docs-pdf.sh en
+./scripts/build-docs-pdf.sh ko
+```
 
 ## License
 
