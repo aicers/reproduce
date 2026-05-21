@@ -18,6 +18,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Set up MkDocs documentation skeleton with bilingual (EN/KO) support,
   shared `aicers/docs-theme` integration, PDF generation script, and
   docs CI workflow.
+- Added the REproduce user manual scaffold in both English and Korean,
+  including overview, prerequisites, configuration, operations, and
+  troubleshooting pages wired into the MkDocs navigation.
 
 ## [0.24.1] - 2026-05-13
 
