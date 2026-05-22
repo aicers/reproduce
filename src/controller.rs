@@ -109,10 +109,7 @@ where
             match sender.send_batch(&batch.events).await {
                 Ok(()) => break,
                 Err(SendError::WriteError(_)) => {
-                    let Some(outcome) = reconnect_or_shutdown(sender.reconnect().await, &shutdown)?
-                    else {
-                        return Ok(());
-                    };
+                    let outcome = sender.reconnect().await.map_err(PipelineError::Sender)?;
                     log_reconnect_outcome(outcome);
                     // Reconnect cleared the stream's record kind; re-send the
                     // header so the next batch arrives on a typed stream.
@@ -120,15 +117,9 @@ where
                         match sender.send_header(kind).await {
                             Ok(()) => break,
                             Err(SenderError::Send(SendError::WriteError(_))) => {
-                                let Some(outcome) =
-                                    reconnect_or_shutdown(sender.reconnect().await, &shutdown)?
-                                else {
-                                    return Ok(());
-                                };
+                                let outcome =
+                                    sender.reconnect().await.map_err(PipelineError::Sender)?;
                                 log_reconnect_outcome(outcome);
-                                if *shutdown.borrow() {
-                                    return Ok(());
-                                }
                             }
                             Err(error) => return Err(PipelineError::Sender(error)),
                         }
@@ -927,7 +918,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn batch_reconnect_cancelled_during_shutdown_is_graceful() {
+    async fn batch_reconnect_cancelled_during_shutdown_propagates_unsent_batch() {
         let (shutdown_tx, shutdown) = watch::channel(false);
         let mut collector = OneBatchCollector {
             yielded: false,
@@ -938,17 +929,21 @@ mod tests {
             .with_batch_results([Err(write_send_error())])
             .with_reconnect_results([Err(SenderError::Cancelled)]);
 
-        run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+        let error = run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
             .await
-            .expect("shutdown cancellation during batch reconnect is graceful");
+            .expect_err("cancelled reconnect must not complete an unsent batch gracefully");
 
         assert_eq!(sender.header_attempts, 1);
         assert_eq!(sender.reconnects, 1);
         assert_eq!(sender.batch_attempts, 1);
+        assert!(
+            error.to_string().contains("sender operation cancelled"),
+            "unexpected error: {error}",
+        );
     }
 
     #[tokio::test]
-    async fn post_reconnect_header_cancelled_during_shutdown_is_graceful() {
+    async fn post_reconnect_header_cancelled_during_shutdown_propagates_unsent_batch() {
         let (shutdown_tx, shutdown) = watch::channel(false);
         let mut collector = OneBatchCollector {
             yielded: false,
@@ -963,13 +958,17 @@ mod tests {
                 Err(SenderError::Cancelled),
             ]);
 
-        run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+        let error = run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
             .await
-            .expect("shutdown cancellation during post-reconnect header is graceful");
+            .expect_err("cancelled header reconnect must not complete an unsent batch gracefully");
 
         assert_eq!(sender.header_attempts, 2);
         assert_eq!(sender.reconnects, 2);
         assert_eq!(sender.batch_attempts, 1);
+        assert!(
+            error.to_string().contains("sender operation cancelled"),
+            "unexpected error: {error}",
+        );
     }
 
     #[tokio::test]

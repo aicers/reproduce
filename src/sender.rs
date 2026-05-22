@@ -168,6 +168,7 @@ pub struct GigantoSender {
     conn: Connection,
     sender: SendStream,
     current_stream_kind: Option<RawEventKind>,
+    stream_closed: bool,
     /// Process-level sender-side cancellation token. Per-stream ACK
     /// receiver tasks get child tokens so reconnect/finish can stop the
     /// current task without permanently cancelling future streams.
@@ -242,6 +243,7 @@ impl GigantoSender {
             conn: connected.conn,
             sender: connected.send,
             current_stream_kind: None,
+            stream_closed: false,
             sender_token,
             ack_task_token: connected.ack_task_token,
             ack_task_handles: vec![connected.ack_task_handle],
@@ -305,11 +307,18 @@ impl GigantoSender {
     /// Returns an error if the channel-close message cannot be sent or the
     /// stream cannot be finished.
     pub async fn finish(&mut self) -> std::result::Result<(), SenderError> {
+        if self.stream_closed {
+            self.cancel_and_drain_ack_tasks().await;
+            info!("Data Store ended");
+            return Ok(());
+        }
+
         if self.current_stream_kind.is_none() {
             self.sender
                 .finish()
                 .map_err(|source| SenderError::context("failed to finish stream", source))?;
             self.conn.close(0u32.into(), b"log_done");
+            self.stream_closed = true;
             self.cancel_and_drain_ack_tasks().await;
             self.endpoint.wait_idle().await;
             info!("Data Store ended");
@@ -322,6 +331,7 @@ impl GigantoSender {
             .finish()
             .map_err(|source| SenderError::context("failed to finish stream", source))?;
         self.conn.close(0u32.into(), b"log_done");
+        self.stream_closed = true;
         self.cancel_and_drain_ack_tasks().await;
         self.endpoint.wait_idle().await;
         info!("Data Store ended");
@@ -362,6 +372,7 @@ impl GigantoSender {
     /// produce a working stream by any path).
     pub async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
         self.conn.close(0u32.into(), b"reconnect");
+        self.stream_closed = true;
         self.cancel_and_drain_ack_tasks().await;
         tokio::select! {
             () = tokio::time::sleep(Duration::from_secs(2)) => {}
@@ -464,6 +475,7 @@ impl GigantoSender {
         self.conn = connected.conn;
         self.sender = connected.send;
         self.current_stream_kind = None;
+        self.stream_closed = false;
         self.ack_task_token = connected.ack_task_token;
         self.close_ack = Some(connected.close_ack);
         self.ack_task_handles.push(connected.ack_task_handle);
@@ -526,14 +538,21 @@ async fn connect_stream(
         sender_token,
     )
     .await?;
-    client_handshake(&conn, REQUIRED_GIGANTO_VERSION)
-        .await
-        .map_err(|source| SenderError::Handshake(source.into()))?;
+    tokio::select! {
+        result = client_handshake(&conn, REQUIRED_GIGANTO_VERSION) => {
+            result.map_err(|source| SenderError::Handshake(source.into()))?;
+        }
+        () = sender_token.cancelled() => return Err(SenderError::Cancelled),
+    }
 
-    let (send, recv) = conn
-        .open_bi()
-        .await
-        .map_err(|source| SenderError::context("failed to open stream to Giganto", source))?;
+    let (send, recv) = tokio::select! {
+        result = conn.open_bi() => {
+            result.map_err(|source| {
+                SenderError::context("failed to open stream to Giganto", source)
+            })?
+        }
+        () = sender_token.cancelled() => return Err(SenderError::Cancelled),
+    };
     let (close_ack_tx, close_ack) = oneshot::channel();
     let ack_task_token = sender_token.child_token();
     let ack_task_token_recv = ack_task_token.clone();
@@ -902,6 +921,7 @@ mod tests {
                 conn: client_conn,
                 sender: client_send,
                 current_stream_kind: None,
+                stream_closed: false,
                 sender_token,
                 ack_task_token,
                 ack_task_handles: vec![ack_task_handle],
@@ -1458,6 +1478,32 @@ mod tests {
             !sender.ack_task_token.is_cancelled(),
             "new stream ACK receiver token should remain active after reconnect",
         );
+    }
+
+    #[tokio::test]
+    async fn finish_is_idempotent_after_cancelled_reconnect_closes_stream() {
+        let (mut sender, _session) = connect_stream_sender()
+            .await
+            .expect("sender should connect to the test server");
+        sender
+            .send_header(RawEventKind::Dns)
+            .await
+            .expect("header send should succeed before reconnect");
+
+        sender.sender_token.cancel();
+        let err = sender
+            .reconnect()
+            .await
+            .expect_err("cancelled reconnect must report cancellation");
+        assert!(
+            matches!(err, SenderError::Cancelled),
+            "unexpected reconnect error: {err:?}",
+        );
+
+        sender
+            .finish()
+            .await
+            .expect("finish after reconnect cancellation should be idempotent");
     }
 
     #[tokio::test]
@@ -2539,6 +2585,62 @@ mod tests {
                 panic!("ReturnOnTimeout must report a TimedOut connection error, got {other:?}")
             }
         }
+    }
+
+    #[tokio::test]
+    async fn connect_stream_returns_cancelled_while_waiting_for_app_handshake() {
+        let (server_endpoint, server_addr) =
+            build_server_endpoint().expect("test server endpoint should be created");
+        let cert = fixture_path(TEST_CERT_PEM);
+        let key = fixture_path(TEST_KEY_PEM);
+        let root = fixture_path(TEST_ROOT_PEM);
+        let endpoint =
+            create_endpoint(&cert, &key, &[root]).expect("client endpoint should be created");
+        let token = CancellationToken::new();
+        let server_token = token.clone();
+
+        let server_task = tokio::spawn(async move {
+            let incoming = timeout(TEST_TIMEOUT, server_endpoint.accept())
+                .await
+                .context("test server should accept a connection in time")?
+                .context("test server endpoint should stay open while accepting")?;
+            let connection = incoming
+                .await
+                .context("client connection should complete QUIC setup")?;
+            server_token.cancelled().await;
+            drop(connection);
+            Ok::<_, anyhow::Error>(())
+        });
+
+        tokio::spawn({
+            let token = token.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                token.cancel();
+            }
+        });
+
+        let result = timeout(
+            TEST_TIMEOUT,
+            connect_stream(
+                &endpoint,
+                server_addr,
+                TEST_SERVER_NAME,
+                TimeoutPolicy::RetryForever,
+                &token,
+            ),
+        )
+        .await
+        .expect("connect_stream should observe cancellation during the app handshake");
+
+        assert!(
+            matches!(result, Err(SenderError::Cancelled)),
+            "connect_stream should return SenderError::Cancelled",
+        );
+        server_task
+            .await
+            .expect("server task should join cleanly")
+            .expect("server task should complete");
     }
 
     /// Companion to the test above: the legacy `RetryForever` policy must

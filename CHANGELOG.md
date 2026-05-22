@@ -27,6 +27,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Refactored `GigantoSender` shutdown and reconnect handling to track ACK
   receiver tasks explicitly, await the channel-close ACK with a timeout, and
   cancel in-flight sender work when shutdown or reconnect is requested.
+- Updated the pipeline to propagate cancelled reconnect and header-retry
+  attempts as errors instead of treating them as a clean shutdown, preventing
+  unsent batches from being checkpointed.
 
 ## [0.24.1] - 2026-05-13
 
