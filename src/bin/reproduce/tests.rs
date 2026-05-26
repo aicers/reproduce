@@ -1,3 +1,5 @@
+mod logging;
+
 use std::fs::{self, File};
 #[cfg(feature = "netflow")]
 use std::io::Write;
