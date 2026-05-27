@@ -130,15 +130,6 @@ fn version() -> String {
     format!("REproduce {}", env!("CARGO_PKG_VERSION"))
 }
 
-/// Builds the shared `EnvFilter` used by file and stdout logging branches.
-///
-/// Defaults to INFO when `RUST_LOG` is unset; `RUST_LOG` overrides the default.
-fn tracing_env_filter() -> EnvFilter {
-    EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy()
-}
-
 /// Initializes the tracing subscriber and returns a `WorkerGuard`.
 ///
 /// Logs will be written to the file specified by `log_path` if provided.
@@ -147,7 +138,9 @@ fn tracing_env_filter() -> EnvFilter {
 /// Both branches default to INFO when `RUST_LOG` is unset; set `RUST_LOG` to
 /// override the default level.
 fn init_tracing(log_path: Option<&std::path::Path>) -> anyhow::Result<WorkerGuard> {
-    let env_filter = tracing_env_filter();
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
     let (layer, guard) = if let Some(log_path) = log_path {
         let file = OpenOptions::new()
             .create(true)
