@@ -740,10 +740,9 @@ struct Controller {
     reload_requested: Arc<AtomicBool>,
     shutdown: watch::Receiver<bool>,
     /// Sender-side cancellation token bridged from the existing watch
-    /// shutdown signal; see [`spawn_shutdown_bridge`]. Current sender
-    /// code still uses the watch channel, so production call sites do
-    /// not read the token yet.
-    #[allow(dead_code)]
+    /// shutdown signal; see [`spawn_shutdown_bridge`]. Cloned for
+    /// [`GigantoSender`] via [`create_sender`] so send/reconnect paths can
+    /// await cancellation directly.
     token: CancellationToken,
 }
 
@@ -774,15 +773,12 @@ impl Controller {
         }
     }
 
-    /// Returns a clone of the cancellation token that senders can await.
+    /// Returns a clone of the cancellation token passed to [`GigantoSender`].
     ///
     /// The token is cancelled when the controller's watch shutdown signal
     /// becomes `true` (which is what termination signals trigger) or when
     /// the watch sender is dropped. Callers should `.cancelled().await`
     /// on the returned token rather than polling.
-    // Production senders still use the watch channel; this accessor is
-    // the API surface that new/refactored sender code will consume.
-    #[allow(dead_code)]
     #[must_use]
     pub fn sender_token(&self) -> CancellationToken {
         self.token.clone()
