@@ -53,7 +53,7 @@ use reproduce::parser::sysmon_csv::{
     ElasticDumpOptions, TryFromSysmonRecord, open_sysmon_csv_file,
 };
 use reproduce::parser::zeek::{TryFromZeekRecord, open_raw_event_log_file};
-use reproduce::sender::GigantoSender;
+use reproduce::sender::{GigantoSender, SenderError};
 use serde::Serialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -738,11 +738,11 @@ where
 struct Controller {
     config: Config,
     reload_requested: Arc<AtomicBool>,
+    shutdown: watch::Receiver<bool>,
     /// Sender-side cancellation token bridged from the existing watch
-    /// shutdown signal; see [`spawn_shutdown_bridge`]. Current sender
-    /// code still uses the watch channel, so production call sites do
-    /// not read the token yet.
-    #[allow(dead_code)]
+    /// shutdown signal; see [`spawn_shutdown_bridge`]. Cloned for
+    /// [`GigantoSender`] via [`create_sender`] so send/reconnect paths can
+    /// await cancellation directly.
     token: CancellationToken,
 }
 
@@ -764,23 +764,21 @@ impl Controller {
         shutdown: watch::Receiver<bool>,
     ) -> Self {
         let token = CancellationToken::new();
-        spawn_shutdown_bridge(token.clone(), shutdown);
+        spawn_shutdown_bridge(token.clone(), shutdown.clone());
         Self {
             config,
             reload_requested,
+            shutdown,
             token,
         }
     }
 
-    /// Returns a clone of the cancellation token that senders can await.
+    /// Returns a clone of the cancellation token passed to [`GigantoSender`].
     ///
     /// The token is cancelled when the controller's watch shutdown signal
     /// becomes `true` (which is what termination signals trigger) or when
     /// the watch sender is dropped. Callers should `.cancelled().await`
     /// on the returned token rather than polling.
-    // Production senders still use the watch channel; this accessor is
-    // the API surface that new/refactored sender code will consume.
-    #[allow(dead_code)]
     #[must_use]
     pub fn sender_token(&self) -> CancellationToken {
         self.token.clone()
@@ -797,8 +795,17 @@ impl Controller {
             let shutdown = shutdown_receiver();
             self.run_elastic_with_shutdown(shutdown).await?;
         } else {
-            let mut sender =
-                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
+            let mut sender = match create_sender(
+                &self.config,
+                Arc::clone(&self.reload_requested),
+                self.sender_token(),
+            )
+            .await
+            {
+                Ok(sender) => sender,
+                Err(SenderError::Cancelled) if shutdown_requested(&self.shutdown) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
             self.run_with_sender(&mut sender).await?;
         }
 
@@ -904,8 +911,17 @@ impl Controller {
 
         files.sort_unstable();
         for file in files {
-            let mut sender =
-                create_sender(&self.config, Arc::clone(&self.reload_requested)).await?;
+            let mut sender = match create_sender(
+                &self.config,
+                Arc::clone(&self.reload_requested),
+                self.sender_token(),
+            )
+            .await
+            {
+                Ok(sender) => sender,
+                Err(SenderError::Cancelled) if shutdown_requested(&shutdown) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
             info!("File: {file:?}");
             let kind = file_to_kind(&file)?;
             self.run_single_with_shutdown(
@@ -1333,7 +1349,8 @@ pub(crate) fn input_type(input: &str) -> InputType {
 async fn create_sender(
     config: &Config,
     reload_requested: Arc<AtomicBool>,
-) -> Result<GigantoSender> {
+    sender_token: CancellationToken,
+) -> std::result::Result<GigantoSender, SenderError> {
     debug!("output type=GIGANTO");
     GigantoSender::new(
         &config.giganto.cert,
@@ -1342,7 +1359,7 @@ async fn create_sender(
         config.giganto.ingest_srv_addr,
         &config.giganto.name,
         reload_requested,
+        sender_token,
     )
     .await
-    .map_err(anyhow::Error::from)
 }

@@ -8,19 +8,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Bridged the controller's `watch::Receiver<bool>` shutdown signal into a
-  shared `tokio_util::sync::CancellationToken` and exposed it through
-  `Controller::sender_token`. The existing watch-based shutdown remains the
-  canonical termination source for controller, main, and collector code paths;
-  sender-side code can now `.cancelled().await` on the token instead of
-  polling, and `SIGINT`/`SIGTERM` (or `Ctrl-C` on non-Unix) cancel the token
-  via the same handler that already flips the watch value.
 - Set up MkDocs documentation skeleton with bilingual (EN/KO) support,
   shared `aicers/docs-theme` integration, PDF generation script, and
   docs CI workflow.
 - Added the REproduce user manual scaffold in both English and Korean,
   including overview, prerequisites, configuration, operations, and
   troubleshooting pages wired into the MkDocs navigation.
+
+### Changed
+
+- Refactored sender-side shutdown handling to bridge the controller's
+  `watch::Receiver<bool>` shutdown signal into a shared
+  `tokio_util::sync::CancellationToken` used by `GigantoSender`.
+- Updated `GigantoSender` shutdown and reconnect handling to track and drain
+  ACK receiver tasks explicitly, await the channel-close ACK with a timeout,
+  cancel in-flight sender work when shutdown or reconnect is requested, and
+  avoid advancing checkpoints when reconnect cancellation leaves a batch
+  unsent.
 
 ## [0.24.1] - 2026-05-13
 

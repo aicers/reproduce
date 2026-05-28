@@ -81,7 +81,11 @@ where
         match sender.send_header(kind).await {
             Ok(()) => break,
             Err(SenderError::Send(SendError::WriteError(_))) => {
-                log_reconnect_outcome(sender.reconnect().await?);
+                let Some(outcome) = reconnect_or_shutdown(sender.reconnect().await, &shutdown)?
+                else {
+                    return Ok(());
+                };
+                log_reconnect_outcome(outcome);
                 if *shutdown.borrow() {
                     return Ok(());
                 }
@@ -105,17 +109,17 @@ where
             match sender.send_batch(&batch.events).await {
                 Ok(()) => break,
                 Err(SendError::WriteError(_)) => {
-                    log_reconnect_outcome(sender.reconnect().await?);
+                    let outcome = sender.reconnect().await.map_err(PipelineError::Sender)?;
+                    log_reconnect_outcome(outcome);
                     // Reconnect cleared the stream's record kind; re-send the
                     // header so the next batch arrives on a typed stream.
                     loop {
                         match sender.send_header(kind).await {
                             Ok(()) => break,
                             Err(SenderError::Send(SendError::WriteError(_))) => {
-                                log_reconnect_outcome(sender.reconnect().await?);
-                                if *shutdown.borrow() {
-                                    return Ok(());
-                                }
+                                let outcome =
+                                    sender.reconnect().await.map_err(PipelineError::Sender)?;
+                                log_reconnect_outcome(outcome);
                             }
                             Err(error) => return Err(PipelineError::Sender(error)),
                         }
@@ -138,6 +142,17 @@ where
     }
 
     Ok(())
+}
+
+fn reconnect_or_shutdown(
+    result: std::result::Result<ReconnectOutcome, SenderError>,
+    shutdown: &watch::Receiver<bool>,
+) -> std::result::Result<Option<ReconnectOutcome>, PipelineError> {
+    match result {
+        Ok(outcome) => Ok(Some(outcome)),
+        Err(SenderError::Cancelled) if *shutdown.borrow() => Ok(None),
+        Err(error) => Err(PipelineError::Sender(error)),
+    }
 }
 
 fn log_reconnect_outcome(outcome: ReconnectOutcome) {
@@ -800,5 +815,187 @@ mod tests {
         // header loop observes shutdown on its next iteration and bails.
         assert_eq!(sender.header_attempts, 1);
         assert_eq!(sender.reconnects, 1);
+    }
+
+    struct CancelledReconnectSender {
+        header_results: VecDeque<std::result::Result<(), SenderError>>,
+        batch_results: VecDeque<std::result::Result<(), SendError>>,
+        reconnect_results: VecDeque<std::result::Result<ReconnectOutcome, SenderError>>,
+        shutdown: watch::Sender<bool>,
+        header_attempts: usize,
+        batch_attempts: usize,
+        reconnects: usize,
+    }
+
+    impl CancelledReconnectSender {
+        fn new(shutdown: watch::Sender<bool>) -> Self {
+            Self {
+                header_results: VecDeque::new(),
+                batch_results: VecDeque::new(),
+                reconnect_results: VecDeque::new(),
+                shutdown,
+                header_attempts: 0,
+                batch_attempts: 0,
+                reconnects: 0,
+            }
+        }
+
+        fn with_header_results<I>(mut self, results: I) -> Self
+        where
+            I: IntoIterator<Item = std::result::Result<(), SenderError>>,
+        {
+            self.header_results.extend(results);
+            self
+        }
+
+        fn with_batch_results<I>(mut self, results: I) -> Self
+        where
+            I: IntoIterator<Item = std::result::Result<(), SendError>>,
+        {
+            self.batch_results.extend(results);
+            self
+        }
+
+        fn with_reconnect_results<I>(mut self, results: I) -> Self
+        where
+            I: IntoIterator<Item = std::result::Result<ReconnectOutcome, SenderError>>,
+        {
+            self.reconnect_results.extend(results);
+            self
+        }
+    }
+
+    #[async_trait]
+    impl PipelineSender for CancelledReconnectSender {
+        async fn send_header(
+            &mut self,
+            _protocol: RawEventKind,
+        ) -> std::result::Result<(), SenderError> {
+            self.header_attempts += 1;
+            self.header_results.pop_front().unwrap_or(Ok(()))
+        }
+
+        async fn send_batch(
+            &mut self,
+            _events: &[(i64, Vec<u8>)],
+        ) -> std::result::Result<(), SendError> {
+            self.batch_attempts += 1;
+            self.batch_results.pop_front().unwrap_or(Ok(()))
+        }
+
+        async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
+            self.reconnects += 1;
+            let result = self
+                .reconnect_results
+                .pop_front()
+                .unwrap_or(Ok(ReconnectOutcome::Reconnected));
+            if matches!(&result, Err(SenderError::Cancelled)) {
+                let _ = self.shutdown.send(true);
+            }
+            result
+        }
+    }
+
+    #[tokio::test]
+    async fn header_reconnect_cancelled_during_shutdown_is_graceful() {
+        let (shutdown_tx, shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: b"cancelled-header".to_vec(),
+        };
+        let mut sender = CancelledReconnectSender::new(shutdown_tx)
+            .with_header_results([Err(write_sender_error())])
+            .with_reconnect_results([Err(SenderError::Cancelled)]);
+
+        run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+            .await
+            .expect("shutdown cancellation during header reconnect is graceful");
+
+        assert_eq!(sender.header_attempts, 1);
+        assert_eq!(sender.reconnects, 1);
+        assert_eq!(sender.batch_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn batch_reconnect_cancelled_during_shutdown_propagates_unsent_batch() {
+        let (shutdown_tx, shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: b"cancelled-batch".to_vec(),
+        };
+        let mut sender = CancelledReconnectSender::new(shutdown_tx)
+            .with_batch_results([Err(write_send_error())])
+            .with_reconnect_results([Err(SenderError::Cancelled)]);
+
+        let error = run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+            .await
+            .expect_err("cancelled reconnect must not complete an unsent batch gracefully");
+
+        assert_eq!(sender.header_attempts, 1);
+        assert_eq!(sender.reconnects, 1);
+        assert_eq!(sender.batch_attempts, 1);
+        assert!(
+            error.to_string().contains("sender operation cancelled"),
+            "unexpected error: {error}",
+        );
+    }
+
+    #[tokio::test]
+    async fn post_reconnect_header_cancelled_during_shutdown_propagates_unsent_batch() {
+        let (shutdown_tx, shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: b"cancelled-post-header".to_vec(),
+        };
+        let mut sender = CancelledReconnectSender::new(shutdown_tx)
+            .with_header_results([Ok(()), Err(write_sender_error())])
+            .with_batch_results([Err(write_send_error())])
+            .with_reconnect_results([
+                Ok(ReconnectOutcome::Reconnected),
+                Err(SenderError::Cancelled),
+            ]);
+
+        let error = run_pipeline_with_sender(&mut sender, &mut collector, shutdown, &mut |_| {})
+            .await
+            .expect_err("cancelled header reconnect must not complete an unsent batch gracefully");
+
+        assert_eq!(sender.header_attempts, 2);
+        assert_eq!(sender.reconnects, 2);
+        assert_eq!(sender.batch_attempts, 1);
+        assert!(
+            error.to_string().contains("sender operation cancelled"),
+            "unexpected error: {error}",
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_reconnect_without_shutdown_propagates() {
+        let (shutdown_tx, _sender_shutdown) = watch::channel(false);
+        let mut collector = OneBatchCollector {
+            yielded: false,
+            pos: Vec::new(),
+            next_pos: b"cancelled-without-shutdown".to_vec(),
+        };
+        let mut sender = CancelledReconnectSender::new(shutdown_tx)
+            .with_batch_results([Err(write_send_error())])
+            .with_reconnect_results([Err(SenderError::Cancelled)]);
+        let (_replacement_tx, replacement_shutdown) = watch::channel(false);
+
+        let error = run_pipeline_with_sender(
+            &mut sender,
+            &mut collector,
+            replacement_shutdown,
+            &mut |_| {},
+        )
+        .await
+        .expect_err("cancellation without watch shutdown must remain an error");
+
+        assert!(
+            error.to_string().contains("sender operation cancelled"),
+            "unexpected error: {error}",
+        );
     }
 }

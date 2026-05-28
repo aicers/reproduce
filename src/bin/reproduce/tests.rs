@@ -13,9 +13,11 @@ use giganto_client::{
     frame::{RecvError, SendError, recv_raw},
     ingest::{log::Log as GigantoLog, receive_record_header},
 };
-use quinn::Endpoint;
+use quinn::{Endpoint, VarInt, WriteError};
 use reproduce::config::GigantoConfig;
-use reproduce::sender::{CHANNEL_CLOSE_TIMESTAMP, REQUIRED_GIGANTO_VERSION, ReconnectOutcome};
+use reproduce::sender::{
+    CHANNEL_CLOSE_TIMESTAMP, REQUIRED_GIGANTO_VERSION, ReconnectOutcome, SenderError,
+};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tempfile::tempdir;
 use tokio::time::timeout;
@@ -81,6 +83,44 @@ impl PipelineSender for MockSender {
 impl ControllerSender for MockSender {
     async fn finish(&mut self) -> Result<()> {
         self.finish_calls += 1;
+        Ok(())
+    }
+}
+
+fn write_send_error() -> SendError {
+    SendError::WriteError(WriteError::Stopped(VarInt::from_u32(0)))
+}
+
+struct CancelledBatchReconnectSender {
+    shutdown: watch::Sender<bool>,
+    batch_attempts: usize,
+    reconnect_attempts: usize,
+}
+
+#[async_trait]
+impl PipelineSender for CancelledBatchReconnectSender {
+    async fn send_header(
+        &mut self,
+        _protocol: RawEventKind,
+    ) -> std::result::Result<(), SenderError> {
+        Ok(())
+    }
+
+    async fn send_batch(&mut self, _events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+        self.batch_attempts += 1;
+        Err(write_send_error())
+    }
+
+    async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
+        self.reconnect_attempts += 1;
+        let _ = self.shutdown.send(true);
+        Err(SenderError::Cancelled)
+    }
+}
+
+#[async_trait]
+impl ControllerSender for CancelledBatchReconnectSender {
+    async fn finish(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -690,6 +730,45 @@ async fn run_single_processes_operation_log_and_saves_checkpoint() {
     assert_eq!(sender.batch_sizes, vec![1]);
     assert_eq!(sender.sent_headers, vec![RawEventKind::OpLog]);
     assert_eq!(checkpoint_contents, "1");
+}
+
+#[tokio::test]
+async fn run_single_does_not_checkpoint_unsent_batch_after_cancelled_reconnect() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "manager.log", &format!("{OPLOG_LINE}\n"));
+    let (shutdown_tx, shutdown) = watch::channel(false);
+    let mut config = test_config(&path, OPERATION_LOG);
+    config.file = Some(FileConfig::new(
+        Some(false),
+        false,
+        None,
+        None,
+        Some("offset".to_string()),
+    ));
+    let controller =
+        Controller::with_shutdown(config, Arc::new(AtomicBool::new(false)), shutdown.clone());
+    let mut sender = CancelledBatchReconnectSender {
+        shutdown: shutdown_tx,
+        batch_attempts: 0,
+        reconnect_attempts: 0,
+    };
+
+    let error = controller
+        .run_single_with_shutdown(&path, &mut sender, OPERATION_LOG, false, shutdown)
+        .await
+        .expect_err("unsent batch must keep the run from completing successfully");
+
+    let checkpoint = PathBuf::from(format!("{}_offset", path.to_string_lossy()));
+    assert!(
+        error.to_string().contains("sender operation cancelled"),
+        "unexpected error: {error}",
+    );
+    assert_eq!(sender.batch_attempts, 1);
+    assert_eq!(sender.reconnect_attempts, 1);
+    assert!(
+        !checkpoint.exists(),
+        "checkpoint must not advance when reconnect cancellation leaves the batch unsent",
+    );
 }
 
 #[tokio::test]
