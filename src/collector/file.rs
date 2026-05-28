@@ -192,7 +192,10 @@ mod tests {
     fn is_checkpoint_filename_matches_suffix() {
         assert!(is_checkpoint_filename("a.log_offset", Some("offset")));
         assert!(!is_checkpoint_filename("a.log", Some("offset")));
-        assert!(!is_checkpoint_filename("a.log_offset_extra", Some("offset")));
+        assert!(!is_checkpoint_filename(
+            "a.log_offset_extra",
+            Some("offset")
+        ));
     }
 
     #[test]
@@ -234,8 +237,12 @@ mod tests {
             .expect("checkpoint file should be created");
         File::create(dir_path.join("drop_a.log")).expect("test file should be created");
 
-        let result =
-            files_in_dir(&dir_path.to_string_lossy(), Some("keep_"), Some("offset"), &[]);
+        let result = files_in_dir(
+            &dir_path.to_string_lossy(),
+            Some("keep_"),
+            Some("offset"),
+            &[],
+        );
 
         assert_eq!(result.len(), 1);
         assert!(result.contains(&dir_path.join("keep_a.log")));
