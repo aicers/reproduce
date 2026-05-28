@@ -1484,6 +1484,42 @@ async fn dir_polling_creates_per_file_checkpoints() {
     );
 }
 
+#[tokio::test]
+async fn dir_processing_skips_checkpoint_files_and_avoids_cascading_offsets() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    write_text_file(&temp_dir, "a.log", "line_a\n");
+    write_text_file(&temp_dir, "a.log_offset", "0\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(
+        Some(false),
+        false,
+        None,
+        None,
+        Some("offset".to_string()),
+    ));
+    config.directory = Some(Directory {
+        file_prefix: None,
+        polling_mode: false,
+    });
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let mut sender = MockSender::default();
+
+    controller
+        .run_split(&mut sender)
+        .await
+        .expect("directory processing should succeed");
+
+    assert_eq!(
+        sender.batch_sizes,
+        vec![1],
+        "only the source log should be processed"
+    );
+    assert!(
+        !temp_dir.path().join("a.log_offset_offset").exists(),
+        "checkpoint files must not be processed as input"
+    );
+}
+
 /// The watch-based shutdown signal is the canonical termination source
 /// for controller/main/collector. This test asserts that when that watch
 /// is flipped to `true` — exactly what the `SIGINT`/`SIGTERM`/`Ctrl-C`
