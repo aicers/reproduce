@@ -4,11 +4,10 @@ use walkdir::WalkDir;
 
 /// Returns true when `name` is a reserved checkpoint filename for `suffix`.
 ///
-/// Checkpoint files use the `{input}_{suffix}` naming convention. When
-/// `suffix` is empty or whitespace-only, no filenames are treated as reserved.
+/// Checkpoint files use the `{input}_{suffix}` naming convention.
 #[must_use]
 pub fn is_checkpoint_filename(name: &str, suffix: Option<&str>) -> bool {
-    let Some(suffix) = suffix.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(suffix) = suffix else {
         return false;
     };
     name.ends_with(&format!("_{suffix}"))
@@ -16,8 +15,7 @@ pub fn is_checkpoint_filename(name: &str, suffix: Option<&str>) -> bool {
 
 /// Returns all files beneath a directory, optionally filtered by prefix.
 ///
-/// Files whose basename ends with `_{checkpoint_suffix}` are excluded when
-/// `checkpoint_suffix` is non-empty after trimming whitespace.
+/// Files whose basename ends with `_{checkpoint_suffix}` are excluded.
 #[must_use]
 pub fn files_in_dir(
     path: &str,
@@ -196,18 +194,6 @@ mod tests {
             "a.log_offset_extra",
             Some("offset")
         ));
-    }
-
-    #[test]
-    fn is_checkpoint_filename_ignores_empty_or_whitespace_suffix() {
-        assert!(!is_checkpoint_filename("a.log_offset", None));
-        assert!(!is_checkpoint_filename("a.log_offset", Some("")));
-        assert!(!is_checkpoint_filename("a.log_offset", Some("   ")));
-    }
-
-    #[test]
-    fn is_checkpoint_filename_trims_suffix() {
-        assert!(is_checkpoint_filename("a.log_offset", Some(" offset ")));
     }
 
     #[test]
