@@ -524,7 +524,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
-[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.1...HEAD
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.24.1...main
 [0.24.1]: https://github.com/aicers/reproduce/compare/0.24.0...0.24.1
 [0.24.0]: https://github.com/aicers/reproduce/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/aicers/reproduce/compare/0.22.1...0.23.0
