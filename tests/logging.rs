@@ -1,58 +1,37 @@
 //! Integration tests for tracing initialization defaults.
 
 use std::io::{BufRead, BufReader};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use tempfile::{TempDir, tempdir};
+use tempfile::tempdir;
 
 /// Emitted by `init_tracing` at INFO once stdout logging is configured.
 const LOG_INIT_INFO_LOG: &str = "Initialized tracing logger";
 
-fn fixture_path(relative: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
-}
-
-fn write_minimal_config(temp_dir: &TempDir, input_dir: &Path) -> PathBuf {
-    let cert = fixture_path("tests/cert.pem");
-    let key = fixture_path("tests/key.pem");
-    let root = fixture_path("tests/root.pem");
-    let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 38370);
-    let config = format!(
-        r#"cert = "{cert}"
-key = "{key}"
-ca_certs = ["{root}"]
-giganto_ingest_srv_addr = "{addr}"
+fn write_tracing_startup_config() -> (tempfile::TempDir, PathBuf) {
+    let temp_dir = tempdir().expect("tempdir");
+    let config = r#"cert = "unused-cert.pem"
+key = "unused-key.pem"
+ca_certs = ["unused-root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:1"
 giganto_name = "localhost"
 kind = "custom"
-input = "{input}"
+input = "unused.log"
 report = false
-
-[directory]
-polling_mode = true
-"#,
-        cert = cert.display(),
-        key = key.display(),
-        root = root.display(),
-        addr = server_addr,
-        input = input_dir.display(),
-    );
+"#;
     let config_path = temp_dir.path().join("config.toml");
     std::fs::write(&config_path, config).expect("write test config");
-    config_path
+    (temp_dir, config_path)
 }
 
 /// Spawn `reproduce` with `RUST_LOG` unset and wait until an INFO startup
 /// line appears on stdout.
 #[test]
 fn stdout_defaults_to_info_when_rust_log_unset() {
-    let temp_dir = tempdir().expect("tempdir");
-    let input_dir = temp_dir.path().join("input");
-    std::fs::create_dir(&input_dir).expect("create input dir");
-    let config_path = write_minimal_config(&temp_dir, &input_dir);
+    let (_temp_dir, config_path) = write_tracing_startup_config();
 
     let bin = env!("CARGO_BIN_EXE_reproduce");
     let mut child = Command::new(bin)
