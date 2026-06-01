@@ -31,6 +31,11 @@ If `input` specifies a directory path, REproduce processes log files in that
 directory. If necessary, target files can be filtered using `file_prefix` in the
 `[directory]` section.
 
+When `last_transfer_line_suffix` is configured in `[file]`, filenames ending with
+`_{last_transfer_line_suffix}` are reserved for per-file checkpoint state and are
+ignored during directory scans. Choose a suffix that does not match names used by
+your real input files.
+
 ## Elastic Mode
 
 If `input = "elastic"` is configured and the `[elastic]` section is provided,

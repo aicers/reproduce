@@ -6,12 +6,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Fixed
-
-- Aligned stdout logging with file logging: both now default to INFO when
-  `RUST_LOG` is unset. `RUST_LOG` continues to override the default in either
-  case.
-
 ### Added
 
 - Set up MkDocs documentation skeleton with bilingual (EN/KO) support,
@@ -31,6 +25,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cancel in-flight sender work when shutdown or reconnect is requested, and
   avoid advancing checkpoints when reconnect cancellation leaves a batch
   unsent.
+
+### Fixed
+
+- Aligned stdout logging with file logging: both now default to INFO when
+  `RUST_LOG` is unset. `RUST_LOG` continues to override the default in either
+  case.
+- Fixed directory polling treating checkpoint files created by
+  `last_transfer_line_suffix` as input files. Filenames ending with
+  `_{last_transfer_line_suffix}` are now skipped during directory scans.
 
 ## [0.24.1] - 2026-05-13
 

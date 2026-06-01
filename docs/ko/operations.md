@@ -28,6 +28,11 @@ reproduce /path/to/config.toml
 `input`에 디렉터리 경로를 지정하면 디렉터리 안의 로그 파일들을 처리합니다.
 필요 시 `[directory]` 섹션에서 `file_prefix`로 대상 파일을 제한합니다.
 
+`[file]`에 `last_transfer_line_suffix`가 설정되어 있으면, 파일명이
+`_{last_transfer_line_suffix}`로 끝나는 파일은 파일별 checkpoint 전용으로
+예약되며 디렉터리 스캔에서 무시됩니다. 실제 입력 파일명과 겹치지 않는
+접미사를 선택하세요.
+
 ## Elastic 모드 실행
 
 `input = "elastic"`로 지정하고 `[elastic]` 섹션을 작성한 설정 파일로 실행하면

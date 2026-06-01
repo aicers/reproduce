@@ -852,10 +852,16 @@ impl Controller {
         let Some(ref dir_option) = self.config.directory else {
             bail!("directory's parameters is required");
         };
+        let checkpoint_suffix = self
+            .config
+            .file
+            .as_ref()
+            .and_then(|file| file.last_transfer_line_suffix.as_deref());
         loop {
             let mut files = files_in_dir(
                 &self.config.input,
                 dir_option.file_prefix.as_deref(),
+                checkpoint_suffix,
                 &processed,
             );
             if files.is_empty() {
@@ -906,7 +912,7 @@ impl Controller {
         })
         .await?;
 
-        let mut files = files_in_dir(&dir, None, &[]);
+        let mut files = files_in_dir(&dir, None, None, &[]);
         if files.is_empty() {
             bail!("no data with elastic");
         }

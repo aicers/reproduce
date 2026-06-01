@@ -81,6 +81,16 @@ import behavior for single-file input.
 | `transfer_skip_count` | Number of records to skip before transfer | - |
 | `last_transfer_line_suffix` | Suffix for last transferred line file | - |
 
+When this suffix is set, REproduce stores checkpoint state in files named
+`{input}_{last_transfer_line_suffix}` next to the source file. Filenames ending
+with `_{last_transfer_line_suffix}` are reserved for that checkpoint state.
+
+> **Note**
+> In directory mode, files whose basename ends with
+> `_{last_transfer_line_suffix}` are skipped during directory scans. If your
+> source logs already use that naming pattern, choose a suffix that does not
+> collide with real input filenames.
+
 ## Directory Mode Configuration
 
 Used to filter files in a directory or continuously monitor newly added files.

@@ -78,6 +78,16 @@
 | `transfer_skip_count` | 전송 전에 건너뛸 레코드 수 | - |
 | `last_transfer_line_suffix` | 마지막 전송 줄 저장 파일의 접미사 | - |
 
+이 접미사를 설정하면 REproduce는 소스 파일 옆에
+`{input}_{last_transfer_line_suffix}` 형식의 checkpoint 파일에 진행 상태를
+저장합니다. 파일명이 `_{last_transfer_line_suffix}`로 끝나는 이름은 checkpoint
+전용으로 예약됩니다.
+
+> **참고**
+> 디렉터리 모드에서는 파일명(basename)이 `_{last_transfer_line_suffix}`로
+> 끝나는 파일을 디렉터리 스캔에서 건너뜁니다. 실제 입력 로그 이름이 같은
+> 패턴을 쓰고 있다면, 입력 파일명과 겹치지 않는 접미사를 선택하세요.
+
 ## 디렉터리 모드 선택 설정
 
 디렉터리 안의 파일을 필터링하거나 새 파일을 계속 감시할 때 사용합니다.
