@@ -11,6 +11,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Aligned stdout logging with file logging: both now default to INFO when
   `RUST_LOG` is unset. `RUST_LOG` continues to override the default in either
   case.
+- Fixed directory polling treating checkpoint files created by
+  `last_transfer_line_suffix` as input files. Filenames ending with
+  `_{last_transfer_line_suffix}` are now skipped during directory scans.
 
 ### Added
 
@@ -20,12 +23,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Added the REproduce user manual scaffold in both English and Korean,
   including overview, prerequisites, configuration, operations, and
   troubleshooting pages wired into the MkDocs navigation.
-
-### Fixed
-
-- Fixed directory polling treating checkpoint files created by
-  `last_transfer_line_suffix` as input files. Filenames ending with
-  `_{last_transfer_line_suffix}` are now skipped during directory scans.
 
 ### Changed
 
