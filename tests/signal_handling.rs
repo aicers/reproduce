@@ -187,10 +187,9 @@ struct ChildNotifications {
 /// so tests can await those states instead of racing against fixed sleeps.
 fn spawn_reproduce(config_path: &Path) -> Result<(Child, ChildNotifications)> {
     let bin = env!("CARGO_BIN_EXE_reproduce");
-    // `init_tracing` applies `EnvFilter::from_default_env()` on the stdout
-    // branch with no fallback directive, so without `RUST_LOG` the child
-    // emits nothing and tests cannot observe handler progress. Force
-    // info-level logging so the sync-point lines are produced.
+    // These tests use INFO log lines as synchronization points, not to
+    // verify logging defaults. Keep `RUST_LOG` explicit so a developer or
+    // CI `RUST_LOG=error` cannot suppress the sync-point lines.
     let mut child = Command::new(bin)
         .arg(config_path)
         .env("RUST_LOG", "info")
