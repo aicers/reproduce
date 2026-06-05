@@ -1,124 +1,199 @@
 # Configuration (TOML)
 
-## Key Configuration Summary
+REproduce is configured with one TOML file. The file contains required
+top-level settings and optional sections for file, directory, and Elastic mode
+behavior.
 
-| Configuration | Description | Default |
-| --- | --- | --- |
-| `cert` | Certificate file path | - |
-| `key` | Private key file path | - |
-| `ca_certs` | List of CA certificate file paths | - |
-| `giganto_ingest_srv_addr` | Giganto ingest server IP:port | - |
-| `giganto_name` | Giganto server name used for TLS verification | - |
-| `kind` | Type of data to process | - |
-| `input` | Input source (file/directory/elastic) | - |
-| `report` | Enable transfer statistics reporting | `false` |
-| `report_dir` | Report directory. Required when `report = true` | - |
-| `log_path` | Log file path. Outputs to stdout if omitted | - |
+## Top-Level Settings
 
-## Detailed Configuration Behavior
+| Configuration | Required | Description | Default |
+| --- | --- | --- | --- |
+| `cert` | Yes | Client certificate file path | - |
+| `key` | Yes | Private key file path for the client certificate | - |
+| `ca_certs` | Yes | Trusted CA certificate file paths | - |
+| `giganto_ingest_srv_addr` | Yes | Data store ingest `IP:PORT` | - |
+| `giganto_name` | Yes | Data store server name used for TLS verification | - |
+| `kind` | Yes | Type of data to process | - |
+| `input` | Yes | Input source: file path, directory path, or `"elastic"` | - |
+| `report` | No | Enable transfer statistics reporting | `false` |
+| `report_dir` | Conditional | Required when `report = true` | - |
+| `log_path` | No | Log file path. Logs are written to stdout when omitted | - |
 
-### `kind` Behavior
+The `kind` value must not be empty or contain only whitespace.
 
-- If the value is empty or contains only whitespace, REproduce terminates with a
-  configuration error.
-- Supported `kind` values are listed below.
+The `giganto_ingest_srv_addr` value must be an `IP:PORT` socket address, such as
+`127.0.0.1:38370` or `[::1]:38370`. Hostnames are not accepted.
 
-#### Network Events
+Each file listed in `ca_certs` may contain one or more PEM-encoded
+certificates.
+
+## Input Mode Selection
+
+REproduce chooses the input mode from `input`.
+
+| `input` value | Selected mode |
+| --- | --- |
+| `"elastic"` | Elastic mode |
+| Existing directory path | Directory mode |
+| Any other path | File mode |
+
+If you intend to use directory mode, confirm that the directory exists before
+starting REproduce. A missing directory path is treated as a file path.
+
+## `kind` Values
+
+### Network Events
+
+The following `kind` values can be used for directly parsed Zeek-style network
+logs:
 
 `conn`, `http`, `rdp`, `smtp`, `dns`, `ntlm`, `kerberos`, `ssh`, `dce_rpc`,
-`ftp`, `mqtt`, `ldap`, `tls`, `smb`, `nfs`, `bootp`, `dhcp`, `radius`,
-`malformed_dns`, `icmp`
+`ftp`, `ldap`, `tls`
 
-#### Sysmon Events
+The following network `kind` values are accepted only when processing data store
+export files with `import_from_giganto = true`:
 
-`process_create`(1), `file_create_time`(2), `network_connect`(3),
-`process_terminate`(5), `image_load`(7), `file_create`(11),
-`registry_value_set`(13), `registry_key_rename`(14),
-`file_create_stream_hash`(15), `pipe_event`(17), `dns_query`(22),
-`file_delete`(23), `process_tamper`(25), `file_delete_detected`(26)
+`mqtt`, `smb`, `nfs`, `bootp`, `dhcp`, `radius`, `malformed_dns`, `icmp`
 
-#### Netflow / Log Types
+### Sysmon Events
 
-- OpLog: `oplog`
+| Event code | `kind` |
+| --- | --- |
+| 1 | `process_create` |
+| 2 | `file_create_time` |
+| 3 | `network_connect` |
+| 5 | `process_terminate` |
+| 7 | `image_load` |
+| 11 | `file_create` |
+| 13 | `registry_value_set` |
+| 14 | `registry_key_rename` |
+| 15 | `file_create_stream_hash` |
+| 17 | `pipe_event` |
+| 22 | `dns_query` |
+| 23 | `file_delete` |
+| 25 | `process_tamper` |
+| 26 | `file_delete_detected` |
+
+### Other Supported Inputs
+
+- Operation logs: `oplog`
 - Netflow: `netflow5`, `netflow9`
 - Security logs: `wapples_fw_6.0`, `mf2_ips_4.0`, `sniper_ips_8.0`,
   `aiwaf_waf_4.1`, `tg_ips_2.7`, `vforce_ips_4.6`, `srx_ips_15.1`,
   `sonicwall_fw_6.5`, `fgt_ips_6.2`, `shadowwall_ips_5.0`, `axgate_fw_2.1`
 - OS logs: `ubuntu_syslog_20.04`
 - Web logs: `nginx_accesslog_1.25.2`
-- Unstructured logs: any non-empty string
 
-> **Note**
-> For unstructured logs, users may define any non-empty value for `kind`. The
-> specified `kind` value is used as an identifier during data storage and retrieval.
+Any other non-empty `kind` value is handled as an unstructured log kind. The
+chosen value is used as the event identifier in the data store.
 
-### `log_path` Behavior
+## Logging
 
-- If omitted, logs are written to stdout.
-- If specified, logs are written to the specified file.
-- If the log file cannot be opened, REproduce terminates with an error.
+If `log_path` is omitted, logs are written to stdout. If `log_path` is set, logs
+are appended to the specified file. Startup fails if the file cannot be opened.
 
-### `report` / `report_dir` Behavior
+The default log level is `INFO` when `RUST_LOG` is not set. Set `RUST_LOG`
+before running REproduce to adjust log verbosity.
 
-- If `report = true`, transfer statistics are written to `{kind}.report` under
-  `report_dir`. The directory is automatically created if it does not exist.
-- If `report = true` but `report_dir` is not specified, REproduce terminates
-  with a configuration error.
-- If `report = false` (default), `report_dir` is ignored.
-- Both absolute and relative paths are supported, but absolute paths are
-  recommended to avoid ambiguity.
+```bash
+RUST_LOG=debug reproduce /path/to/config.toml
+```
+
+## Reports
+
+When `report = true`, REproduce appends transfer statistics to
+`{kind}.report` inside `report_dir`. The report directory is created
+automatically if it does not exist.
+
+- `report_dir` must be set when `report = true`.
+- `report_dir` is ignored when `report = false`.
+- Relative paths are resolved from the process working directory.
+- Absolute paths are recommended for service or scheduled runs.
+
+```toml
+report = true
+report_dir = "/var/lib/reproduce/reports"
+```
 
 ## File Mode Configuration
 
-Used to configure processing ranges, polling mode, and Giganto export file
-import behavior for single-file input.
+Use the `[file]` section when you need to change per-file behavior. These
+settings also apply to each file processed in directory mode.
 
 | Configuration | Description | Default |
 | --- | --- | --- |
-| `import_from_giganto` | Enable Giganto export file processing | `false` |
-| `polling_mode` | Enable file polling mode | `false` |
-| `transfer_count` | Number of records to transfer | - |
-| `transfer_skip_count` | Number of records to skip before transfer | - |
-| `last_transfer_line_suffix` | Suffix for last transferred line file | - |
+| `import_from_giganto` | Process a data store export file | `false` |
+| `polling_mode` | Keep watching a single file for appended data | `false` |
+| `transfer_count` | Transfer limit. `0` or omitted means no limit | - |
+| `transfer_skip_count` | Records or packets to skip before transfer | - |
+| `last_transfer_line_suffix` | Suffix used for checkpoint files | - |
 
-When this suffix is set, REproduce stores checkpoint state in files named
-`{input}_{last_transfer_line_suffix}` next to the source file. Filenames ending
-with `_{last_transfer_line_suffix}` are reserved for that checkpoint state.
+`export_from_giganto` is a deprecated name for `import_from_giganto`. Use
+`import_from_giganto` in new configurations.
 
-> **Note**
-> In directory mode, files whose basename ends with
-> `_{last_transfer_line_suffix}` are skipped during directory scans. If your
-> source logs already use that naming pattern, choose a suffix that does not
-> collide with real input filenames.
+### Checkpoint Behavior
+
+When `last_transfer_line_suffix` is set, REproduce saves the latest committed
+position in a checkpoint file named:
+
+```text
+{input}_{last_transfer_line_suffix}
+```
+
+For example, if `input = "/data/conn.log"` and
+`last_transfer_line_suffix = "offset"`, the checkpoint file is
+`/data/conn.log_offset`.
+
+On the next run, REproduce resumes from the checkpoint when
+`transfer_skip_count` is not set. If `transfer_skip_count` is set, it takes
+priority over the checkpoint value.
+
+In directory mode, each source file gets its own checkpoint file. Files whose
+basename ends with `_{last_transfer_line_suffix}` are skipped during directory
+scans so checkpoint files are not processed as input.
+
+Choose a suffix that does not collide with real input filenames.
 
 ## Directory Mode Configuration
 
-Used to filter files in a directory or continuously monitor newly added files.
+Use the `[directory]` section when `input` is an existing directory and you need
+filename filtering or directory polling.
 
 | Configuration | Description | Default |
 | --- | --- | --- |
-| `file_prefix` | Target filename prefix for directory input | - |
-| `polling_mode` | Enable directory polling mode | `false` |
+| `file_prefix` | Process files with this basename prefix | - |
+| `polling_mode` | Keep scanning the directory for files to process | `false` |
+
+Directory mode processes files under the configured directory. If `file_prefix`
+is set, files that do not start with that prefix are ignored.
+
+When `polling_mode = true`, REproduce keeps scanning for new matching files. If
+`polling_mode = false`, REproduce processes the files found during the run and
+then finishes.
 
 ## Elastic Mode Configuration
 
-Used when retrieving logs from an Elasticsearch server. All fields are required
-when `input = "elastic"`.
+Use Elastic mode by setting `input = "elastic"` and adding an `[elastic]`
+section. All fields in this section are required.
 
 | Configuration | Description |
 | --- | --- |
-| `url` | Elasticsearch server IP:port |
+| `url` | Elasticsearch server URL |
 | `event_codes` | Target Sysmon event code list |
 | `indices` | Elasticsearch index list to query |
 | `start_time` | Start time of target events |
 | `end_time` | End time of target events |
 | `size` | Maximum number of records per query |
-| `dump_dir` | Directory path for storing CSV files |
-| `elastic_auth` | Elasticsearch authentication (`username:password`) |
+| `dump_dir` | Directory where retrieved CSV files are stored temporarily |
+| `elastic_auth` | Elasticsearch authentication in `username:password` format |
+
+The top-level `kind` field is still required. Elastic mode retrieves Sysmon
+records and transfers them according to the event files generated from the
+configured `event_codes`.
 
 ## Configuration Examples
 
-### Example configuration for sending a Zeek log file to Giganto
+### Send a Zeek DNS Log File
 
 ```toml
 cert = "/opt/clumit/keys/reproduce_cert.pem"
@@ -127,10 +202,57 @@ ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
 giganto_ingest_srv_addr = "127.0.0.1:38370"
 giganto_name = "data-store"
 kind = "dns"
-input = "/path/to/zeek_file"
+input = "/data/zeek/dns.log"
 ```
 
-### Example configuration for importing Sysmon data from Elasticsearch
+### Send Files from a Directory
+
+```toml
+cert = "/opt/clumit/keys/reproduce_cert.pem"
+key = "/opt/clumit/keys/reproduce_key.pem"
+ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "data-store"
+kind = "dns"
+input = "/data/zeek"
+
+[directory]
+file_prefix = "dns"
+polling_mode = true
+```
+
+### Resume a File Transfer with Checkpoints
+
+```toml
+cert = "/opt/clumit/keys/reproduce_cert.pem"
+key = "/opt/clumit/keys/reproduce_key.pem"
+ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "data-store"
+kind = "dns"
+input = "/data/zeek/dns.log"
+
+[file]
+last_transfer_line_suffix = "offset"
+polling_mode = true
+```
+
+### Import a Data Store Export File
+
+```toml
+cert = "/opt/clumit/keys/reproduce_cert.pem"
+key = "/opt/clumit/keys/reproduce_key.pem"
+ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "data-store"
+kind = "http"
+input = "/data/exports/http.log"
+
+[file]
+import_from_giganto = true
+```
+
+### Import Sysmon Data from Elasticsearch
 
 ```toml
 cert = "/opt/clumit/keys/reproduce_cert.pem"
@@ -148,28 +270,6 @@ indices = [".ds-winlogbeat-8.8.2-2023.11.29-000001"]
 start_time = "2023-08-06T15:00:00.000Z"
 end_time = "2023-09-07T02:00:00.000Z"
 size = 100000
-dump_dir = "/path/to/dump"
+dump_dir = "/var/lib/reproduce/elastic-dump"
 elastic_auth = "admin:admin"
-```
-
-### Example configuration for enabling reports
-
-```toml
-report = true
-report_dir = "/var/lib/reproduce/reports"
-```
-
-### Example file polling configuration
-
-```toml
-[file]
-polling_mode = true
-```
-
-### Example directory file prefix filtering
-
-```toml
-[directory]
-file_prefix = "dns"
-polling_mode = true
 ```

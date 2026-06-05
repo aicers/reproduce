@@ -1,55 +1,70 @@
 # Overview
 
-REproduce is a program that reads log files or packet data, converts them into
-events, and sends them to the Giganto server. It can use a single log file, a
-directory containing log files, or an Elasticsearch server as its input source.
-The input data type is specified in a TOML configuration file.
+REproduce reads file-based input such as log files or Netflow v5/v9 pcap files,
+converts the input into events, and sends those events to a data store ingest
+server. When using Elasticsearch as the input source, REproduce retrieves
+Sysmon event data.
 
-## Key Features
+Use this manual when you need to prepare the runtime environment, write a
+configuration file, run REproduce, understand runtime behavior, or diagnose a
+startup or transfer problem.
 
-<!-- markdownlint-disable MD007 -->
-- Parses log files or packet data and converts them into events.
-- The input source can be one of three types.
-    - File mode: reads and sends a single log file
-    - Directory mode: reads and sends log files from a directory
-    - Elastic mode: queries an Elasticsearch server and sends the retrieved data
-- Sends converted events to the Giganto server.
-- Supports polling mode to continuously monitor newly appended file content.
-- Can generate transfer statistics reports.
-<!-- markdownlint-enable MD007 -->
+## What REproduce Does
+
+- Reads file-based input from a single file or directory.
+- Retrieves Sysmon event data when Elasticsearch is used as the input source.
+- Converts supported input formats into events accepted by the data store.
+- Sends converted events to a data store ingest server over TLS.
+- Supports polling for appended data or newly added files.
+- Can write transfer statistics reports.
+- Can resume from a saved transfer position when checkpointing is configured.
 
 ## Input Modes
 
-- **File mode**: specify a log file path in `input`
-- **Directory mode**: specify a directory path in `input`
-- **Elastic mode**: set `input = "elastic"` and configure `[elastic]` section
+REproduce chooses the input mode from the top-level `input` value in the TOML
+configuration file.
 
-> **Note**
-> The input type is automatically determined from the `input` value.
-> If the value is `"elastic"`, Elastic mode is used. If the path is a
-> directory, Directory mode is used. Otherwise, File mode is used.
+- `input = "elastic"`: Elastic mode.
+  Queries Elasticsearch and sends the retrieved Sysmon data.
+- Existing directory path: Directory mode.
+  Processes files under the directory.
+- Any other path: File mode.
+  Processes the value as a single input file.
 
-## Security Assumption (TLS)
+If a directory path is misspelled or does not exist, REproduce treats it as file
+mode because it is not an existing directory at startup.
 
-REproduce requires certificate-based TLS configuration when communicating with
-the Giganto server. The following configuration values must be provided:
+## Security Assumption
 
-- `cert`, `key`, and `ca_certs` for the certificate, private key, and CA certificates
-- Each file listed in `ca_certs` may contain one or more PEM certificates, such
-  as a CA bundle or full chain
+Communication with the data store requires TLS configuration. The configuration
+must include a client certificate, its private key, trusted CA certificates, the
+data store ingest address, and the data store server name used for TLS
+verification.
+
+See [Prerequisites](prerequisites.md) for the files and access required before
+running REproduce.
 
 ## Manual Map
 
-- **Prerequisites**: Prepare configuration files, certificates/keys, and CA certificates
-- **Configuration**: Create and configure the TOML configuration file
-- **Operations**: Run REproduce in each input mode
-- **Troubleshooting**: Common issues and how to resolve them
+- [Prerequisites](prerequisites.md): Prepare certificates, input access,
+  Elasticsearch access, and Netflow templates.
+- [Configuration](configuration.md): Write the TOML file and choose `kind`,
+  input mode, polling, checkpoints, logging, and reports.
+- [Operations](operations.md): Run REproduce, check lifecycle logs, understand
+  polling behavior, and handle reload or shutdown.
+- [Troubleshooting](troubleshooting.md): Diagnose startup, configuration,
+  connection, input, report, and Elastic mode problems.
 
 ## Quick Start
 
-1. Create `config.toml`
-2. Prepare the certificate, private key, and CA certificates
-3. If using Elastic mode, verify the `dump_dir` path and write permissions
-4. Run REproduce. `reproduce <CONFIG_PATH>`
-5. Verify connectivity to the Giganto server
-6. Verify normal operation through logs
+1. Complete the items in [Prerequisites](prerequisites.md).
+2. Create a TOML file using [Configuration](configuration.md).
+3. Run REproduce with the configuration path:
+
+```bash
+reproduce /path/to/config.toml
+```
+
+After startup, check the logs for `Data Broker started` and
+`Connected to data store ingest server at ...`. If startup or transfer fails,
+use [Troubleshooting](troubleshooting.md).
