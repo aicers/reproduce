@@ -547,11 +547,12 @@ dependencies = [
 
 [[package]]
 name = "giganto-client"
-version = "0.27.0"
-source = "git+https://github.com/aicers/giganto-client.git?tag=0.27.0#f809faa005548e6957e30402e3e45600abf6e9c1"
+version = "0.28.0"
+source = "git+https://github.com/aicers/giganto-client.git?tag=0.28.0#9f973a27309d65db35529f606f8274f034c7e863"
 dependencies = [
  "anyhow",
  "bincode",
+ "jiff",
  "num_enum",
  "quinn",
  "semver",
@@ -1830,7 +1831,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.3.14",
+ "errno 0.2.8",
  "libc",
 ]
 
