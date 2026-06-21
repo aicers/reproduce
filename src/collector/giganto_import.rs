@@ -203,6 +203,7 @@ mod tests {
     // orig_pkts, resp_pkts, orig_l2_bytes, resp_l2_bytes
     const MIGR_CONN_1: &str = "1669773412.655728000\tsrc1\t192.168.1.77\t57655\t209.197.168.151\t1024\t6\tSF\t1669773412.655728000\t2256935000\tirc-dcc-data\t124\t42208\t28\t43\t1592\t44452";
     const MIGR_CONN_2: &str = "1669773413.000000000\tsrc2\t10.0.0.1\t12345\t8.8.8.8\t443\t6\tSF\t1669773413.000000000\t123456000\t-\t0\t1500\t1\t1\t52\t1552";
+    const MIGR_CONN_RFC3339_START_TIME: &str = "1669773412.655728000\tsrc1\t192.168.1.77\t57655\t209.197.168.151\t1024\t6\tSF\t2026-06-12T05:06:10.522174019+00:00\t2256935000\tirc-dcc-data\t124\t42208\t28\t43\t1592\t44452";
 
     fn make_conn_collector(
         lines: &[&str],
@@ -403,6 +404,28 @@ mod tests {
                 .is_none()
         );
         assert_eq!(collector.stats(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn giganto_import_collector_parses_rfc3339_embedded_start_time() {
+        let (mut collector, _dir) =
+            make_conn_collector(&[MIGR_CONN_RFC3339_START_TIME], 0);
+
+        let batch = collector
+            .next_batch()
+            .await
+            .expect("next_batch should succeed")
+            .expect("collector should emit the RFC3339 row");
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(collector.stats(), (1, 0));
+        assert!(
+            collector
+                .next_batch()
+                .await
+                .expect("collector should exhaust after one row")
+                .is_none()
+        );
     }
 
     #[tokio::test]

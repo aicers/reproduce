@@ -46,6 +46,23 @@ fn parse_giganto_timestamp_ns(timestamp: &str) -> GigantoImportResult<i64> {
         .map_err(GigantoImportError::from)
 }
 
+/// Parses embedded datetime columns from Giganto export CSV records.
+///
+/// Index-0 record timestamps must use [`parse_giganto_timestamp_ns`] instead
+/// and remain in epoch-decimal format.
+///
+/// Newer Giganto exports emit RFC3339 for embedded datetime columns (for
+/// example `start_time`). For compatibility with older exports, epoch-decimal
+/// strings are accepted as a fallback when RFC3339 parsing fails.
+fn parse_embedded_giganto_datetime_ns(s: &str) -> GigantoImportResult<i64> {
+    if let Ok(ts) = s.parse::<Timestamp>() {
+        return i64::try_from(ts.as_nanosecond())
+            .context("to_timestamp_nanos")
+            .map_err(GigantoImportError::from);
+    }
+    parse_giganto_timestamp_ns(s)
+}
+
 fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::Err> {
     let mut v = Vec::new();
     if s != "-" {
@@ -240,5 +257,37 @@ mod giganto_timestamp_tests {
         // Total: -1000000 * 1e9 + 500000000 = -999999500000000 nanoseconds
         let ns = parse_giganto_timestamp_ns("-1000000.500000000").unwrap();
         assert_eq!(ns, -999_999_500_000_000);
+    }
+}
+
+#[cfg(test)]
+mod embedded_giganto_datetime_tests {
+    use super::*;
+
+    const RFC3339_SAMPLE: &str = "2026-06-12T05:06:10.522174019+00:00";
+    const EPOCH_DECIMAL_SAMPLE: &str = "1700000000.765432111";
+
+    #[test]
+    fn parse_embedded_giganto_datetime_ns_rfc3339() {
+        let expected = i64::try_from(
+            RFC3339_SAMPLE
+                .parse::<Timestamp>()
+                .expect("valid RFC3339 sample")
+                .as_nanosecond(),
+        )
+        .expect("nanoseconds fit in i64");
+        let ns = parse_embedded_giganto_datetime_ns(RFC3339_SAMPLE).unwrap();
+        assert_eq!(ns, expected);
+    }
+
+    #[test]
+    fn parse_embedded_giganto_datetime_ns_epoch_decimal_fallback() {
+        let ns = parse_embedded_giganto_datetime_ns(EPOCH_DECIMAL_SAMPLE).unwrap();
+        assert_eq!(ns, 1_700_000_000_765_432_111);
+    }
+
+    #[test]
+    fn parse_embedded_giganto_datetime_ns_invalid() {
+        assert!(parse_embedded_giganto_datetime_ns("not-a-datetime").is_err());
     }
 }

@@ -4,7 +4,7 @@
 
 - 인증서, 개인 키, 신뢰할 CA 인증서(PEM 형식)
 - TOML 설정 파일
-- Giganto 서버 0.27.0 이상
+- Giganto 서버 0.28.0 이상
 
 ## Netflow v9 입력 사용 시 준비
 

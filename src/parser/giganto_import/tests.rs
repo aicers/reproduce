@@ -24,6 +24,37 @@ fn giganto_conn() {
 }
 
 #[test]
+fn giganto_conn_rfc3339_start_time() {
+    const RFC3339_START_TIME: &str = "2026-06-12T05:06:10.522174019+00:00";
+    let data = format!(
+        "1669735962.571151000\tlocalhost\tfe80::2267:7cff:fef0:cb09\t133\t\
+         ff02::2\t134\t1\tsf\t{RFC3339_START_TIME}\t0\t-\t0\t0\t1\t0\t21515\t27889"
+    );
+    let rec = stringrecord(&data);
+
+    let (conn, record_time) = Conn::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(record_time, 1_669_735_962_571_151_000);
+    let expected_start_time = i64::try_from(
+        RFC3339_START_TIME
+            .parse::<jiff::Timestamp>()
+            .expect("valid RFC3339 sample")
+            .as_nanosecond(),
+    )
+    .expect("nanoseconds fit in i64");
+    assert_eq!(conn.start_time, expected_start_time);
+}
+
+#[test]
+fn giganto_conn_legacy_epoch_decimal_start_time() {
+    let data = "1669735962.571151000	localhost	fe80::2267:7cff:fef0:cb09	133\t\
+                ff02::2\t134\t1\tsf\t1669735962.571151000\t0\t-\t0\t0\t1\t0\t21515\t27889";
+    let rec = stringrecord(data);
+
+    let (conn, _) = Conn::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(conn.start_time, 1_669_735_962_571_151_000);
+}
+
+#[test]
 fn giganto_http() {
     let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	0.000000000	0	1	0	21515	27889	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-	10,10,10	-";
 
@@ -87,6 +118,34 @@ fn giganto_kerberos() {
 }
 
 #[test]
+fn giganto_kerberos_rfc3339_datetimes() {
+    const RFC3339_START_TIME: &str = "2026-06-12T05:06:10.522174019+00:00";
+    const RFC3339_CLIENT_TIME: &str = "2026-06-12T05:06:11.000000000+00:00";
+    const RFC3339_SERVER_TIME: &str = "2026-06-12T05:06:12.000000000+00:00";
+    let data = format!(
+        "1562093132.125665000\tlocalhost\t89.248.167.131\t24067\t210.117.142.55\t\
+         88\t0\t{RFC3339_START_TIME}\t0\t1\t0\t21515\t27889\t{RFC3339_CLIENT_TIME}\t\
+         {RFC3339_SERVER_TIME}\t1\tclient_realm\t1\tcname1,cname2\trealm\t1\tsname1,sname2"
+    );
+    let rec = stringrecord(&data);
+
+    let (kerberos, record_time) = Kerberos::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(record_time, 1_562_093_132_125_665_000);
+    assert_eq!(
+        kerberos.start_time,
+        rfc3339_to_nanos(RFC3339_START_TIME)
+    );
+    assert_eq!(
+        kerberos.client_time,
+        rfc3339_to_nanos(RFC3339_CLIENT_TIME)
+    );
+    assert_eq!(
+        kerberos.server_time,
+        rfc3339_to_nanos(RFC3339_SERVER_TIME)
+    );
+}
+
+#[test]
 fn giganto_ssh() {
     let data = "1562093121.802019000	localhost	114.249.237.38	41260	203.254.132.18	22	0	0.000000000	0	1	0	21515	27889	SSH-2.0-Go	SSH-1.99-Cisco-1.25	aes128-cbc	hmac-sha1	none	diffie-hellman-group1-sha1	ssh-rsa	-	-	-	-	-	-";
 
@@ -142,11 +201,55 @@ fn giganto_ldap() {
 
 #[test]
 fn giganto_tls() {
-    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0	1	0	21515	27889	server_name	alpn_protocol	ja3	version	771,769,770	0,1,2	10	0,1	ja3s	serial	sub_country	sub_org_name	sub_comm_name	1	2	sub_alt_name	issuer_country	issuer_org_name	issuer_org_unit_name	issuer_common_name	10";
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	0	0.000000000	0	1	0	21515	27889	server_name	alpn_protocol	ja3	version	771,769,770	0,1,2	10	0,1	ja3s	serial	sub_country	sub_org_name	sub_comm_name	1700000000.000000000	1800000000.000000000	sub_alt_name	issuer_country	issuer_org_name	issuer_org_unit_name	issuer_common_name	10";
 
     let rec = stringrecord(data);
 
     assert!(Tls::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn giganto_tls_rfc3339_datetimes() {
+    const RFC3339_START_TIME: &str = "2026-06-12T05:06:10.522174019+00:00";
+    const RFC3339_NOT_BEFORE: &str = "2025-01-01T00:00:00.000000000+00:00";
+    const RFC3339_NOT_AFTER: &str = "2027-01-01T00:00:00.000000000+00:00";
+    let data = format!(
+        "1614130373.991064000\tlocalhost\t192.168.0.111\t58459\t192.168.0.7\t\
+         49670\t0\t{RFC3339_START_TIME}\t0\t1\t0\t21515\t27889\tserver_name\t\
+         alpn_protocol\tja3\tversion\t771,769,770\t0,1,2\t10\t0,1\tja3s\tserial\t\
+         sub_country\tsub_org_name\tsub_comm_name\t{RFC3339_NOT_BEFORE}\t\
+         {RFC3339_NOT_AFTER}\tsub_alt_name\tissuer_country\tissuer_org_name\t\
+         issuer_org_unit_name\tissuer_common_name\t10"
+    );
+    let rec = stringrecord(&data);
+
+    let (tls, record_time) = Tls::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(record_time, 1_614_130_373_991_064_000);
+    assert_eq!(tls.start_time, rfc3339_to_nanos(RFC3339_START_TIME));
+    assert_eq!(
+        tls.validity_not_before,
+        rfc3339_to_nanos(RFC3339_NOT_BEFORE)
+    );
+    assert_eq!(
+        tls.validity_not_after,
+        rfc3339_to_nanos(RFC3339_NOT_AFTER)
+    );
+}
+
+#[test]
+fn giganto_tls_legacy_epoch_decimal_validity() {
+    let data = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7\t\
+                49670\t0\t0.000000000\t0\t1\t0\t21515\t27889\tserver_name\t\
+                alpn_protocol\tja3\tversion\t771,769,770\t0,1,2\t10\t0,1\tja3s\t\
+                serial\tsub_country\tsub_org_name\tsub_comm_name\t\
+                1700000000.000000000\t1800000000.000000000\tsub_alt_name\t\
+                issuer_country\tissuer_org_name\tissuer_org_unit_name\t\
+                issuer_common_name\t10";
+    let rec = stringrecord(data);
+
+    let (tls, _) = Tls::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(tls.validity_not_before, 1_700_000_000_000_000_000);
+    assert_eq!(tls.validity_not_after, 1_800_000_000_000_000_000);
 }
 
 #[test]
@@ -243,6 +346,16 @@ fn stringrecord(data: &str) -> StringRecord {
     rdr.into_records().next().unwrap().unwrap()
 }
 
+fn rfc3339_to_nanos(value: &str) -> i64 {
+    i64::try_from(
+        value
+            .parse::<jiff::Timestamp>()
+            .expect("valid RFC3339 sample")
+            .as_nanosecond(),
+    )
+    .expect("nanoseconds fit in i64")
+}
+
 #[test]
 fn sysmon_process_create_sample() {
     let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{11111111-2222-3333-4444-555555555555}	1234	C:\\Windows\\System32\\cmd.exe	10.0.0.1	Test description	Test product	Test company	cmd.exe	\"C:\\Windows\\System32\\cmd.exe\" /c dir	C:\\Windows\\System32\\	DOMAIN\\User	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	1001	2	High	SHA256=ABCDEF,MD5=123456	{99999999-8888-7777-6666-555555555555}	4321	C:\\Windows\\explorer.exe	explorer.exe /something	DOMAIN\\User";
@@ -255,6 +368,26 @@ fn sysmon_file_create_time_sample() {
     let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{11111111-2222-3333-4444-555555555555}	1234	C:\\Windows\\System32\\cmd.exe	C:\\Temp\\file.txt	1691452700.000000000	1691452600.000000000	DOMAIN\\User";
     let rec = stringrecord(data);
     assert!(FileCreationTimeChanged::try_from_giganto_record(&rec).is_ok());
+}
+
+#[test]
+fn sysmon_file_create_time_rfc3339_creation_utc_time() {
+    const RFC3339_CREATION: &str = "2026-06-12T05:06:10.522174019+00:00";
+    const RFC3339_PREVIOUS: &str = "2026-06-12T05:06:09.000000000+00:00";
+    let data = format!(
+        "1691452807.978000000\tsensor1\tagent-a\tagent-id-1\t\
+         {{11111111-2222-3333-4444-555555555555}}\t1234\tC:\\Windows\\System32\\cmd.exe\t\
+         C:\\Temp\\file.txt\t{RFC3339_CREATION}\t{RFC3339_PREVIOUS}\tDOMAIN\\User"
+    );
+    let rec = stringrecord(&data);
+
+    let (event, record_time) = FileCreationTimeChanged::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(record_time, 1_691_452_807_978_000_000);
+    assert_eq!(event.creation_utc_time, rfc3339_to_nanos(RFC3339_CREATION));
+    assert_eq!(
+        event.previous_creation_utc_time,
+        rfc3339_to_nanos(RFC3339_PREVIOUS)
+    );
 }
 
 #[test]

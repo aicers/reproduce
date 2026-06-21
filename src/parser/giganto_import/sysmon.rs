@@ -8,7 +8,10 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 
-use super::{GigantoImportResult, TryFromGigantoRecord, parse_giganto_timestamp_ns};
+use super::{
+    GigantoImportResult, TryFromGigantoRecord, parse_embedded_giganto_datetime_ns,
+    parse_giganto_timestamp_ns,
+};
 
 type Result<T> = GigantoImportResult<T>;
 
@@ -27,7 +30,7 @@ fn parse_string(rec: &StringRecord, idx: usize, name: &str) -> Result<String> {
 
 fn parse_timestamp_ns(rec: &StringRecord, idx: usize, name: &str) -> Result<i64> {
     let value = field(rec, idx, name)?;
-    Ok(parse_giganto_timestamp_ns(value).with_context(|| format!("invalid {name}"))?)
+    Ok(parse_embedded_giganto_datetime_ns(value).with_context(|| format!("invalid {name}"))?)
 }
 
 fn parse_u32(rec: &StringRecord, idx: usize, name: &str) -> Result<u32> {
