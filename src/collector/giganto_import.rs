@@ -408,8 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn giganto_import_collector_parses_rfc3339_embedded_start_time() {
-        let (mut collector, _dir) =
-            make_conn_collector(&[MIGR_CONN_RFC3339_START_TIME], 0);
+        let (mut collector, _dir) = make_conn_collector(&[MIGR_CONN_RFC3339_START_TIME], 0);
 
         let batch = collector
             .next_batch()

@@ -131,18 +131,9 @@ fn giganto_kerberos_rfc3339_datetimes() {
 
     let (kerberos, record_time) = Kerberos::try_from_giganto_record(&rec).unwrap();
     assert_eq!(record_time, 1_562_093_132_125_665_000);
-    assert_eq!(
-        kerberos.start_time,
-        rfc3339_to_nanos(RFC3339_START_TIME)
-    );
-    assert_eq!(
-        kerberos.client_time,
-        rfc3339_to_nanos(RFC3339_CLIENT_TIME)
-    );
-    assert_eq!(
-        kerberos.server_time,
-        rfc3339_to_nanos(RFC3339_SERVER_TIME)
-    );
+    assert_eq!(kerberos.start_time, rfc3339_to_nanos(RFC3339_START_TIME));
+    assert_eq!(kerberos.client_time, rfc3339_to_nanos(RFC3339_CLIENT_TIME));
+    assert_eq!(kerberos.server_time, rfc3339_to_nanos(RFC3339_SERVER_TIME));
 }
 
 #[test]
@@ -230,10 +221,7 @@ fn giganto_tls_rfc3339_datetimes() {
         tls.validity_not_before,
         rfc3339_to_nanos(RFC3339_NOT_BEFORE)
     );
-    assert_eq!(
-        tls.validity_not_after,
-        rfc3339_to_nanos(RFC3339_NOT_AFTER)
-    );
+    assert_eq!(tls.validity_not_after, rfc3339_to_nanos(RFC3339_NOT_AFTER));
 }
 
 #[test]
