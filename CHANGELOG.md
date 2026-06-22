@@ -36,6 +36,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `[file].polling_mode` is now ignored with a warning for directory, Elastic,
+  and Netflow file inputs. It only affects direct single-file input, so
+  unrelated polling settings no longer change termination behavior.
 - Aligned stdout logging with file logging: both now default to INFO when
   `RUST_LOG` is unset. `RUST_LOG` continues to override the default in either
   case.

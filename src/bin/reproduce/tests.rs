@@ -720,7 +720,7 @@ async fn run_single_processes_operation_log_and_saves_checkpoint() {
     let mut sender = MockSender::default();
 
     controller
-        .run_single(&path, &mut sender, OPERATION_LOG, false)
+        .run_single(&path, &mut sender, OPERATION_LOG, false, InputType::Log)
         .await
         .expect("operation log input should be processed");
 
@@ -754,7 +754,7 @@ async fn run_single_does_not_checkpoint_unsent_batch_after_cancelled_reconnect()
     };
 
     let error = controller
-        .run_single_with_shutdown(&path, &mut sender, OPERATION_LOG, false, shutdown)
+        .run_single_with_shutdown(&path, &mut sender, OPERATION_LOG, false, InputType::Log, shutdown)
         .await
         .expect_err("unsent batch must keep the run from completing successfully");
 
@@ -783,7 +783,7 @@ async fn run_single_processes_sysmon_input() {
     let mut sender = MockSender::default();
 
     controller
-        .run_single(&path, &mut sender, "process_create", false)
+        .run_single(&path, &mut sender, "process_create", false, InputType::Log)
         .await
         .expect("sysmon input should be processed");
 
@@ -843,7 +843,7 @@ async fn run_single_processes_zeek_input() {
     let mut sender = MockSender::default();
 
     controller
-        .run_single(&path, &mut sender, "conn", false)
+        .run_single(&path, &mut sender, "conn", false, InputType::Log)
         .await
         .expect("zeek input should be processed");
 
@@ -859,7 +859,7 @@ async fn run_single_processes_giganto_import_input() {
     let mut sender = MockSender::default();
 
     controller
-        .run_single(&path, &mut sender, "conn", false)
+        .run_single(&path, &mut sender, "conn", false, InputType::Log)
         .await
         .expect("giganto import input should be processed");
 
@@ -875,7 +875,7 @@ async fn run_single_processes_security_log_input() {
     let mut sender = MockSender::default();
 
     controller
-        .run_single(&path, &mut sender, "wapples_fw_6.0", false)
+        .run_single(&path, &mut sender, "wapples_fw_6.0", false, InputType::Log)
         .await
         .expect("security log input should be processed");
 
@@ -893,7 +893,7 @@ async fn run_single_processes_netflow_input() {
     let mut sender = MockSender::default();
 
     controller
-        .run_single(&path, &mut sender, "netflow5", false)
+        .run_single(&path, &mut sender, "netflow5", false, InputType::Log)
         .await
         .expect("netflow input should be processed");
 
@@ -1270,7 +1270,7 @@ async fn run_single_requires_import_flag_for_zeek_kinds() {
     let mut sender = MockSender::default();
 
     let err = controller
-        .run_single(&path, &mut sender, "conn", false)
+        .run_single(&path, &mut sender, "conn", false, InputType::Log)
         .await
         .expect_err("missing import flag must be rejected");
     assert!(
@@ -1286,7 +1286,7 @@ async fn run_single_rejects_directory_input() {
     let mut sender = MockSender::default();
 
     let err = controller
-        .run_single(temp_dir.path(), &mut sender, "custom", false)
+        .run_single(temp_dir.path(), &mut sender, "custom", false, InputType::Log)
         .await
         .expect_err("directory input must be rejected");
     assert!(err.to_string().contains("invalid input type"));
@@ -1362,7 +1362,7 @@ async fn run_single_rejects_elastic_pseudo_input() {
     let mut sender = MockSender::default();
 
     let err = controller
-        .run_single(Path::new("elastic"), &mut sender, "custom", false)
+        .run_single(Path::new("elastic"), &mut sender, "custom", false, InputType::Log)
         .await
         .expect_err("elastic pseudo-input must be rejected by run_single");
     assert!(err.to_string().contains("invalid input type: Elastic"));
@@ -1378,7 +1378,7 @@ async fn run_single_requires_file_configuration() {
     let mut sender = MockSender::default();
 
     let err = controller
-        .run_single(&path, &mut sender, "custom", false)
+        .run_single(&path, &mut sender, "custom", false, InputType::Log)
         .await
         .expect_err("run_single requires file-specific configuration");
     assert!(err.to_string().contains("file's parameters is required"));
@@ -1395,7 +1395,7 @@ async fn run_single_ignores_checkpoint_write_failures() {
     let mut sender = MockSender::default();
 
     controller
-        .run_single(&path, &mut sender, "custom", false)
+        .run_single(&path, &mut sender, "custom", false, InputType::Log)
         .await
         .expect("checkpoint save failures should only be logged");
 
@@ -1517,6 +1517,241 @@ async fn dir_processing_skips_checkpoint_files_and_avoids_cascading_offsets() {
     assert!(
         !temp_dir.path().join("a.log_offset_offset").exists(),
         "checkpoint files must not be processed as input"
+    );
+}
+
+#[cfg(test)]
+mod log_capture {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+
+    #[derive(Clone, Default)]
+    pub(super) struct LogStore(Arc<Mutex<Vec<String>>>);
+
+    impl LogStore {
+        fn push(&self, message: String) {
+            self.0.lock().expect("log store lock").push(message);
+        }
+
+        pub(super) fn messages(&self) -> Vec<String> {
+            self.0.lock().expect("log store lock").clone()
+        }
+    }
+
+    struct CaptureLayer {
+        store: LogStore,
+    }
+
+    impl<S> Layer<S> for CaptureLayer
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = MessageVisitor::default();
+            event.record(&mut visitor);
+            if let Some(message) = visitor.message {
+                self.store.push(message);
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct MessageVisitor {
+        message: Option<String>,
+    }
+
+    impl Visit for MessageVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "message" {
+                self.message = Some(value.to_owned());
+            }
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.message = Some(format!("{value:?}"));
+            }
+        }
+    }
+
+    pub(super) fn with_captured_logs<F, R>(f: F) -> (R, Vec<String>)
+    where
+        F: FnOnce() -> R,
+    {
+        let (_guard, store) = start_log_capture();
+        let result = f();
+        (result, store.messages())
+    }
+
+    pub(super) fn start_log_capture() -> (tracing::subscriber::DefaultGuard, LogStore) {
+        let store = LogStore::default();
+        let layer = CaptureLayer {
+            store: store.clone(),
+        };
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let guard = tracing::subscriber::set_default(subscriber);
+        (guard, store)
+    }
+}
+
+const IGNORED_FILE_POLLING_WARNING: &str =
+    "Ignoring [file].polling_mode = true because selected input mode is";
+
+#[test]
+fn effective_file_polling_mode_honors_direct_single_file_input() {
+    assert!(effective_file_polling_mode(InputType::Log, "custom", true));
+    assert!(!effective_file_polling_mode(InputType::Log, "custom", false));
+}
+
+#[test]
+fn effective_file_polling_mode_ignores_directory_and_elastic_inputs() {
+    assert!(!effective_file_polling_mode(InputType::Dir, "custom", true));
+    assert!(!effective_file_polling_mode(InputType::Elastic, "custom", true));
+}
+
+#[cfg(feature = "netflow")]
+#[test]
+fn effective_file_polling_mode_ignores_netflow_file_input() {
+    assert!(!effective_file_polling_mode(InputType::Log, "netflow5", true));
+    assert!(!effective_file_polling_mode(InputType::Log, "netflow9", true));
+}
+
+#[tokio::test]
+async fn build_file_run_plan_applies_file_polling_for_direct_file_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "line\n");
+    let mut config = test_config(&path, "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let plan = controller
+        .build_file_run_plan(&path, "custom", false, InputType::Log, shutdown)
+        .expect("direct file plan should build");
+
+    assert!(plan.options.file_polling_mode);
+    assert!(!plan.options.dir_polling_mode);
+}
+
+#[tokio::test]
+async fn build_file_run_plan_clears_file_polling_for_directory_context() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "line\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let plan = controller
+        .build_file_run_plan(&path, "custom", false, InputType::Dir, shutdown)
+        .expect("directory file plan should build");
+
+    assert!(!plan.options.file_polling_mode);
+}
+
+#[cfg(feature = "netflow")]
+#[tokio::test]
+async fn build_file_run_plan_clears_file_polling_for_netflow_file_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = temp_dir.path().join("netflow5.pcap");
+    let mut config = test_config(&path, "netflow5");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let (plan, logs) = log_capture::with_captured_logs(|| {
+        controller.build_file_run_plan(&path, "netflow5", false, InputType::Log, shutdown)
+    });
+
+    let plan = plan.expect("netflow file plan should build");
+    assert!(!plan.options.file_polling_mode);
+    assert_eq!(
+        logs.iter()
+            .filter(|line| line.contains(IGNORED_FILE_POLLING_WARNING))
+            .count(),
+        1,
+        "expected one ignored polling warning, got: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(|line| line.contains("Netflow-file")),
+        "warning should name the Netflow-file input mode: {logs:?}"
+    );
+}
+
+#[tokio::test]
+async fn run_split_ignores_file_polling_mode_and_logs_one_warning() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    write_text_file(&temp_dir, "a.log", "line_a\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    config.directory = Some(Directory {
+        file_prefix: None,
+        polling_mode: false,
+    });
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let mut sender = MockSender::default();
+    let (_guard, store) = log_capture::start_log_capture();
+
+    controller
+        .run_split(&mut sender)
+        .await
+        .expect("directory run should complete without file polling");
+
+    let logs = store.messages();
+    assert_eq!(sender.batch_sizes, vec![1]);
+    assert_eq!(
+        logs.iter()
+            .filter(|line| line.contains(IGNORED_FILE_POLLING_WARNING))
+            .count(),
+        1,
+        "expected one ignored polling warning, got: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(|line| line.contains("Directory")),
+        "warning should name the Directory input mode: {logs:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_file_run_plan_uses_directory_polling_without_file_polling() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "line\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let plan = controller
+        .build_file_run_plan(&path, "custom", true, InputType::Dir, shutdown)
+        .expect("directory file plan should build");
+
+    assert!(plan.options.dir_polling_mode);
+    assert!(!plan.options.file_polling_mode);
+}
+
+#[test]
+fn warn_if_ignored_file_polling_mode_logs_once_for_elastic_input() {
+    let file = FileConfig::new(Some(false), true, None, None, None);
+    let ((), logs) = log_capture::with_captured_logs(|| {
+        warn_if_ignored_file_polling_mode(InputType::Elastic, "", Some(&file));
+    });
+
+    assert_eq!(
+        logs.iter()
+            .filter(|line| line.contains(IGNORED_FILE_POLLING_WARNING))
+            .count(),
+        1,
+        "expected one ignored polling warning, got: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(|line| line.contains("Elastic")),
+        "warning should name the Elastic input mode: {logs:?}"
     );
 }
 
