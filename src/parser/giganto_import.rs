@@ -25,7 +25,7 @@ pub trait TryFromGigantoRecord: Sized {
     fn try_from_giganto_record(rec: &StringRecord) -> GigantoImportResult<(Self, i64)>;
 }
 
-fn parse_giganto_timestamp(timestamp: &str) -> GigantoImportResult<Timestamp> {
+fn parse_giganto_epoch_decimal_timestamp(timestamp: &str) -> GigantoImportResult<Timestamp> {
     if let Some(i) = timestamp.find('.') {
         let secs = timestamp[..i].parse::<i64>().context("invalid timestamp")?;
         let nanos = timestamp[i + 1..]
@@ -39,28 +39,24 @@ fn parse_giganto_timestamp(timestamp: &str) -> GigantoImportResult<Timestamp> {
     }
 }
 
-fn parse_giganto_timestamp_ns(timestamp: &str) -> GigantoImportResult<i64> {
-    let ts = parse_giganto_timestamp(timestamp)?;
+fn parse_giganto_epoch_decimal_timestamp_ns(timestamp: &str) -> GigantoImportResult<i64> {
+    let ts = parse_giganto_epoch_decimal_timestamp(timestamp)?;
     i64::try_from(ts.as_nanosecond())
         .context("to_timestamp_nanos")
         .map_err(GigantoImportError::from)
 }
 
-/// Parses embedded datetime columns from Giganto export CSV records.
+/// Parses RFC3339 datetime columns from Giganto 0.28.0 export CSV records.
 ///
-/// Index-0 record timestamps must use [`parse_giganto_timestamp_ns`] instead
-/// and remain in epoch-decimal format.
-///
-/// Newer Giganto exports emit RFC3339 for embedded datetime columns (for
-/// example `start_time`). For compatibility with older exports, epoch-decimal
-/// strings are accepted as a fallback when RFC3339 parsing fails.
-fn parse_embedded_giganto_datetime_ns(s: &str) -> GigantoImportResult<i64> {
-    if let Ok(ts) = s.parse::<Timestamp>() {
-        return i64::try_from(ts.as_nanosecond())
-            .context("to_timestamp_nanos")
-            .map_err(GigantoImportError::from);
-    }
-    parse_giganto_timestamp_ns(s)
+/// Index-0 record timestamps must use [`parse_giganto_epoch_decimal_timestamp_ns`]
+/// instead and remain in epoch-decimal format.
+fn parse_giganto_rfc3339_timestamp_ns(s: &str) -> GigantoImportResult<i64> {
+    let ts = s
+        .parse::<Timestamp>()
+        .context("invalid RFC3339 timestamp")?;
+    i64::try_from(ts.as_nanosecond())
+        .context("to_timestamp_nanos")
+        .map_err(GigantoImportError::from)
 }
 
 fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::Err> {
@@ -129,146 +125,145 @@ mod parse_parenthesized_tuples_tests {
 }
 
 #[cfg(test)]
-mod giganto_timestamp_tests {
+mod giganto_epoch_decimal_timestamp_tests {
     use super::*;
 
     #[test]
-    fn parse_giganto_timestamp_valid() {
+    fn parse_giganto_epoch_decimal_timestamp_valid() {
         // 2019-07-02 20:45:21.655728123 UTC
-        let ts = parse_giganto_timestamp("1562093121.655728123").unwrap();
+        let ts = parse_giganto_epoch_decimal_timestamp("1562093121.655728123").unwrap();
         assert_eq!(ts.as_second(), 1_562_093_121);
         assert_eq!(ts.subsec_nanosecond(), 655_728_123);
     }
 
     #[test]
-    fn parse_giganto_timestamp_zero_nanos() {
-        let ts = parse_giganto_timestamp("1562093121.000000000").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_zero_nanos() {
+        let ts = parse_giganto_epoch_decimal_timestamp("1562093121.000000000").unwrap();
         assert_eq!(ts.as_second(), 1_562_093_121);
         assert_eq!(ts.subsec_nanosecond(), 0);
     }
 
     #[test]
-    fn parse_giganto_timestamp_one_nanosecond() {
-        let ts = parse_giganto_timestamp("1562093121.000000001").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_one_nanosecond() {
+        let ts = parse_giganto_epoch_decimal_timestamp("1562093121.000000001").unwrap();
         assert_eq!(ts.subsec_nanosecond(), 1);
     }
 
     #[test]
-    fn parse_giganto_timestamp_max_nanoseconds() {
-        let ts = parse_giganto_timestamp("1562093121.999999999").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_max_nanoseconds() {
+        let ts = parse_giganto_epoch_decimal_timestamp("1562093121.999999999").unwrap();
         assert_eq!(ts.subsec_nanosecond(), 999_999_999);
     }
 
     #[test]
-    fn parse_giganto_timestamp_epoch() {
-        let ts = parse_giganto_timestamp("0.000000000").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_epoch() {
+        let ts = parse_giganto_epoch_decimal_timestamp("0.000000000").unwrap();
         assert_eq!(ts.as_second(), 0);
         assert_eq!(ts.subsec_nanosecond(), 0);
     }
 
     #[test]
-    fn parse_giganto_timestamp_missing_dot() {
-        assert!(parse_giganto_timestamp("1562093121").is_err());
+    fn parse_giganto_epoch_decimal_timestamp_missing_dot() {
+        assert!(parse_giganto_epoch_decimal_timestamp("1562093121").is_err());
     }
 
     #[test]
-    fn parse_giganto_timestamp_invalid_seconds() {
-        assert!(parse_giganto_timestamp("invalid.123456789").is_err());
+    fn parse_giganto_epoch_decimal_timestamp_invalid_seconds() {
+        assert!(parse_giganto_epoch_decimal_timestamp("invalid.123456789").is_err());
     }
 
     #[test]
-    fn parse_giganto_timestamp_invalid_nanos() {
-        assert!(parse_giganto_timestamp("1562093121.abc").is_err());
+    fn parse_giganto_epoch_decimal_timestamp_invalid_nanos() {
+        assert!(parse_giganto_epoch_decimal_timestamp("1562093121.abc").is_err());
     }
 
     #[test]
-    fn parse_giganto_timestamp_empty_string() {
-        assert!(parse_giganto_timestamp("").is_err());
+    fn parse_giganto_epoch_decimal_timestamp_empty_string() {
+        assert!(parse_giganto_epoch_decimal_timestamp("").is_err());
     }
 
     #[test]
-    fn parse_giganto_timestamp_overflow_nanoseconds() {
+    fn parse_giganto_epoch_decimal_timestamp_overflow_nanoseconds() {
         // 10-digit nanos should be rejected by Timestamp::new
-        assert!(parse_giganto_timestamp("1562093121.1000000000").is_err());
+        assert!(parse_giganto_epoch_decimal_timestamp("1562093121.1000000000").is_err());
     }
 
     #[test]
-    fn parse_giganto_timestamp_year_2000() {
-        let ts = parse_giganto_timestamp("946684800.000000000").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_year_2000() {
+        let ts = parse_giganto_epoch_decimal_timestamp("946684800.000000000").unwrap();
         assert_eq!(ts.as_second(), 946_684_800);
     }
 
     #[test]
-    fn parse_giganto_timestamp_year_2038() {
-        let ts = parse_giganto_timestamp("2147483647.999999999").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_year_2038() {
+        let ts = parse_giganto_epoch_decimal_timestamp("2147483647.999999999").unwrap();
         assert_eq!(ts.as_second(), 2_147_483_647);
         assert_eq!(ts.subsec_nanosecond(), 999_999_999);
     }
 
     #[test]
-    fn parse_giganto_timestamp_conversion_to_nanos() {
-        let ts = parse_giganto_timestamp("1562093121.655728123").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_conversion_to_nanos() {
+        let ts = parse_giganto_epoch_decimal_timestamp("1562093121.655728123").unwrap();
         let nanos = i64::try_from(ts.as_nanosecond()).unwrap();
         assert_eq!(nanos, 1_562_093_121_655_728_123);
     }
 
     #[test]
-    fn parse_giganto_timestamp_ns_returns_nanoseconds() {
-        let ns = parse_giganto_timestamp_ns("1700000000.765432111").unwrap();
+    fn parse_giganto_epoch_decimal_timestamp_ns_returns_nanoseconds() {
+        let ns = parse_giganto_epoch_decimal_timestamp_ns("1700000000.765432111").unwrap();
         assert_eq!(ns, 1_700_000_000_765_432_111);
     }
 
     #[test]
-    fn parse_giganto_timestamp_negative() {
+    fn parse_giganto_epoch_decimal_timestamp_negative() {
         // Large negative seconds with positive subseconds (before Unix epoch)
         // Input: -1000000 seconds + 500000000 nanoseconds = -999999.5 seconds total
         // jiff represents this with truncation toward zero:
         //   as_second() = -999999 (truncated toward zero)
         //   subsec_nanosecond() = -500000000 (remainder, preserving sign)
-        let ts = parse_giganto_timestamp("-1000000.500000000").unwrap();
+        let ts = parse_giganto_epoch_decimal_timestamp("-1000000.500000000").unwrap();
         assert_eq!(ts.as_second(), -999_999);
         assert_eq!(ts.subsec_nanosecond(), -500_000_000);
     }
 
     #[test]
-    fn parse_giganto_timestamp_negative_one_second() {
+    fn parse_giganto_epoch_decimal_timestamp_negative_one_second() {
         // Negative one second with small nanos
         // Input: -1 seconds + 1 nanosecond = -0.999999999 seconds total
         // jiff represents this with truncation toward zero:
         //   as_second() = 0 (truncated toward zero)
         //   subsec_nanosecond() = -999999999 (remainder, preserving sign)
-        let ts = parse_giganto_timestamp("-1.000000001").unwrap();
+        let ts = parse_giganto_epoch_decimal_timestamp("-1.000000001").unwrap();
         assert_eq!(ts.as_second(), 0);
         assert_eq!(ts.subsec_nanosecond(), -999_999_999);
     }
 
     #[test]
-    fn parse_giganto_timestamp_negative_fractional() {
+    fn parse_giganto_epoch_decimal_timestamp_negative_fractional() {
         // Small negative fraction less than 1 second
         // Note: "-0" parses as 0, so this represents a positive timestamp (0.5 seconds)
-        let ts = parse_giganto_timestamp("-0.500000000").unwrap();
+        let ts = parse_giganto_epoch_decimal_timestamp("-0.500000000").unwrap();
         assert_eq!(ts.as_second(), 0);
         assert_eq!(ts.subsec_nanosecond(), 500_000_000);
     }
 
     #[test]
-    fn parse_giganto_timestamp_negative_ns_conversion() {
+    fn parse_giganto_epoch_decimal_timestamp_negative_ns_conversion() {
         // Verify nanosecond conversion for negative timestamps
         // Total: -1000000 * 1e9 + 500000000 = -999999500000000 nanoseconds
-        let ns = parse_giganto_timestamp_ns("-1000000.500000000").unwrap();
+        let ns = parse_giganto_epoch_decimal_timestamp_ns("-1000000.500000000").unwrap();
         assert_eq!(ns, -999_999_500_000_000);
     }
 }
 
 #[cfg(test)]
-mod embedded_giganto_datetime_tests {
+mod giganto_rfc3339_timestamp_tests {
     use super::*;
 
     const RFC3339_SAMPLE: &str = "2026-06-12T05:06:10.522174019+00:00";
-    const EPOCH_DECIMAL_SAMPLE: &str = "1700000000.765432111";
 
     #[test]
-    fn parse_embedded_giganto_datetime_ns_rfc3339() {
+    fn parse_giganto_rfc3339_timestamp_ns_valid() {
         let expected = i64::try_from(
             RFC3339_SAMPLE
                 .parse::<Timestamp>()
@@ -276,18 +271,17 @@ mod embedded_giganto_datetime_tests {
                 .as_nanosecond(),
         )
         .expect("nanoseconds fit in i64");
-        let ns = parse_embedded_giganto_datetime_ns(RFC3339_SAMPLE).unwrap();
+        let ns = parse_giganto_rfc3339_timestamp_ns(RFC3339_SAMPLE).unwrap();
         assert_eq!(ns, expected);
     }
 
     #[test]
-    fn parse_embedded_giganto_datetime_ns_epoch_decimal_fallback() {
-        let ns = parse_embedded_giganto_datetime_ns(EPOCH_DECIMAL_SAMPLE).unwrap();
-        assert_eq!(ns, 1_700_000_000_765_432_111);
+    fn parse_giganto_rfc3339_timestamp_ns_rejects_epoch_decimal() {
+        assert!(parse_giganto_rfc3339_timestamp_ns("1700000000.765432111").is_err());
     }
 
     #[test]
-    fn parse_embedded_giganto_datetime_ns_invalid() {
-        assert!(parse_embedded_giganto_datetime_ns("not-a-datetime").is_err());
+    fn parse_giganto_rfc3339_timestamp_ns_invalid() {
+        assert!(parse_giganto_rfc3339_timestamp_ns("not-a-datetime").is_err());
     }
 }

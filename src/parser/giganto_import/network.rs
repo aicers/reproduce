@@ -8,8 +8,8 @@ use giganto_client::ingest::network::{
 
 use super::{
     GigantoImportResult, TryFromGigantoRecord, parse_comma_separated,
-    parse_embedded_giganto_datetime_ns, parse_giganto_timestamp_ns, parse_parenthesized_tuples,
-    parse_post_body,
+    parse_giganto_epoch_decimal_timestamp_ns, parse_giganto_rfc3339_timestamp_ns,
+    parse_parenthesized_tuples, parse_post_body,
 };
 
 type Result<T> = GigantoImportResult<T>;
@@ -24,7 +24,7 @@ impl TryFromGigantoRecord for Conn {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -65,7 +65,7 @@ impl TryFromGigantoRecord for Conn {
             return Err(giganto_import_error!("missing conn state"));
         };
         let start_time = if let Some(start_time) = rec.get(8) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -151,7 +151,7 @@ impl TryFromGigantoRecord for Dns {
     )]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -187,7 +187,7 @@ impl TryFromGigantoRecord for Dns {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -352,7 +352,7 @@ impl TryFromGigantoRecord for MalformedDns {
     #[allow(clippy::similar_names, clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -382,7 +382,7 @@ impl TryFromGigantoRecord for MalformedDns {
             .parse::<u8>()
             .context("invalid proto")?;
         let start_time =
-            parse_embedded_giganto_datetime_ns(rec.get(7).context("missing start_time")?)?;
+            parse_giganto_rfc3339_timestamp_ns(rec.get(7).context("missing start_time")?)?;
         let duration = rec
             .get(8)
             .context("missing duration")?
@@ -496,7 +496,7 @@ impl TryFromGigantoRecord for Http {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -532,7 +532,7 @@ impl TryFromGigantoRecord for Http {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -717,7 +717,7 @@ impl TryFromGigantoRecord for Rdp {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -753,7 +753,7 @@ impl TryFromGigantoRecord for Rdp {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -819,7 +819,7 @@ impl TryFromGigantoRecord for Rdp {
 impl TryFromGigantoRecord for Smtp {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -855,7 +855,7 @@ impl TryFromGigantoRecord for Smtp {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -956,7 +956,7 @@ impl TryFromGigantoRecord for Ntlm {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -992,7 +992,7 @@ impl TryFromGigantoRecord for Ntlm {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -1082,7 +1082,7 @@ impl TryFromGigantoRecord for Ntlm {
 impl TryFromGigantoRecord for Kerberos {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -1118,7 +1118,7 @@ impl TryFromGigantoRecord for Kerberos {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -1154,12 +1154,12 @@ impl TryFromGigantoRecord for Kerberos {
             return Err(giganto_import_error!("missing destination l2 bytes"));
         };
         let client_time: i64 = if let Some(client_time) = rec.get(13) {
-            parse_embedded_giganto_datetime_ns(client_time)?
+            parse_giganto_rfc3339_timestamp_ns(client_time)?
         } else {
             return Err(giganto_import_error!("missing client_time"));
         };
         let server_time: i64 = if let Some(server_time) = rec.get(14) {
-            parse_embedded_giganto_datetime_ns(server_time)?
+            parse_giganto_rfc3339_timestamp_ns(server_time)?
         } else {
             return Err(giganto_import_error!("missing server_time"));
         };
@@ -1237,7 +1237,7 @@ impl TryFromGigantoRecord for Kerberos {
 impl TryFromGigantoRecord for Ssh {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -1273,7 +1273,7 @@ impl TryFromGigantoRecord for Ssh {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -1410,7 +1410,7 @@ impl TryFromGigantoRecord for DceRpc {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -1446,7 +1446,7 @@ impl TryFromGigantoRecord for DceRpc {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -1536,7 +1536,7 @@ impl TryFromGigantoRecord for DceRpc {
 impl TryFromGigantoRecord for Ftp {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -1572,7 +1572,7 @@ impl TryFromGigantoRecord for Ftp {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -1718,7 +1718,7 @@ impl TryFromGigantoRecord for Ftp {
 impl TryFromGigantoRecord for Mqtt {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -1754,7 +1754,7 @@ impl TryFromGigantoRecord for Mqtt {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -1851,7 +1851,7 @@ impl TryFromGigantoRecord for Mqtt {
 impl TryFromGigantoRecord for Ldap {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -1887,7 +1887,7 @@ impl TryFromGigantoRecord for Ldap {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -2003,7 +2003,7 @@ impl TryFromGigantoRecord for Ldap {
 impl TryFromGigantoRecord for Tls {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -2039,7 +2039,7 @@ impl TryFromGigantoRecord for Tls {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -2138,13 +2138,13 @@ impl TryFromGigantoRecord for Tls {
             return Err(giganto_import_error!("missing subject_common_name"));
         };
         let validity_not_before = if let Some(validity_not_before) = rec.get(26) {
-            parse_embedded_giganto_datetime_ns(validity_not_before)
+            parse_giganto_rfc3339_timestamp_ns(validity_not_before)
                 .context("invalid validity_not_before")?
         } else {
             return Err(giganto_import_error!("missing validity_not_before"));
         };
         let validity_not_after = if let Some(validity_not_after) = rec.get(27) {
-            parse_embedded_giganto_datetime_ns(validity_not_after)
+            parse_giganto_rfc3339_timestamp_ns(validity_not_after)
                 .context("invalid validity_not_after")?
         } else {
             return Err(giganto_import_error!("missing validity_not_after"));
@@ -2224,7 +2224,7 @@ impl TryFromGigantoRecord for Tls {
 impl TryFromGigantoRecord for Smb {
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -2260,7 +2260,7 @@ impl TryFromGigantoRecord for Smb {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -2386,7 +2386,7 @@ impl TryFromGigantoRecord for Nfs {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -2422,7 +2422,7 @@ impl TryFromGigantoRecord for Nfs {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -2500,7 +2500,7 @@ impl TryFromGigantoRecord for Bootp {
     #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -2536,7 +2536,7 @@ impl TryFromGigantoRecord for Bootp {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -2660,7 +2660,7 @@ impl TryFromGigantoRecord for Dhcp {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -2696,7 +2696,7 @@ impl TryFromGigantoRecord for Dhcp {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -2968,7 +2968,7 @@ impl TryFromGigantoRecord for Radius {
     #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -3004,7 +3004,7 @@ impl TryFromGigantoRecord for Radius {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(7) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
@@ -3134,7 +3134,7 @@ impl TryFromGigantoRecord for Icmp {
     #[allow(clippy::too_many_lines)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
-            parse_giganto_timestamp_ns(timestamp)?
+            parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
         } else {
             return Err(giganto_import_error!("missing timestamp"));
         };
@@ -3158,7 +3158,7 @@ impl TryFromGigantoRecord for Icmp {
             return Err(giganto_import_error!("missing protocol"));
         };
         let start_time = if let Some(start_time) = rec.get(5) {
-            parse_embedded_giganto_datetime_ns(start_time)?
+            parse_giganto_rfc3339_timestamp_ns(start_time)?
         } else {
             return Err(giganto_import_error!("missing start_time"));
         };
