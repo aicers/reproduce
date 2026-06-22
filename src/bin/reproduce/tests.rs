@@ -754,7 +754,14 @@ async fn run_single_does_not_checkpoint_unsent_batch_after_cancelled_reconnect()
     };
 
     let error = controller
-        .run_single_with_shutdown(&path, &mut sender, OPERATION_LOG, false, InputType::Log, shutdown)
+        .run_single_with_shutdown(
+            &path,
+            &mut sender,
+            OPERATION_LOG,
+            false,
+            InputType::Log,
+            shutdown,
+        )
         .await
         .expect_err("unsent batch must keep the run from completing successfully");
 
@@ -1286,7 +1293,13 @@ async fn run_single_rejects_directory_input() {
     let mut sender = MockSender::default();
 
     let err = controller
-        .run_single(temp_dir.path(), &mut sender, "custom", false, InputType::Log)
+        .run_single(
+            temp_dir.path(),
+            &mut sender,
+            "custom",
+            false,
+            InputType::Log,
+        )
         .await
         .expect_err("directory input must be rejected");
     assert!(err.to_string().contains("invalid input type"));
@@ -1362,7 +1375,13 @@ async fn run_single_rejects_elastic_pseudo_input() {
     let mut sender = MockSender::default();
 
     let err = controller
-        .run_single(Path::new("elastic"), &mut sender, "custom", false, InputType::Log)
+        .run_single(
+            Path::new("elastic"),
+            &mut sender,
+            "custom",
+            false,
+            InputType::Log,
+        )
         .await
         .expect_err("elastic pseudo-input must be rejected by run_single");
     assert!(err.to_string().contains("invalid input type: Elastic"));
@@ -1606,20 +1625,36 @@ const IGNORED_FILE_POLLING_WARNING: &str =
 #[test]
 fn effective_file_polling_mode_honors_direct_single_file_input() {
     assert!(effective_file_polling_mode(InputType::Log, "custom", true));
-    assert!(!effective_file_polling_mode(InputType::Log, "custom", false));
+    assert!(!effective_file_polling_mode(
+        InputType::Log,
+        "custom",
+        false
+    ));
 }
 
 #[test]
 fn effective_file_polling_mode_ignores_directory_and_elastic_inputs() {
     assert!(!effective_file_polling_mode(InputType::Dir, "custom", true));
-    assert!(!effective_file_polling_mode(InputType::Elastic, "custom", true));
+    assert!(!effective_file_polling_mode(
+        InputType::Elastic,
+        "custom",
+        true
+    ));
 }
 
 #[cfg(feature = "netflow")]
 #[test]
 fn effective_file_polling_mode_ignores_netflow_file_input() {
-    assert!(!effective_file_polling_mode(InputType::Log, "netflow5", true));
-    assert!(!effective_file_polling_mode(InputType::Log, "netflow9", true));
+    assert!(!effective_file_polling_mode(
+        InputType::Log,
+        "netflow5",
+        true
+    ));
+    assert!(!effective_file_polling_mode(
+        InputType::Log,
+        "netflow9",
+        true
+    ));
 }
 
 #[tokio::test]
