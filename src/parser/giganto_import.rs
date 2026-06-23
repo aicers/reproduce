@@ -46,10 +46,7 @@ fn parse_giganto_epoch_decimal_timestamp_ns(timestamp: &str) -> GigantoImportRes
         .map_err(GigantoImportError::from)
 }
 
-/// Parses RFC3339 datetime columns from Giganto 0.28.0 export CSV records.
-///
-/// Index-0 record timestamps must use [`parse_giganto_epoch_decimal_timestamp_ns`]
-/// instead and remain in epoch-decimal format.
+/// Parses an RFC3339 timestamp into nanoseconds since the Unix epoch.
 fn parse_giganto_rfc3339_timestamp_ns(s: &str) -> GigantoImportResult<i64> {
     let ts = s
         .parse::<Timestamp>()
@@ -264,15 +261,8 @@ mod giganto_rfc3339_timestamp_tests {
 
     #[test]
     fn parse_giganto_rfc3339_timestamp_ns_valid() {
-        let expected = i64::try_from(
-            RFC3339_SAMPLE
-                .parse::<Timestamp>()
-                .expect("valid RFC3339 sample")
-                .as_nanosecond(),
-        )
-        .expect("nanoseconds fit in i64");
         let ns = parse_giganto_rfc3339_timestamp_ns(RFC3339_SAMPLE).unwrap();
-        assert_eq!(ns, expected);
+        assert_eq!(ns, 1_781_240_770_522_174_019);
     }
 
     #[test]

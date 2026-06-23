@@ -14,16 +14,11 @@ use giganto_client::ingest::{
 
 use super::TryFromGigantoRecord;
 
-const RFC3339_ZERO: &str = "1970-01-01T00:00:00.000000000+00:00";
-
 #[test]
 fn giganto_conn() {
-    let data = format!(
-        "1669735962.571151000\tlocalhost\tfe80::2267:7cff:fef0:cb09\t133\t\
-         ff02::2\t134\t1\tsf\t{RFC3339_ZERO}\t0\t-\t0\t0\t1\t0\t21515\t27889"
-    );
+    let data = "1669735962.571151000	localhost	fe80::2267:7cff:fef0:cb09	133	ff02::2	134	1	sf	1970-01-01T00:00:00.000000000+00:00	0	-	0	0	1	0	21515	27889";
 
-    let rec = stringrecord(&data);
+    let rec = stringrecord(data);
 
     assert!(Conn::try_from_giganto_record(&rec).is_ok());
 }
@@ -39,14 +34,7 @@ fn giganto_conn_rfc3339_start_time() {
 
     let (conn, record_time) = Conn::try_from_giganto_record(&rec).unwrap();
     assert_eq!(record_time, 1_669_735_962_571_151_000);
-    let expected_start_time = i64::try_from(
-        RFC3339_START_TIME
-            .parse::<jiff::Timestamp>()
-            .expect("valid RFC3339 sample")
-            .as_nanosecond(),
-    )
-    .expect("nanoseconds fit in i64");
-    assert_eq!(conn.start_time, expected_start_time);
+    assert_eq!(conn.start_time, 1_781_240_770_522_174_019);
 }
 
 #[test]
@@ -126,9 +114,9 @@ fn giganto_kerberos_rfc3339_datetimes() {
 
     let (kerberos, record_time) = Kerberos::try_from_giganto_record(&rec).unwrap();
     assert_eq!(record_time, 1_562_093_132_125_665_000);
-    assert_eq!(kerberos.start_time, rfc3339_to_nanos(RFC3339_START_TIME));
-    assert_eq!(kerberos.client_time, rfc3339_to_nanos(RFC3339_CLIENT_TIME));
-    assert_eq!(kerberos.server_time, rfc3339_to_nanos(RFC3339_SERVER_TIME));
+    assert_eq!(kerberos.start_time, 1_781_240_770_522_174_019);
+    assert_eq!(kerberos.client_time, 1_781_240_771_000_000_000);
+    assert_eq!(kerberos.server_time, 1_781_240_772_000_000_000);
 }
 
 #[test]
@@ -211,12 +199,9 @@ fn giganto_tls_rfc3339_datetimes() {
 
     let (tls, record_time) = Tls::try_from_giganto_record(&rec).unwrap();
     assert_eq!(record_time, 1_614_130_373_991_064_000);
-    assert_eq!(tls.start_time, rfc3339_to_nanos(RFC3339_START_TIME));
-    assert_eq!(
-        tls.validity_not_before,
-        rfc3339_to_nanos(RFC3339_NOT_BEFORE)
-    );
-    assert_eq!(tls.validity_not_after, rfc3339_to_nanos(RFC3339_NOT_AFTER));
+    assert_eq!(tls.start_time, 1_781_240_770_522_174_019);
+    assert_eq!(tls.validity_not_before, 1_735_689_600_000_000_000);
+    assert_eq!(tls.validity_not_after, 1_798_761_600_000_000_000);
 }
 
 #[test]
@@ -313,16 +298,6 @@ fn stringrecord(data: &str) -> StringRecord {
     rdr.into_records().next().unwrap().unwrap()
 }
 
-fn rfc3339_to_nanos(value: &str) -> i64 {
-    i64::try_from(
-        value
-            .parse::<jiff::Timestamp>()
-            .expect("valid RFC3339 sample")
-            .as_nanosecond(),
-    )
-    .expect("nanoseconds fit in i64")
-}
-
 #[test]
 fn sysmon_process_create_sample() {
     let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{11111111-2222-3333-4444-555555555555}	1234	C:\\Windows\\System32\\cmd.exe	10.0.0.1	Test description	Test product	Test company	cmd.exe	\"C:\\Windows\\System32\\cmd.exe\" /c dir	C:\\Windows\\System32\\	DOMAIN\\User	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	1001	2	High	SHA256=ABCDEF,MD5=123456	{99999999-8888-7777-6666-555555555555}	4321	C:\\Windows\\explorer.exe	explorer.exe /something	DOMAIN\\User";
@@ -350,11 +325,8 @@ fn sysmon_file_create_time_rfc3339_creation_utc_time() {
 
     let (event, record_time) = FileCreationTimeChanged::try_from_giganto_record(&rec).unwrap();
     assert_eq!(record_time, 1_691_452_807_978_000_000);
-    assert_eq!(event.creation_utc_time, rfc3339_to_nanos(RFC3339_CREATION));
-    assert_eq!(
-        event.previous_creation_utc_time,
-        rfc3339_to_nanos(RFC3339_PREVIOUS)
-    );
+    assert_eq!(event.creation_utc_time, 1_781_240_770_522_174_019);
+    assert_eq!(event.previous_creation_utc_time, 1_781_240_769_000_000_000);
 }
 
 #[test]
