@@ -65,7 +65,7 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 #[cfg(feature = "netflow")]
 use crate::kind_runners::run_netflow_kind;
 use crate::{
-    config::{Config, File as FileConfig, InputType},
+    config::{Config, File as FileConfig, InputType, input_type},
     kind_runners::{
         run_log_kind, run_operation_log, run_security_kind, run_sysmon_kind, run_zeek_kind,
     },
@@ -87,8 +87,9 @@ ARG:
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config_filename = parse();
-    let config = config::Config::new(config_filename.as_ref())?;
+    let mut config = config::Config::new(config_filename.as_ref())?;
     let _guard = init_tracing(config.log_path.as_deref())?;
+    config.resolve_runtime_options();
     let reload_requested = Arc::new(AtomicBool::new(false));
     install_signal_handlers(Arc::clone(&reload_requested))?;
     let controller = Controller::new(config, reload_requested);
@@ -822,14 +823,8 @@ impl Controller {
             InputType::Dir => self.run_split(sender).await?,
             InputType::Log => {
                 let file_name = Path::new(&self.config.input).to_path_buf();
-                self.run_single(
-                    file_name.as_ref(),
-                    sender,
-                    &self.config.kind,
-                    false,
-                    InputType::Log,
-                )
-                .await?;
+                self.run_single(file_name.as_ref(), sender, &self.config.kind, false)
+                    .await?;
             }
             InputType::Elastic => bail!("elastic input requires a concrete sender factory"),
         }
@@ -858,7 +853,6 @@ impl Controller {
         let Some(ref dir_option) = self.config.directory else {
             bail!("directory's parameters is required");
         };
-        warn_if_ignored_file_polling_mode(InputType::Dir, "", self.config.file.as_ref());
         let checkpoint_suffix = self
             .config
             .file
@@ -890,7 +884,6 @@ impl Controller {
                     sender,
                     &self.config.kind,
                     dir_option.polling_mode,
-                    InputType::Dir,
                     shutdown.clone(),
                 )
                 .await?;
@@ -908,7 +901,6 @@ impl Controller {
         let Some(ref elastic) = self.config.elastic else {
             bail!("elastic parameters is required");
         };
-        warn_if_ignored_file_polling_mode(InputType::Elastic, "", self.config.file.as_ref());
         let dir = reproduce::parser::sysmon_csv::fetch_elastic_search(ElasticDumpOptions {
             url: &elastic.url,
             event_codes: &elastic.event_codes,
@@ -946,7 +938,6 @@ impl Controller {
                 &mut sender,
                 kind,
                 false,
-                InputType::Elastic,
                 shutdown.clone(),
             )
             .await?;
@@ -963,21 +954,13 @@ impl Controller {
         sender: &mut S,
         kind: &str,
         dir_polling_mode: bool,
-        selected_input_type: InputType,
     ) -> Result<()>
     where
         S: ControllerSender + ?Sized,
     {
         let shutdown = shutdown_receiver();
-        self.run_single_with_shutdown(
-            filename,
-            sender,
-            kind,
-            dir_polling_mode,
-            selected_input_type,
-            shutdown,
-        )
-        .await
+        self.run_single_with_shutdown(filename, sender, kind, dir_polling_mode, shutdown)
+            .await
     }
 
     async fn run_single_with_shutdown<S>(
@@ -986,19 +969,12 @@ impl Controller {
         sender: &mut S,
         kind: &str,
         dir_polling_mode: bool,
-        selected_input_type: InputType,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()>
     where
         S: ControllerSender + ?Sized,
     {
-        let plan = self.build_file_run_plan(
-            filename,
-            kind,
-            dir_polling_mode,
-            selected_input_type,
-            shutdown,
-        )?;
+        let plan = self.build_file_run_plan(filename, kind, dir_polling_mode, shutdown)?;
         self.execute_file_run(filename, sender, plan).await
     }
 
@@ -1007,12 +983,11 @@ impl Controller {
         filename: &Path,
         kind: &'a str,
         dir_polling_mode: bool,
-        selected_input_type: InputType,
         shutdown: watch::Receiver<bool>,
     ) -> Result<FileRunPlan<'a>> {
-        let input_type = input_type(&filename.to_string_lossy());
-        if input_type != InputType::Log {
-            bail!("invalid input type: {input_type:?}");
+        let filename_input_type = input_type(&filename.to_string_lossy());
+        if filename_input_type != InputType::Log {
+            bail!("invalid input type: {filename_input_type:?}");
         }
 
         let file = self
@@ -1026,17 +1001,10 @@ impl Controller {
         );
         let offset = resolve_offset(file, checkpoint.as_ref());
         let count_sent = file.transfer_count.unwrap_or(0);
-        if selected_input_type == InputType::Log {
-            warn_if_ignored_file_polling_mode(selected_input_type, kind, Some(file));
-        }
         let options = CollectorRunOptions {
             offset,
             count_sent,
-            file_polling_mode: effective_file_polling_mode(
-                selected_input_type,
-                kind,
-                file.polling_mode,
-            ),
+            file_polling_mode: file.polling_mode,
             dir_polling_mode,
             shutdown,
         };
@@ -1372,78 +1340,6 @@ fn file_to_kind(path: &Path) -> Result<&str> {
         return Ok(SysmonKind::from_event_code(num).map_or("", SysmonKind::as_str));
     }
     Ok("")
-}
-
-pub(crate) fn input_type(input: &str) -> InputType {
-    if input == "elastic" {
-        InputType::Elastic
-    } else {
-        let path = Path::new(input);
-        if path.is_dir() {
-            InputType::Dir
-        } else {
-            InputType::Log
-        }
-    }
-}
-
-/// Returns whether `[file].polling_mode` should influence collector behavior.
-pub(crate) fn effective_file_polling_mode(
-    selected_input_type: InputType,
-    kind: &str,
-    configured: bool,
-) -> bool {
-    if !configured {
-        return false;
-    }
-    match selected_input_type {
-        InputType::Log => !is_netflow_kind(kind),
-        InputType::Dir | InputType::Elastic => false,
-    }
-}
-
-fn is_netflow_kind(kind: &str) -> bool {
-    #[cfg(feature = "netflow")]
-    {
-        NetflowKind::parse(kind).is_some()
-    }
-    #[cfg(not(feature = "netflow"))]
-    {
-        let _ = kind;
-        false
-    }
-}
-
-fn ignored_file_polling_mode_label(
-    selected_input_type: InputType,
-    kind: &str,
-) -> Option<&'static str> {
-    match selected_input_type {
-        InputType::Dir => Some("Directory"),
-        InputType::Elastic => Some("Elastic"),
-        InputType::Log if is_netflow_kind(kind) => Some("Netflow-file"),
-        InputType::Log => None,
-    }
-}
-
-pub(crate) fn warn_if_ignored_file_polling_mode(
-    selected_input_type: InputType,
-    kind: &str,
-    file: Option<&FileConfig>,
-) {
-    let Some(file) = file else {
-        return;
-    };
-    if !file.polling_mode {
-        return;
-    }
-    let Some(mode_label) = ignored_file_polling_mode_label(selected_input_type, kind) else {
-        return;
-    };
-    warn!(
-        "Ignoring [file].polling_mode = true because selected input mode is {mode_label}; \
-         [file].polling_mode only applies to direct single-file input"
-    );
 }
 
 async fn create_sender(
