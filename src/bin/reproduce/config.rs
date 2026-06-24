@@ -29,18 +29,6 @@ pub(crate) fn input_type(input: &str) -> InputType {
     }
 }
 
-fn is_netflow_kind(kind: &str) -> bool {
-    #[cfg(feature = "netflow")]
-    {
-        matches!(kind, "netflow5" | "netflow9")
-    }
-    #[cfg(not(feature = "netflow"))]
-    {
-        let _ = kind;
-        false
-    }
-}
-
 fn ignored_file_polling_mode_label(
     selected_input_type: InputType,
     kind: &str,
@@ -48,8 +36,13 @@ fn ignored_file_polling_mode_label(
     match selected_input_type {
         InputType::Dir => Some("Directory"),
         InputType::Elastic => Some("Elastic"),
-        InputType::Log if is_netflow_kind(kind) => Some("Netflow-file"),
-        InputType::Log => None,
+        InputType::Log => {
+            #[cfg(feature = "netflow")]
+            if super::NetflowKind::parse(kind).is_some() {
+                return Some("Netflow-file");
+            }
+            None
+        }
     }
 }
 
@@ -169,23 +162,19 @@ impl Config {
             }
         }
 
-        let Some(ref mut file) = self.file else {
-            return;
-        };
-        if !file.polling_mode {
-            return;
+        let selected_input_type = input_type(&self.input);
+        let ignored_mode = ignored_file_polling_mode_label(selected_input_type, &self.kind);
+
+        if let Some(file) = self.file.as_mut()
+            && file.polling_mode
+            && let Some(mode_label) = ignored_mode
+        {
+            warn!(
+                "Ignoring [file].polling_mode = true because selected input mode is {mode_label}; \
+                 [file].polling_mode only applies to direct single-file input"
+            );
+            file.polling_mode = false;
         }
-
-        let selected = input_type(&self.input);
-        let Some(mode_label) = ignored_file_polling_mode_label(selected, &self.kind) else {
-            return;
-        };
-
-        warn!(
-            "Ignoring [file].polling_mode = true because selected input mode is {mode_label}; \
-             [file].polling_mode only applies to direct single-file input"
-        );
-        file.polling_mode = false;
     }
 }
 

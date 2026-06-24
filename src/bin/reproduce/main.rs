@@ -985,9 +985,9 @@ impl Controller {
         dir_polling_mode: bool,
         shutdown: watch::Receiver<bool>,
     ) -> Result<FileRunPlan<'a>> {
-        let filename_input_type = input_type(&filename.to_string_lossy());
-        if filename_input_type != InputType::Log {
-            bail!("invalid input type: {filename_input_type:?}");
+        let input_type = input_type(&filename.to_string_lossy());
+        if input_type != InputType::Log {
+            bail!("invalid input type: {input_type:?}");
         }
 
         let file = self

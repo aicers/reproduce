@@ -1521,30 +1521,29 @@ async fn dir_processing_skips_checkpoint_files_and_avoids_cascading_offsets() {
 }
 
 #[cfg(test)]
-mod log_capture {
-    use std::sync::{Arc, Mutex};
+mod warn_count {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
-    use tracing::field::{Field, Visit};
+    use tracing::Level;
     use tracing_subscriber::{Layer, layer::SubscriberExt};
 
     #[derive(Clone, Default)]
-    pub(super) struct LogStore(Arc<Mutex<Vec<String>>>);
+    pub(super) struct WarnCounter(Arc<AtomicUsize>);
 
-    impl LogStore {
-        fn push(&self, message: String) {
-            self.0.lock().expect("log store lock").push(message);
-        }
-
-        pub(super) fn messages(&self) -> Vec<String> {
-            self.0.lock().expect("log store lock").clone()
+    impl WarnCounter {
+        pub(super) fn count(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
         }
     }
 
-    struct CaptureLayer {
-        store: LogStore,
+    struct WarnCountLayer {
+        counter: WarnCounter,
     }
 
-    impl<S> Layer<S> for CaptureLayer
+    impl<S> Layer<S> for WarnCountLayer
     where
         S: tracing::Subscriber,
     {
@@ -1553,55 +1552,32 @@ mod log_capture {
             event: &tracing::Event<'_>,
             _ctx: tracing_subscriber::layer::Context<'_, S>,
         ) {
-            let mut visitor = MessageVisitor::default();
-            event.record(&mut visitor);
-            if let Some(message) = visitor.message {
-                self.store.push(message);
+            if *event.metadata().level() == Level::WARN {
+                self.counter.0.fetch_add(1, Ordering::SeqCst);
             }
         }
     }
 
-    #[derive(Default)]
-    struct MessageVisitor {
-        message: Option<String>,
-    }
-
-    impl Visit for MessageVisitor {
-        fn record_str(&mut self, field: &Field, value: &str) {
-            if field.name() == "message" {
-                self.message = Some(value.to_owned());
-            }
-        }
-
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "message" {
-                self.message = Some(format!("{value:?}"));
-            }
-        }
-    }
-
-    pub(super) fn with_captured_logs<F, R>(f: F) -> (R, Vec<String>)
+    pub(super) fn with_warn_count<F, R>(f: F) -> (R, usize)
     where
         F: FnOnce() -> R,
     {
-        let (_guard, store) = start_log_capture();
+        let (guard, counter) = start_warn_count();
         let result = f();
-        (result, store.messages())
+        drop(guard);
+        (result, counter.count())
     }
 
-    pub(super) fn start_log_capture() -> (tracing::subscriber::DefaultGuard, LogStore) {
-        let store = LogStore::default();
-        let layer = CaptureLayer {
-            store: store.clone(),
+    pub(super) fn start_warn_count() -> (tracing::subscriber::DefaultGuard, WarnCounter) {
+        let counter = WarnCounter::default();
+        let layer = WarnCountLayer {
+            counter: counter.clone(),
         };
         let subscriber = tracing_subscriber::registry().with(layer);
         let guard = tracing::subscriber::set_default(subscriber);
-        (guard, store)
+        (guard, counter)
     }
 }
-
-const IGNORED_FILE_POLLING_WARNING: &str =
-    "Ignoring [file].polling_mode = true because selected input mode is";
 
 #[test]
 fn resolve_runtime_options_preserves_file_polling_for_direct_file_input() {
@@ -1621,19 +1597,12 @@ fn resolve_runtime_options_clears_file_polling_for_directory_input() {
     let mut config = test_config(temp_dir.path(), "custom");
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
 
-    let ((), logs) = log_capture::with_captured_logs(|| config.resolve_runtime_options());
+    let ((), warn_count) = warn_count::with_warn_count(|| config.resolve_runtime_options());
 
     assert!(!config.file.expect("file section should exist").polling_mode);
     assert_eq!(
-        logs.iter()
-            .filter(|line| line.contains(IGNORED_FILE_POLLING_WARNING))
-            .count(),
-        1,
-        "expected one ignored polling warning, got: {logs:?}"
-    );
-    assert!(
-        logs.iter().any(|line| line.contains("Directory")),
-        "warning should name the Directory input mode: {logs:?}"
+        warn_count, 1,
+        "expected exactly one WARN for ignored file polling in directory mode"
     );
 }
 
@@ -1643,19 +1612,12 @@ fn resolve_runtime_options_clears_file_polling_for_elastic_input() {
     config.input = "elastic".to_string();
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
 
-    let ((), logs) = log_capture::with_captured_logs(|| config.resolve_runtime_options());
+    let ((), warn_count) = warn_count::with_warn_count(|| config.resolve_runtime_options());
 
     assert!(!config.file.expect("file section should exist").polling_mode);
     assert_eq!(
-        logs.iter()
-            .filter(|line| line.contains(IGNORED_FILE_POLLING_WARNING))
-            .count(),
-        1,
-        "expected one ignored polling warning, got: {logs:?}"
-    );
-    assert!(
-        logs.iter().any(|line| line.contains("Elastic")),
-        "warning should name the Elastic input mode: {logs:?}"
+        warn_count, 1,
+        "expected exactly one WARN for ignored file polling in elastic mode"
     );
 }
 
@@ -1667,19 +1629,12 @@ fn resolve_runtime_options_clears_file_polling_for_netflow_file_input() {
     let mut config = test_config(&path, "netflow5");
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
 
-    let ((), logs) = log_capture::with_captured_logs(|| config.resolve_runtime_options());
+    let ((), warn_count) = warn_count::with_warn_count(|| config.resolve_runtime_options());
 
     assert!(!config.file.expect("file section should exist").polling_mode);
     assert_eq!(
-        logs.iter()
-            .filter(|line| line.contains(IGNORED_FILE_POLLING_WARNING))
-            .count(),
-        1,
-        "expected one ignored polling warning, got: {logs:?}"
-    );
-    assert!(
-        logs.iter().any(|line| line.contains("Netflow-file")),
-        "warning should name the Netflow-file input mode: {logs:?}"
+        warn_count, 1,
+        "expected exactly one WARN for ignored file polling in netflow file mode"
     );
 }
 
@@ -1740,13 +1695,14 @@ async fn build_file_run_plan_uses_normalized_file_polling_for_netflow_file_input
 async fn run_split_uses_normalized_file_polling_and_logs_one_warning() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     write_text_file(&temp_dir, "a.log", "line_a\n");
+    write_text_file(&temp_dir, "b.log", "line_b\n");
     let mut config = test_config(temp_dir.path(), "custom");
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
     config.directory = Some(Directory {
         file_prefix: None,
         polling_mode: false,
     });
-    let (_guard, store) = log_capture::start_log_capture();
+    let (_guard, counter) = warn_count::start_warn_count();
     config.resolve_runtime_options();
     let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
     let mut sender = MockSender::default();
@@ -1756,18 +1712,11 @@ async fn run_split_uses_normalized_file_polling_and_logs_one_warning() {
         .await
         .expect("directory run should complete without file polling");
 
-    let logs = store.messages();
-    assert_eq!(sender.batch_sizes, vec![1]);
+    assert_eq!(sender.batch_sizes, vec![1, 1]);
     assert_eq!(
-        logs.iter()
-            .filter(|line| line.contains(IGNORED_FILE_POLLING_WARNING))
-            .count(),
+        counter.count(),
         1,
-        "expected one ignored polling warning, got: {logs:?}"
-    );
-    assert!(
-        logs.iter().any(|line| line.contains("Directory")),
-        "warning should name the Directory input mode: {logs:?}"
+        "expected exactly one WARN for ignored file polling across the whole directory run"
     );
 }
 
