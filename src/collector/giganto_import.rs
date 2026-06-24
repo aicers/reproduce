@@ -201,8 +201,8 @@ mod tests {
     // Fields: timestamp, skipped, orig_addr, orig_port, resp_addr, resp_port,
     // proto, conn_state, start_time, duration, service, orig_bytes, resp_bytes,
     // orig_pkts, resp_pkts, orig_l2_bytes, resp_l2_bytes
-    const MIGR_CONN_1: &str = "1669773412.655728000\tsrc1\t192.168.1.77\t57655\t209.197.168.151\t1024\t6\tSF\t1669773412.655728000\t2256935000\tirc-dcc-data\t124\t42208\t28\t43\t1592\t44452";
-    const MIGR_CONN_2: &str = "1669773413.000000000\tsrc2\t10.0.0.1\t12345\t8.8.8.8\t443\t6\tSF\t1669773413.000000000\t123456000\t-\t0\t1500\t1\t1\t52\t1552";
+    const MIGR_CONN_1: &str = "1669773412.655728000\tsrc1\t192.168.1.77\t57655\t209.197.168.151\t1024\t6\tSF\t2022-11-30T01:56:52.655728000+00:00\t2256935000\tirc-dcc-data\t124\t42208\t28\t43\t1592\t44452";
+    const MIGR_CONN_2: &str = "1669773413.000000000\tsrc2\t10.0.0.1\t12345\t8.8.8.8\t443\t6\tSF\t2022-11-30T01:56:53.000000000+00:00\t123456000\t-\t0\t1500\t1\t1\t52\t1552";
 
     fn make_conn_collector(
         lines: &[&str],

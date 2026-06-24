@@ -24,7 +24,7 @@ byteorder = "1"
 bytesize = "2"
 config = { version = "0.15", features = ["toml"], default-features = false }
 csv = "1"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.27.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.28.0" }
 jiff = { version = "0.2", features = ["serde"] }
 num-traits = "0.2"
 num_enum = "0.7"

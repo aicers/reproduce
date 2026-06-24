@@ -20,7 +20,7 @@
 - Verify the IP address and port in `giganto_ingest_srv_addr`.
 - Verify that `giganto_name` matches the TLS server name of the Giganto server.
 - Verify that the CA certificates used for certificate validation are correct.
-- Verify that the Giganto server version is 0.27.0 or later.
+- Verify that the Giganto server version is 0.28.0 or later.
 
 ## When Input Data Is Not Processed
 

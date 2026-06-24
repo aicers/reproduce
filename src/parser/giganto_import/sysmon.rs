@@ -8,13 +8,16 @@ use giganto_client::ingest::sysmon::{
     ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
 };
 
-use super::{GigantoImportResult, TryFromGigantoRecord, parse_giganto_timestamp_ns};
+use super::{
+    GigantoImportResult, TryFromGigantoRecord, parse_giganto_epoch_decimal_timestamp_ns,
+    parse_giganto_rfc3339_timestamp_ns,
+};
 
 type Result<T> = GigantoImportResult<T>;
 
 fn record_timestamp(rec: &StringRecord, idx: usize) -> Result<i64> {
     let timestamp = rec.get(idx).ok_or_else(|| anyhow!("missing timestamp"))?;
-    parse_giganto_timestamp_ns(timestamp)
+    parse_giganto_epoch_decimal_timestamp_ns(timestamp)
 }
 
 fn field<'a>(rec: &'a StringRecord, idx: usize, name: &str) -> Result<&'a str> {
@@ -27,7 +30,7 @@ fn parse_string(rec: &StringRecord, idx: usize, name: &str) -> Result<String> {
 
 fn parse_timestamp_ns(rec: &StringRecord, idx: usize, name: &str) -> Result<i64> {
     let value = field(rec, idx, name)?;
-    Ok(parse_giganto_timestamp_ns(value).with_context(|| format!("invalid {name}"))?)
+    Ok(parse_giganto_rfc3339_timestamp_ns(value).with_context(|| format!("invalid {name}"))?)
 }
 
 fn parse_u32(rec: &StringRecord, idx: usize, name: &str) -> Result<u32> {

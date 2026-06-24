@@ -41,7 +41,7 @@ const SYSMON_HEADER: &str = "agent_name\tagent_id\tevent_action\tutc_time\tproce
      parent_image\tparent_command_line\tparent_user";
 const SYSMON_PC_1: &str = "sensor\tagent001\tProcess Create\t2023-01-15 14:30:45.123456\t{AAAA-0001}\t1234\tC:\\notepad.exe\t1.0\tdesc\tprod\tco\torig.exe\tnotepad.exe /f\tC:\\Windows\\\tSYSTEM\t{BBBB-0001}\t0x3e7\t0\tSystem\tSHA256=abc123\t{CCCC-0001}\t5678\tC:\\explorer.exe\texplorer.exe\tSYSTEM";
 const ZEEK_CONN_1: &str = "1669773412.689790\tuid001aaa\t192.168.1.77\t57655\t209.197.168.151\t1024\ttcp\tirc-dcc-data\t2.256935\t124\t42208\tSF\t-\t-\t0\tShAdDaFf\t28\t1592\t43\t44452\t-";
-const MIGR_CONN_1: &str = "1669773412.655728000\tsrc1\t192.168.1.77\t57655\t209.197.168.151\t1024\t6\tSF\t1669773412.655728000\t2256935000\tirc-dcc-data\t124\t42208\t28\t43\t1592\t44452";
+const MIGR_CONN_1: &str = "1669773412.655728000\tsrc1\t192.168.1.77\t57655\t209.197.168.151\t1024\t6\tSF\t2022-11-30T01:56:52.655728000+00:00\t2256935000\tirc-dcc-data\t124\t42208\t28\t43\t1592\t44452";
 const OPLOG_LINE: &str = "2023-01-02T07:36:17Z INFO msg1";
 const WAPPLES_LINE: &str = "<182>Jan 9 09:26:09 host wplogd: WAPPLES INTRUSION WAPPLES \
     DETECTION TIME : 2020-01-09 09:26:09 +0900 WAPPLES RULE NAME : \

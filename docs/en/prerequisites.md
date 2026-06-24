@@ -4,7 +4,7 @@
 
 - Certificate, private key, and trusted CA certificates in PEM format
 - TOML configuration file
-- Giganto server version 0.27.0 or later
+- Giganto server version 0.28.0 or later
 
 ## Additional Requirements for Netflow v9 Input
 

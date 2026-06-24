@@ -17,6 +17,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Bumped `giganto-client` to `0.28.0` and updated the required Giganto
+  server version to 0.28.0.
+- Giganto export import now parses RFC3339 datetime columns (such as
+  `start_time`) in Giganto 0.28.0 export files, while index-0 record
+  timestamps remain in epoch-decimal format.
+
 - Refactored sender-side shutdown handling to bridge the controller's
   `watch::Receiver<bool>` shutdown signal into a shared
   `tokio_util::sync::CancellationToken` used by `GigantoSender`.
