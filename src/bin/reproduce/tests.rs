@@ -1530,18 +1530,7 @@ mod warn_count {
     use tracing::Level;
     use tracing_subscriber::{Layer, layer::SubscriberExt};
 
-    #[derive(Clone, Default)]
-    pub(super) struct WarnCounter(Arc<AtomicUsize>);
-
-    impl WarnCounter {
-        pub(super) fn count(&self) -> usize {
-            self.0.load(Ordering::SeqCst)
-        }
-    }
-
-    struct WarnCountLayer {
-        counter: WarnCounter,
-    }
+    struct WarnCountLayer(Arc<AtomicUsize>);
 
     impl<S> Layer<S> for WarnCountLayer
     where
@@ -1553,26 +1542,24 @@ mod warn_count {
             _ctx: tracing_subscriber::layer::Context<'_, S>,
         ) {
             if *event.metadata().level() == Level::WARN {
-                self.counter.0.fetch_add(1, Ordering::SeqCst);
+                self.0.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
 
-    pub(super) fn with_warn_count<F, R>(f: F) -> (R, usize)
+    pub(super) fn with_warn_count<F, R>(f: F) -> (R, Arc<AtomicUsize>)
     where
         F: FnOnce() -> R,
     {
         let (guard, counter) = start_warn_count();
         let result = f();
         drop(guard);
-        (result, counter.count())
+        (result, counter)
     }
 
-    pub(super) fn start_warn_count() -> (tracing::subscriber::DefaultGuard, WarnCounter) {
-        let counter = WarnCounter::default();
-        let layer = WarnCountLayer {
-            counter: counter.clone(),
-        };
+    pub(super) fn start_warn_count() -> (tracing::subscriber::DefaultGuard, Arc<AtomicUsize>) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let layer = WarnCountLayer(counter.clone());
         let subscriber = tracing_subscriber::registry().with(layer);
         let guard = tracing::subscriber::set_default(subscriber);
         (guard, counter)
@@ -1601,7 +1588,8 @@ fn resolve_runtime_options_clears_file_polling_for_directory_input() {
 
     assert!(!config.file.expect("file section should exist").polling_mode);
     assert_eq!(
-        warn_count, 1,
+        warn_count.load(std::sync::atomic::Ordering::Relaxed),
+        1,
         "expected exactly one WARN for ignored file polling in directory mode"
     );
 }
@@ -1616,7 +1604,8 @@ fn resolve_runtime_options_clears_file_polling_for_elastic_input() {
 
     assert!(!config.file.expect("file section should exist").polling_mode);
     assert_eq!(
-        warn_count, 1,
+        warn_count.load(std::sync::atomic::Ordering::Relaxed),
+        1,
         "expected exactly one WARN for ignored file polling in elastic mode"
     );
 }
@@ -1633,7 +1622,8 @@ fn resolve_runtime_options_clears_file_polling_for_netflow_file_input() {
 
     assert!(!config.file.expect("file section should exist").polling_mode);
     assert_eq!(
-        warn_count, 1,
+        warn_count.load(std::sync::atomic::Ordering::Relaxed),
+        1,
         "expected exactly one WARN for ignored file polling in netflow file mode"
     );
 }
@@ -1714,7 +1704,7 @@ async fn run_split_uses_normalized_file_polling_and_logs_one_warning() {
 
     assert_eq!(sender.batch_sizes, vec![1, 1]);
     assert_eq!(
-        counter.count(),
+        counter.load(std::sync::atomic::Ordering::Relaxed),
         1,
         "expected exactly one WARN for ignored file polling across the whole directory run"
     );
