@@ -16,6 +16,39 @@ pub(crate) enum InputType {
     Elastic,
 }
 
+pub(crate) fn input_type(input: &str) -> InputType {
+    if input == "elastic" {
+        InputType::Elastic
+    } else {
+        let path = Path::new(input);
+        if path.is_dir() {
+            InputType::Dir
+        } else {
+            InputType::Log
+        }
+    }
+}
+
+fn ignored_file_polling_mode_label(
+    selected_input_type: InputType,
+    kind: &str,
+) -> Option<&'static str> {
+    #[cfg(not(feature = "netflow"))]
+    let _ = kind;
+
+    match selected_input_type {
+        InputType::Dir => Some("Directory"),
+        InputType::Elastic => Some("Elastic"),
+        InputType::Log => {
+            #[cfg(feature = "netflow")]
+            if super::NetflowKind::parse(kind).is_some() {
+                return Some("Netflow-file");
+            }
+            None
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct File {
     pub(crate) import_from_giganto: Option<bool>,
@@ -99,19 +132,7 @@ impl Config {
             .add_source(config::File::from(path))
             .build()
             .context("cannot build the config")?;
-        let mut config: Self = config.try_deserialize()?;
-
-        if let Some(ref mut file) = config.file
-            && let Some(value) = file.export_from_giganto.take()
-        {
-            warn!(
-                "`export_from_giganto` is deprecated and will be removed in a future release; \
-                 use `import_from_giganto` instead"
-            );
-            if file.import_from_giganto.is_none() {
-                file.import_from_giganto = Some(value);
-            }
-        }
+        let config: Self = config.try_deserialize()?;
 
         if config.kind.trim().is_empty() {
             bail!("kind cannot be empty");
@@ -129,13 +150,45 @@ impl Config {
 
         Ok(config)
     }
+
+    /// Normalizes runtime configuration after tracing is initialized.
+    pub(crate) fn resolve_runtime_options(&mut self) {
+        if let Some(ref mut file) = self.file
+            && let Some(value) = file.export_from_giganto.take()
+        {
+            warn!(
+                "`export_from_giganto` is deprecated and will be removed in a future release; \
+                 use `import_from_giganto` instead"
+            );
+            if file.import_from_giganto.is_none() {
+                file.import_from_giganto = Some(value);
+            }
+        }
+
+        let selected_input_type = input_type(&self.input);
+        let ignored_mode = ignored_file_polling_mode_label(selected_input_type, &self.kind);
+
+        if let Some(file) = self.file.as_mut()
+            && file.polling_mode
+            && let Some(mode_label) = ignored_mode
+        {
+            warn!(
+                "Ignoring [file].polling_mode = true because selected input mode is {mode_label}; \
+                 [file].polling_mode only applies to direct single-file input"
+            );
+            file.polling_mode = false;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use super::{Config, DEFAULT_IMPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE};
+    use super::{
+        Config, DEFAULT_IMPORT_FROM_GIGANTO, DEFAULT_POLLING_MODE, DEFAULT_REPORT_MODE, InputType,
+        input_type,
+    };
 
     fn create_temp_config(content: &str) -> (tempfile::TempDir, PathBuf) {
         let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -391,5 +444,56 @@ report_dir = "reports"
             Config::new(config_path.as_ref()).expect("report=false with report_dir must work");
         assert!(!config.report);
         assert_eq!(config.report_dir, Some(PathBuf::from("reports")));
+    }
+
+    #[test]
+    fn resolve_runtime_options_migrates_export_from_giganto() {
+        let (_temp_dir, config_path) = create_temp_config(
+            r#"
+cert = "test.pem"
+key = "test.key"
+ca_certs = ["root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:8080"
+giganto_name = "test"
+kind = "log"
+input = "/path/to/input"
+
+[file]
+"#,
+        );
+
+        let mut config = Config::new(config_path.as_ref()).expect("config should load");
+        {
+            let file = config.file.as_mut().expect("file section should exist");
+            file.export_from_giganto = Some(true);
+            file.import_from_giganto = None;
+        }
+
+        config.resolve_runtime_options();
+
+        let file = config.file.expect("file section should exist");
+        assert_eq!(file.import_from_giganto, Some(true));
+    }
+
+    #[test]
+    fn input_type_elastic() {
+        assert_eq!(input_type("elastic"), InputType::Elastic);
+    }
+
+    #[test]
+    fn input_type_directory() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let dir_path = temp_dir.path().to_string_lossy().to_string();
+
+        assert_eq!(input_type(&dir_path), InputType::Dir);
+    }
+
+    #[test]
+    fn input_type_file() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let file_path = temp_dir.path().join("test_file.csv");
+        fs::write(&file_path, "line\n").expect("test file should be written");
+
+        assert_eq!(input_type(&file_path.to_string_lossy()), InputType::Log);
     }
 }

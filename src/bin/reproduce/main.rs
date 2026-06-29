@@ -65,7 +65,7 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 #[cfg(feature = "netflow")]
 use crate::kind_runners::run_netflow_kind;
 use crate::{
-    config::{Config, File as FileConfig, InputType},
+    config::{Config, File as FileConfig, InputType, input_type},
     kind_runners::{
         run_log_kind, run_operation_log, run_security_kind, run_sysmon_kind, run_zeek_kind,
     },
@@ -87,8 +87,9 @@ ARG:
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config_filename = parse();
-    let config = config::Config::new(config_filename.as_ref())?;
+    let mut config = config::Config::new(config_filename.as_ref())?;
     let _guard = init_tracing(config.log_path.as_deref())?;
+    config.resolve_runtime_options();
     let reload_requested = Arc::new(AtomicBool::new(false));
     install_signal_handlers(Arc::clone(&reload_requested))?;
     let controller = Controller::new(config, reload_requested);
@@ -1339,19 +1340,6 @@ fn file_to_kind(path: &Path) -> Result<&str> {
         return Ok(SysmonKind::from_event_code(num).map_or("", SysmonKind::as_str));
     }
     Ok("")
-}
-
-pub(crate) fn input_type(input: &str) -> InputType {
-    if input == "elastic" {
-        InputType::Elastic
-    } else {
-        let path = Path::new(input);
-        if path.is_dir() {
-            InputType::Dir
-        } else {
-            InputType::Log
-        }
-    }
 }
 
 async fn create_sender(

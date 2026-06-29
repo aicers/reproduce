@@ -5,10 +5,7 @@ use bytesize::ByteSize;
 use jiff::{SignedDuration, Timestamp, tz::TimeZone};
 use num_traits::ToPrimitive;
 
-use crate::{
-    config::{Config, InputType},
-    input_type,
-};
+use crate::config::{Config, InputType, input_type};
 
 const ARRANGE_VAR: usize = 28;
 const MILLIS_PER_SECOND: f64 = 1_000.0;

@@ -23,7 +23,7 @@ use tempfile::tempdir;
 use tokio::time::timeout;
 
 use super::*;
-use crate::config::Directory;
+use crate::config::{Directory, input_type};
 
 #[cfg(feature = "netflow")]
 const ETHERNET_DATALINK: u32 = 1;
@@ -1518,6 +1518,214 @@ async fn dir_processing_skips_checkpoint_files_and_avoids_cascading_offsets() {
         !temp_dir.path().join("a.log_offset_offset").exists(),
         "checkpoint files must not be processed as input"
     );
+}
+
+#[cfg(test)]
+mod warn_count {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use tracing::Level;
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+
+    struct WarnCountLayer(Arc<AtomicUsize>);
+
+    impl<S> Layer<S> for WarnCountLayer
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == Level::WARN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub(super) fn with_warn_count<F, R>(f: F) -> (R, Arc<AtomicUsize>)
+    where
+        F: FnOnce() -> R,
+    {
+        let (guard, counter) = start_warn_count();
+        let result = f();
+        drop(guard);
+        (result, counter)
+    }
+
+    pub(super) fn start_warn_count() -> (tracing::subscriber::DefaultGuard, Arc<AtomicUsize>) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let layer = WarnCountLayer(counter.clone());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let guard = tracing::subscriber::set_default(subscriber);
+        (guard, counter)
+    }
+}
+
+#[test]
+fn resolve_runtime_options_preserves_file_polling_for_direct_file_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "line\n");
+    let mut config = test_config(&path, "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+
+    config.resolve_runtime_options();
+
+    assert!(config.file.expect("file section should exist").polling_mode);
+}
+
+#[test]
+fn resolve_runtime_options_clears_file_polling_for_directory_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+
+    let ((), warn_count) = warn_count::with_warn_count(|| config.resolve_runtime_options());
+
+    assert!(!config.file.expect("file section should exist").polling_mode);
+    assert_eq!(
+        warn_count.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "expected exactly one WARN for ignored file polling in directory mode"
+    );
+}
+
+#[test]
+fn resolve_runtime_options_clears_file_polling_for_elastic_input() {
+    let mut config = test_config(Path::new("elastic"), "process_create");
+    config.input = "elastic".to_string();
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+
+    let ((), warn_count) = warn_count::with_warn_count(|| config.resolve_runtime_options());
+
+    assert!(!config.file.expect("file section should exist").polling_mode);
+    assert_eq!(
+        warn_count.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "expected exactly one WARN for ignored file polling in elastic mode"
+    );
+}
+
+#[cfg(feature = "netflow")]
+#[test]
+fn resolve_runtime_options_clears_file_polling_for_netflow_file_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = temp_dir.path().join("netflow5.pcap");
+    let mut config = test_config(&path, "netflow5");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+
+    let ((), warn_count) = warn_count::with_warn_count(|| config.resolve_runtime_options());
+
+    assert!(!config.file.expect("file section should exist").polling_mode);
+    assert_eq!(
+        warn_count.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "expected exactly one WARN for ignored file polling in netflow file mode"
+    );
+}
+
+#[tokio::test]
+async fn build_file_run_plan_applies_file_polling_for_direct_file_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "line\n");
+    let mut config = test_config(&path, "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    config.resolve_runtime_options();
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let plan = controller
+        .build_file_run_plan(&path, "custom", false, shutdown)
+        .expect("direct file plan should build");
+
+    assert!(plan.options.file_polling_mode);
+    assert!(!plan.options.dir_polling_mode);
+}
+
+#[tokio::test]
+async fn build_file_run_plan_uses_normalized_file_polling_for_directory_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "line\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    config.resolve_runtime_options();
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let plan = controller
+        .build_file_run_plan(&path, "custom", false, shutdown)
+        .expect("directory file plan should build");
+
+    assert!(!plan.options.file_polling_mode);
+}
+
+#[cfg(feature = "netflow")]
+#[tokio::test]
+async fn build_file_run_plan_uses_normalized_file_polling_for_netflow_file_input() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = temp_dir.path().join("netflow5.pcap");
+    let mut config = test_config(&path, "netflow5");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    config.resolve_runtime_options();
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let plan = controller
+        .build_file_run_plan(&path, "netflow5", false, shutdown)
+        .expect("netflow file plan should build");
+
+    assert!(!plan.options.file_polling_mode);
+}
+
+#[tokio::test]
+async fn run_split_uses_normalized_file_polling_and_logs_one_warning() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    write_text_file(&temp_dir, "a.log", "line_a\n");
+    write_text_file(&temp_dir, "b.log", "line_b\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    config.directory = Some(Directory {
+        file_prefix: None,
+        polling_mode: false,
+    });
+    let (_guard, counter) = warn_count::start_warn_count();
+    config.resolve_runtime_options();
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let mut sender = MockSender::default();
+
+    controller
+        .run_split(&mut sender)
+        .await
+        .expect("directory run should complete without file polling");
+
+    assert_eq!(sender.batch_sizes, vec![1, 1]);
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "expected exactly one WARN for ignored file polling across the whole directory run"
+    );
+}
+
+#[tokio::test]
+async fn build_file_run_plan_uses_directory_polling_without_file_polling() {
+    let temp_dir = tempdir().expect("temporary directory should be created");
+    let path = write_text_file(&temp_dir, "input.log", "line\n");
+    let mut config = test_config(temp_dir.path(), "custom");
+    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
+    config.resolve_runtime_options();
+    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+
+    let plan = controller
+        .build_file_run_plan(&path, "custom", true, shutdown)
+        .expect("directory file plan should build");
+
+    assert!(plan.options.dir_polling_mode);
+    assert!(!plan.options.file_polling_mode);
 }
 
 /// The watch-based shutdown signal is the canonical termination source
