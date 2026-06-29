@@ -33,6 +33,9 @@ fn ignored_file_polling_mode_label(
     selected_input_type: InputType,
     kind: &str,
 ) -> Option<&'static str> {
+    #[cfg(not(feature = "netflow"))]
+    let _ = kind;
+
     match selected_input_type {
         InputType::Dir => Some("Directory"),
         InputType::Elastic => Some("Elastic"),
