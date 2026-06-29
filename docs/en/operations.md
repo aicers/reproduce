@@ -1,60 +1,128 @@
 # Operations
 
-## Execution Command
+## Start Command
 
-REproduce runs with a single TOML configuration file path as an argument.
+Run REproduce with exactly one TOML configuration file path.
 
 ```bash
 reproduce <CONFIG_PATH>
 ```
 
-- `<CONFIG_PATH>`: TOML configuration file path (required)
-- `-h`, `--help`: display help
-- `-V`, `--version`: display version information
+| Argument or flag | Behavior |
+| --- | --- |
+| `<CONFIG_PATH>` | Starts REproduce with the TOML configuration file |
+| `-h`, `--help` | Prints help and exits |
+| `-V`, `--version` | Prints version information and exits |
 
-> **Note**
-> If no argument or more than one argument is provided, REproduce prints an
-> error message and exits.
+If no configuration path is provided, or if more than one positional argument is
+provided, REproduce prints an error and exits with status code `1`.
 
-## File Mode
+## Runtime Lifecycle
 
-Run REproduce with a configuration file that specifies a single log file path in
-`input`.
+REproduce starts by loading the configuration, initializing logging, installing
+signal handlers, and logging `Data Broker started`.
+
+Runtime behavior then depends on the configured input source:
+
+- Single input file:
+  Processes the file once. If file polling is enabled, keeps waiting for
+  appended data.
+- Existing directory:
+  Processes matching files in sorted order. If directory polling is enabled,
+  rescans for new matching files every 10 seconds.
+- Elasticsearch:
+  Retrieves Sysmon event data, writes temporary CSV files under `dump_dir`,
+  and transfers them. After all files transfer successfully, REproduce removes
+  the temporary files and directory, then exits.
+  The process needs permission to manage those temporary files.
+  If processing does not complete, temporary files can remain under `dump_dir`.
+
+When a run finishes successfully, REproduce logs `Data Broker completed`.
+
+When a fatal runtime error occurs, REproduce logs `Terminated with error: ...`
+and exits with status code `1`.
+
+## Data Store Connection
+
+REproduce connects to the data store ingest server before sending events.
+
+Useful connection-related log lines include:
+
+- `Connected to data store ingest server at ...`
+- `Server timeout, reconnecting...`
+- `Data Store ended`
+
+If the data store connection times out during startup or reconnect, REproduce
+keeps retrying at 5-second intervals unless the process is shutting down.
+
+## Polling Behavior
+
+File polling and directory polling keep the process running after the currently
+available input has been processed.
+
+- File polling waits for newly appended data in the same input file.
+- Directory polling rescans the configured directory every 10 seconds.
+- Directory polling does not reprocess files already handled in the same run.
+- If directory polling is disabled and no input file is found, REproduce logs
+  `No input file` and completes the run.
+
+See [Configuration](configuration.md) for the polling fields.
+
+## Logs
+
+By default, logs are written to stdout at `INFO` level. Set `log_path` to append
+logs to a file instead.
+
+Set `RUST_LOG` to adjust verbosity:
 
 ```bash
-reproduce /path/to/config.toml
+RUST_LOG=debug reproduce /path/to/config.toml
 ```
 
-## Directory Mode
+Useful startup and progress log lines include:
 
-If `input` specifies a directory path, REproduce processes log files in that
-directory. If necessary, target files can be filtered using `file_prefix` in the
-`[directory]` section.
+- `Initialized tracing logger`
+- `Data Broker started`
+- `File: ...` (directory and Elastic modes only)
+- `Data Broker completed`
+- `Terminated with error: ...`
 
-When `last_transfer_line_suffix` is configured in `[file]`, filenames ending with
-`_{last_transfer_line_suffix}` are reserved for per-file checkpoint state and are
-ignored during directory scans. Choose a suffix that does not match names used by
-your real input files.
+In directory and Elastic modes, `File: ...` identifies each file when
+REproduce starts processing it. Single-file mode does not emit this log line.
 
-## Elastic Mode
+## Reports
 
-If `input = "elastic"` is configured and the `[elastic]` section is provided,
-REproduce queries the Elasticsearch server and retrieves matching data.
+When reporting is enabled, REproduce appends transfer statistics to the report
+file after each input processing run.
 
-## Polling Mode
+If report writing fails after processing, REproduce logs `Cannot write report:
+...`. The transfer itself is not treated as failed solely because the report
+could not be written.
 
-If `polling_mode = true` is configured in the `[file]` or `[directory]` section,
-REproduce continuously monitors and transfers newly added content.
+See [Configuration](configuration.md#reports) for report settings.
 
-## Reloading Configuration (SIGHUP)
+## Reload and Shutdown
 
-Sending a `SIGHUP` signal to the running process causes REproduce to
-re-establish the Giganto connection during the next reconnect attempt. This can
-be used to apply updated configuration without restarting the process.
+On Unix systems:
 
-## Items to Verify After Startup
+- `SIGHUP` marks TLS material for reload. It does not force an immediate data
+  store reconnect. The process keeps running.
+- `SIGINT` and `SIGTERM` request graceful shutdown.
 
-- Verify that the process does not exit immediately.
-- Verify that certificates and configuration files are valid.
-- Verify connectivity to the Giganto server.
-- Verify that the `"Data Broker started"` log message is displayed.
+On non-Unix systems, `Ctrl-C` requests graceful shutdown.
+
+Use `SIGHUP` after replacing certificate, private key, or CA certificate files
+on disk. The new files are used when a reconnect happens later. If the reload
+attempt cannot establish a working connection, REproduce keeps the last working
+connection settings and retries the reload on a later reconnect.
+
+## After Startup
+
+Verify the following after running REproduce:
+
+- Logs show `Data Broker started`.
+- Logs show a successful data store connection.
+- In directory and Elastic modes, input files appear in `File: ...` log lines
+  when processing begins.
+- Long-running polling behavior matches the configured polling settings.
+- Reports are written under `report_dir` when reporting is enabled.
