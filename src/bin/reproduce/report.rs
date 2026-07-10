@@ -118,7 +118,7 @@ impl Report {
             .as_deref()
             .ok_or_else(|| io::Error::other("report_dir must be set when report is true"))?;
         std::fs::create_dir_all(report_dir)?;
-        let topic = format!("{}.report", &self.config.kind);
+        let topic = format!("{}.report", self.config.kind);
         let report_path = report_dir.join(topic);
         let mut report_file = OpenOptions::new()
             .append(true)
