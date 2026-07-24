@@ -18,7 +18,7 @@ netflow = ["dep:pcap"]
 [dependencies]
 async-trait = "0.1"
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 bincode = "1"
 byteorder = "1"
 bytesize = "2"
