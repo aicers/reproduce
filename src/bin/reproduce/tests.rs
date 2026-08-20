@@ -195,7 +195,9 @@ fn hex_to_bytes(s: &str) -> Vec<u8> {
     let filtered: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     filtered
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).expect("valid hex bytes"), 16)
                 .expect("valid hex pair")

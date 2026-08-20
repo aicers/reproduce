@@ -684,8 +684,8 @@ mod tests {
     fn hex_to_bytes(s: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         let filtered: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-        let mut iter = filtered.as_bytes().chunks_exact(2);
-        for pair in &mut iter {
+        let (pairs, _) = filtered.as_bytes().as_chunks::<2>();
+        for pair in pairs {
             let v = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
             bytes.push(v);
         }
