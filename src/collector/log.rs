@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn binary_lines_empty_input() {
         let result = collect_binary_lines(b"");
-        assert!(result.is_empty());
+        assert_eq!(result, [] as [std::vec::Vec<u8>; 0]);
     }
 
     #[test]

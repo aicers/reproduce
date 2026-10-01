@@ -1142,7 +1142,10 @@ mod tests {
             &mut stats,
         )?;
 
-        assert!(events.is_empty());
+        assert_eq!(
+            events,
+            [] as [(i64, giganto_client::ingest::netflow::Netflow9); 0]
+        );
         assert!(format!("{stats}").contains("TemplateNotFound = 1"));
         Ok(())
     }
@@ -1235,7 +1238,10 @@ mod tests {
         )?;
 
         // Template FlowSets don't produce events
-        assert!(events.is_empty());
+        assert_eq!(
+            events,
+            [] as [(i64, giganto_client::ingest::netflow::Netflow9); 0]
+        );
         // Template should be added to templates box
         let key = (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1, 256);
         let stored = templates.get(&key).expect("template should be stored");
@@ -1290,7 +1296,10 @@ mod tests {
         )?;
 
         // Options Template FlowSets don't produce events
-        assert!(events.is_empty());
+        assert_eq!(
+            events,
+            [] as [(i64, giganto_client::ingest::netflow::Netflow9); 0]
+        );
         // Template should be added to templates box with options_template=true
         let key = (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1, 257);
         let stored = templates
@@ -1556,7 +1565,10 @@ mod tests {
         )?;
 
         // Reserved FlowSet IDs don't produce events
-        assert!(events.is_empty());
+        assert_eq!(
+            events,
+            [] as [(i64, giganto_client::ingest::netflow::Netflow9); 0]
+        );
         // Stats should show reserved flowset ID was encountered
         assert!(format!("{stats}").contains("ReservedFlowsetIDUsed = 1"));
         Ok(())
@@ -1629,7 +1641,10 @@ mod tests {
         )?;
 
         // No records parsed due to insufficient data
-        assert!(events.is_empty());
+        assert_eq!(
+            events,
+            [] as [(i64, giganto_client::ingest::netflow::Netflow5); 0]
+        );
         // Stats still show Events = 1 because of header.count
         assert!(format!("{stats}").contains("Events = 1"));
         Ok(())

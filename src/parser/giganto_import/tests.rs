@@ -247,7 +247,7 @@ fn giganto_dhcp() {
     let data_empty = "1614130373.991064000	localhost	192.168.0.111	58459	192.168.0.7	49670	6	1970-01-01T00:00:00.000000000+00:00	0	1	0	21515	27889	0	192.168.4.1	192.168.4.2	192.168.4.3	192.168.4.4	192.168.4.5	192.168.4.11,192.168.4.22	192.168.4.33,192.168.4.44	192.168.4.6	1	192.168.4.7	0,1,2	message	1	1	0,1,2	1	0,1,2	-";
     let rec_empty = stringrecord(data_empty);
     let (dhcp_empty, _) = Dhcp::try_from_giganto_record(&rec_empty).unwrap();
-    assert!(dhcp_empty.options.is_empty());
+    assert_eq!(dhcp_empty.options, [] as [(u8, std::vec::Vec<u8>); 0]);
 }
 
 #[test]

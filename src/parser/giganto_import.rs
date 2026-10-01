@@ -97,14 +97,14 @@ mod parse_parenthesized_tuples_tests {
     fn empty_string() {
         let result: Vec<String> =
             parse_parenthesized_tuples("", |inner| Ok(inner.to_string())).unwrap();
-        assert!(result.is_empty());
+        assert_eq!(result, [] as [std::string::String; 0]);
     }
 
     #[test]
     fn dash_returns_empty() {
         let result: Vec<String> =
             parse_parenthesized_tuples("-", |inner| Ok(inner.to_string())).unwrap();
-        assert!(result.is_empty());
+        assert_eq!(result, [] as [std::string::String; 0]);
     }
 
     #[test]

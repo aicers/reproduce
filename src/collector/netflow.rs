@@ -697,7 +697,7 @@ mod tests {
         assert_eq!(collector.stats(), (1, 0));
         assert!(!collector.templates.is_empty());
         assert!(cache_path.exists());
-        assert!(!std::fs::read(&cache_path)?.is_empty());
+        assert_ne!(std::fs::read(&cache_path)?, [] as [u8; 0]);
         Ok(())
     }
 
