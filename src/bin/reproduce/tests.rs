@@ -1341,7 +1341,7 @@ async fn run_split_returns_ok_for_empty_directory_without_polling() {
         .await
         .expect("empty non-polling directories should be ignored cleanly");
 
-    assert!(sender.batch_sizes.is_empty());
+    assert_eq!(sender.batch_sizes, [] as [usize; 0]);
     assert_eq!(sender.finish_calls, 0);
 }
 

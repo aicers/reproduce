@@ -121,7 +121,7 @@ mod tests {
     fn files_in_dir_empty_directory() {
         let temp_dir = tempdir().expect("temporary directory should be created");
         let result = files_in_dir(&temp_dir.path().to_string_lossy(), None, None, &[]);
-        assert!(result.is_empty());
+        assert_eq!(result, [] as [std::path::PathBuf; 0]);
     }
 
     #[test]
@@ -133,7 +133,7 @@ mod tests {
         File::create(dir_path.join("b.csv")).expect("test file should be created");
 
         let result = files_in_dir(&dir_path.to_string_lossy(), Some("nonexistent_"), None, &[]);
-        assert!(result.is_empty());
+        assert_eq!(result, [] as [std::path::PathBuf; 0]);
     }
 
     #[test]
@@ -244,6 +244,6 @@ mod tests {
             .expect("broken symlink fixture should be created");
 
         let result = files_in_dir(&dir_path.to_string_lossy(), None, None, &[]);
-        assert!(result.is_empty());
+        assert_eq!(result, [] as [std::path::PathBuf; 0]);
     }
 }
