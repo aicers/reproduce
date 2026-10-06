@@ -2,5 +2,7 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
+    ignore:
+      - dependency-name: "giganto-client"
     schedule:
       interval: "daily"
