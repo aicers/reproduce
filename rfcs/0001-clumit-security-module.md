@@ -4,7 +4,8 @@
 
 # RFC 0001: REproduce as a Clumit Security module
 
-Status: accepted (2026-10-21).
+Status: accepted (2026-10-21); decomposed into the umbrella issue
+[aicers/reproduce#984](https://github.com/aicers/reproduce/issues/984) (§8).
 
 This RFC makes REproduce (this repository) the log collector of Clumit Security:
 packaged by bootler as a Security module, installed through Clumit Security Web
@@ -557,25 +558,37 @@ All rules in this section apply to remote-mode collectors only.
 - **[DECISION] Applying it to this RFC: one step.** No versioned bootler release
   has shipped (§2.3), so no released consumer reads below 8 and step 1 is
   skipped: deploy-core goes to `MANIFEST_FORMAT_VERSION =
-  MAX_MANIFEST_FORMAT_VERSION = 8` in one release (§8 item 7). The one-step path
-  holds only while no versioned bootler release ships with a roxyd or REview
-  that reads below format 8: the first versioned bootler release after §8 item 7
-  must carry the roxyd and review releases of §8 items 8 and 11. If any
+  MAX_MANIFEST_FORMAT_VERSION = 8` in one release (the deploy-core issue,
+  [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167)).
+  The one-step path holds only while no versioned bootler release ships with a
+  roxyd or REview that reads below format 8: the first versioned bootler release
+  after that deploy-core change must carry the roxyd and review releases of
+  [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351) and
+  [aicers/review#2369](https://github.com/aicers/review/issues/2369). If any
   versioned bootler release ships before that with an older roxyd or REview pin,
   the hosts it reaches need a readers release, and the RFC is revised to the
   two-step path before work continues.
 - **[DECISION] Release order.** deploy-core, then roxyd and review with the new
-  pin, then bootler (§8 item 13), which carries those roxyd and review releases
-  in the same change. Before installing REproduce, operators update the REview
-  host with `bootler-security update` and each module host's roxyd through the
-  UI; REview's format check (§4.9) refuses, with a reason, any package a host's
-  roxyd cannot read.
+  pin, then bootler
+  ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985)), which
+  carries those roxyd and review releases in the same change. Before installing
+  REproduce, operators update the REview host with `bootler-security update` and
+  each module host's roxyd through the UI; REview's format check (§4.9) refuses,
+  with a reason, any package a host's roxyd cannot read.
 - **[DECISION] bootler bookkeeping.**
   - Bump deploy-core; bump the payload recipe pins of `roxyd`, `review` and
     `aice-web-next` (`versions/components.toml:501-503`, `:535-537`, `:603-605`)
-    to the releases from §8 items 8, 11 and 12, in the same change as the rest
-    of this bookkeeping (§8 item 13), so every release of bootler that stamps
-    format 8 also carries readers of it and a UI that can configure REproduce.
+    to the releases of
+    [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351) and
+    [aicers/review#2369](https://github.com/aicers/review/issues/2369) and an
+    aice-web-next commit carrying
+    [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239)
+    and
+    [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240),
+    in the same change as the rest of this bookkeeping
+    ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985)), so
+    every release of bootler that stamps format 8 also carries readers of it and
+    a UI that can configure REproduce.
   - `UnitTemplateSource` (`core/src/product.rs:491-524`) gains the field; the
     five existing unit constants (`:728`, `:765`, `:955`, `:992`, `:1021`)
     declare none.
@@ -749,17 +762,26 @@ engine's unit and the module pins).
 - **[DECISION] Separate PRs, coordinated releases.** Neither RFC's issues
   implement the other's items. The coordination is a human release step:
   - deploy-core: if aice-web-next RFC 0006's C1 is merged but not yet released
-    when §8 item 7 is merged, one deploy-core release carries both, so roxyd and
-    review adopt deploy-core once.
-  - bootler: §8 item 13 and RFC 0006's B1 stay separate PRs merged in whichever
-    order their dependencies allow. Both move the `roxyd`, `review` and
-    `aice-web-next` pins; whichever merges second pins a release (for
-    aice-web-next, a commit) that contains both RFCs' required items, never one
-    older than the first PR's pin. If both are open with their dependencies
-    released, the human publishes the Security E2E asset once, for the head
-    merged last, after rebasing it on the first.
+    when
+    [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167)
+    is merged, one deploy-core release carries both, so roxyd and review adopt
+    deploy-core once.
+  - bootler: [aicers/bootler#985](https://github.com/aicers/bootler/issues/985)
+    and RFC 0006's B1 stay separate PRs merged in whichever order their
+    dependencies allow. Both move the `roxyd`, `review` and `aice-web-next`
+    pins; whichever merges second pins a release (for aice-web-next, a commit)
+    that contains both RFCs' required items, never one older than the first PR's
+    pin. Each PR's Security E2E names its asset from its own
+    `versions/components.toml` (bootler `docs/release.md`, "Publishing"), so
+    whichever merges second is rebased onto the first and a human publishes the
+    asset for its own head.
   - Both RFCs refuse log kinds Giganto parses as named kinds (§4.2), so
     `collectLogKinds` never offers a kind RFC 0006's training refuses.
+  - RFC 0006 accepts `reproduce.<profile.hostname>` as a training source name
+    for a node with a `LogCollector` agent (its W1, after
+    [aicers/review-web#1119](https://github.com/aicers/review-web/issues/1119)),
+    and its training form calls `collectLogKinds` (after
+    [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239)).
 - In every other shared repository the two RFCs' changes are independent; merges
   are serialized per repository.
 
@@ -891,52 +913,116 @@ engine's unit and the module pins).
   install REproduce from the UI, apply two collectors on `/var/log` files,
   rotate with logrotate, and see both kinds in Giganto and in `collectLogKinds`.
 
-## 8. Suggested decomposition
+## 8. Issue tree
 
-Each item is meant to fit one PR; *Turn an RFC into issues* may refine it.
-Releases between items are human steps (§3).
+This RFC was decomposed on 2026-10-21 into the umbrella
+[aicers/reproduce#984](https://github.com/aicers/reproduce/issues/984) over the
+fourteen issues below, each titled with the prefix `[REproduce module]`,
+reviewed independently against the code at the time, and linked as a sub-issue
+of the umbrella. Releases between dependent issues are human steps (§3); a
+dependency on an issue in another repository means on its published release (for
+aice-web-next, its merge commit). No REproduce release is cut between
+[aicers/reproduce#979](https://github.com/aicers/reproduce/issues/979) and
+[aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983).
 
-1. reproduce — Split `GigantoSender` into a connection owner and per-stream
-   senders with single-flight reconnect (§4.4); local mode unchanged.
-2. reproduce — Remote CLI and configuration: invocation forms (§4.1) and parsing
-   and validation of the remote configuration including path rules (§4.2). Pure;
-   no manager connection yet.
-3. reproduce — Manager client: review-protocol connection, handshake values,
-   idle mode, `get_config`/`update_config` with coalescing, signals (§4.3).
-   Depends on 2.
-4. reproduce — Collectors on one connection: apply difference, Giganto retry and
-   address change (§4.3), one stream per collector (§4.4). Interim reading uses
-   the existing `LogCollector` with polling, `start` ignored and no checkpoints;
-   after a reconnect the interim reader continues from where it is, so lines may
-   be lost until item 6. Depends on 1 and 3.
-5. reproduce — Acknowledged positions (ACK-to-position queue, close ACK), the
-   checkpoint store, and the apply-time checkpoint rules (removed collectors
-   save nothing; sweep of other kinds' files) (§4.3, §4.6). This item defines
-   the position type `(dev, ino, offset)` of §4.6; the interim reader supplies
-   real byte offsets. Item 6 wires re-reading from the acknowledged position.
-   Depends on 4. No REproduce release is cut between items 4 and 6.
-6. reproduce — Follow reader for remote collectors (§4.5) using the checkpoint
-   store; replaces the interim reader; remote-mode user documentation in
-   `docs/en` and `docs/ko`. Depends on 5.
-7. deploy-core — `UnitTemplate.supplementary_groups` with
-   `SupplementaryGroup::Adm`, the readers-first rule and assert, manifest format
-   8 (§4.8); see §4.12 for the release shared with aice-web-next RFC 0006 C1.
-8. roxyd — Adopt deploy-core from 7. Depends on 7.
-9. review-database — `AgentKind::LogCollector` (§4.9).
-10. review-web — `LOG_COLLECTOR`, the `reproduce` module package, and the
-    format-refusal error code. Depends on 9.
-11. review — Accept the `reproduce` package and `LogCollector` agents, adopt
-    deploy-core from 7, and refuse packages outside a host's format range
-    (§4.9). Depends on 7 and 10.
-12. aice-web-next — Log Collector form, `collectLogKinds` and the format refusal
-    message (§4.10). Depends on 11.
-13. bootler — Package REproduce (§4.8): the deploy-core bump, the REproduce
-    recipe and unit, and the `roxyd`, `review` and `aice-web-next` recipe pins
-    moved to the releases of 8 and 11 and the merge commit of 12, in one change;
-    see §4.12 for the E2E asset publish shared with aice-web-next RFC 0006 B1;
-    `docs/release.md` readers-first text (§4.8). Depends on 6, 7, 8, 11 and 12.
-    Its Security E2E jobs stay red until a human publishes the Security E2E
-    asset for the PR's head per bootler `docs/release.md` ("Publishing",
-    `:2400-2420`; a declared spec requires a republished asset,
-    `core/src/product.rs:3893-3898`): the agent finishes review rounds first and
-    then stops pushing; the human publishes and re-runs the jobs.
+| Issue | Title | Depends on |
+| --- | --- | --- |
+| [aicers/reproduce#978](https://github.com/aicers/reproduce/issues/978) | Split the Giganto sender into a connection owner and per-stream senders | — |
+| [aicers/reproduce#979](https://github.com/aicers/reproduce/issues/979) | Add the remote-mode invocation and configuration parsing | — |
+| [aicers/reproduce#980](https://github.com/aicers/reproduce/issues/980) | Connect remote mode to the Central Manager for its configuration | [aicers/reproduce#978](https://github.com/aicers/reproduce/issues/978), [aicers/reproduce#979](https://github.com/aicers/reproduce/issues/979) |
+| [aicers/reproduce#981](https://github.com/aicers/reproduce/issues/981) | Run remote-mode log collectors on one Giganto connection | [aicers/reproduce#978](https://github.com/aicers/reproduce/issues/978), [aicers/reproduce#980](https://github.com/aicers/reproduce/issues/980) |
+| [aicers/reproduce#982](https://github.com/aicers/reproduce/issues/982) | Persist acknowledged positions for remote-mode collectors | [aicers/reproduce#981](https://github.com/aicers/reproduce/issues/981) |
+| [aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983) | Follow growing and rotated log files in remote mode | [aicers/reproduce#982](https://github.com/aicers/reproduce/issues/982) |
+| [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167) | Add supplementary groups to unit templates with manifest format 8 | — |
+| [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351) | Adopt deploy-core with supplementary groups and manifest format 8 | [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167) |
+| [aicers/review-database#987](https://github.com/aicers/review-database/issues/987) | Add the LogCollector agent kind | — |
+| [aicers/review-web#1119](https://github.com/aicers/review-web/issues/1119) | Expose the Log Collector kind and the manifest format refusal | [aicers/review-database#987](https://github.com/aicers/review-database/issues/987) |
+| [aicers/review#2369](https://github.com/aicers/review/issues/2369) | Accept REproduce packages and refuse unreadable manifest formats | [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167), [aicers/review-database#987](https://github.com/aicers/review-database/issues/987), [aicers/review-web#1119](https://github.com/aicers/review-web/issues/1119) |
+| [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239) | Add the Log Collector node form and log-kind helper | [aicers/review#2369](https://github.com/aicers/review/issues/2369) |
+| [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240) | Show the Central Manager's manifest format refusal | [aicers/review#2369](https://github.com/aicers/review/issues/2369) |
+| [aicers/bootler#985](https://github.com/aicers/bootler/issues/985) | Package REproduce as a Security module | [aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983), [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167), [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351), [aicers/review#2369](https://github.com/aicers/review/issues/2369), [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239), [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240) |
+
+## 9. Decisions recorded at decomposition
+
+Reviewing each issue against the code settled these points; the issues state
+them, and they are recorded here so this RFC matches them.
+
+- **Manager status is handshake-only**
+  ([aicers/reproduce#980](https://github.com/aicers/reproduce/issues/980)).
+  review-protocol 0.21.0 sends the agent's status only at connect and REview
+  records it only then, so after the first configuration is applied the manager
+  connection is closed and reopened to report `Ready`. After every successful
+  (re)connect REproduce calls `get_config` again, because an `update_config`
+  sent while it was disconnected is lost. `update_config` answers at once and
+  only schedules an apply. The handler serves only `update_config`; every other
+  request keeps review-protocol's "not supported". Manager connect, TLS and
+  handshake failures are retried every 5 s and never end the process; TLS files
+  that cannot be read at startup exit 1.
+- **One `SIGHUP` mechanism for every connection**
+  ([aicers/reproduce#978](https://github.com/aicers/reproduce/issues/978),
+  [aicers/reproduce#980](https://github.com/aicers/reproduce/issues/980),
+  [aicers/reproduce#981](https://github.com/aicers/reproduce/issues/981)). The
+  handler signals each connection's own reload flag; a `SIGHUP` during a
+  reconnect stays pending; a connect with re-read material that fails falls back
+  to the last good material and keeps the flag set; `SIGHUP` never drops a live
+  connection.
+- **Sender split details**
+  ([aicers/reproduce#978](https://github.com/aicers/reproduce/issues/978)).
+  Closing a stream never closes the shared connection; the owner closes it.
+  Local mode keeps today's connection use (per dump file for Elastic input) and
+  reconnects on every write error. No ACK of an earlier stream reaches the
+  caller after a reopen.
+- **Applies never wait for Giganto**
+  ([aicers/reproduce#981](https://github.com/aicers/reproduce/issues/981)). An
+  apply returns once removed collectors have stopped and new ones started, so a
+  later apply can cancel a pending connect. Until the follow reader, the interim
+  reader reads each file from its beginning and reopens it after a read error.
+- **ACK matching**
+  ([aicers/reproduce#982](https://github.com/aicers/reproduce/issues/982)). An
+  ACK acknowledges queue entries from the oldest through the first entry with an
+  equal timestamp; an ACK equal to no entry (Giganto repeats its last ACK every
+  60 s) changes nothing. A corrupt checkpoint loads as the position `(dev, ino,
+  size)` of the path, or no checkpoint when the path cannot be `stat`ed. A
+  removed collector's pending saves are dropped.
+- **Follow reader details**
+  ([aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983)). The
+  opening check refuses the file when its real path or an ancestor cannot be
+  read, and runs on every open. At most 1 MiB is held while waiting for `\n`. On
+  a resume, lines read but not yet written are discarded first. The start
+  position is taken whether or not Giganto is connected. The follow reader
+  replaces the interim reader's remote-mode additions; `CHANGELOG.md` announces
+  remote mode once, in this issue.
+- **Format 8 is fixed**
+  ([aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167)).
+  aicers/deploy-core#155 (hardening directives, on hold) also raises the format;
+  it takes a later version under the readers-first rule. The window predicate is
+  false for `MAX < CURRENT`.
+- **`LogCollector` is appended last**
+  ([aicers/review-database#987](https://github.com/aicers/review-database/issues/987)).
+  Stored rows encode the kind by declaration position (bincode), so the new
+  variant must not shift the existing ones.
+- **The format check**
+  ([aicers/review#2369](https://github.com/aicers/review/issues/2369),
+  [aicers/review-web#1119](https://github.com/aicers/review-web/issues/1119)).
+  REview reads `format_version` with deploy-core `payload::open_package` over
+  the opened package file, never loading it into memory, and rewinds it; an
+  unreadable manifest fails the operation. The host's range comes from the trust
+  state; with no trust plane, no record or no range, the check is skipped.
+  `ManifestFormatUnsupported { host: String!, formatVersion: Int!, min: Int!,
+  max: Int! }` is a member of the install, update and core-update result unions,
+  converted in review's `From<ApplyError> for DeployError`.
+- **Clumit Security Web**
+  ([aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239),
+  [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240)).
+  The TOML helpers and the Diff tab learn arrays of tables; `log-collector`
+  joins the Data Store picker kinds, so an untouched, unconfigured section never
+  blocks a save. The refused log kinds are a fixed list taken from
+  giganto-client 0.28.0. Showing the format refusal is its own issue, covering
+  the browser decoders, `DeployRefusalNotice` and the manual's refusal tables.
+- **bootler**
+  ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985)). Before
+  pinning, the issue confirms that the pinned REview admits the pinned
+  REproduce's protocol version and the other modules', that Giganto admits
+  REproduce's ingest version, and that aice-web-next vendors that REview's
+  schema. bootler's exhaustive matches on deploy-core errors gain message arms
+  for the new variants.
