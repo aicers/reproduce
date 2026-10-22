@@ -132,10 +132,42 @@ pub struct GigantoStream {
 struct OpenStream {
     conn: Connection,
     send: SendStream,
-    ack_task_token: CancellationToken,
-    ack_task_handle: JoinHandle<std::result::Result<(), SenderError>>,
+    ack_task: AckTask,
     /// Resolves when the ACK receiver observes the channel-close ACK.
     close_ack: oneshot::Receiver<()>,
+}
+
+/// The ACK receiver task of one stream.
+///
+/// Dropping it cancels the task, so a stream dropped without a close, or a
+/// close that is itself cancelled, leaves no ACK task running on a shared
+/// connection.
+#[derive(Debug)]
+struct AckTask {
+    token: CancellationToken,
+    handle: Option<JoinHandle<std::result::Result<(), SenderError>>>,
+}
+
+impl AckTask {
+    /// Cancels the task and waits for it, so no ACK task outlives its
+    /// stream.
+    async fn stop(mut self) {
+        self.token.cancel();
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!("ACK receiver task ended with error: {error}"),
+            Err(error) => warn!("ACK receiver task join failed: {error}"),
+        }
+    }
+}
+
+impl Drop for AckTask {
+    fn drop(&mut self) {
+        self.token.cancel();
+    }
 }
 
 /// Where an ACK receiver task delivers ACKs.
@@ -306,7 +338,7 @@ impl GigantoStream {
 
         let close_ack = if self.current_stream_kind.take().is_some() {
             if let Err(error) = send_close_marker(&mut open.send).await {
-                stop_ack_task(open.ack_task_token, open.ack_task_handle).await;
+                open.ack_task.stop().await;
                 return Err(error);
             }
             self.wait_for_close_ack(open.close_ack).await
@@ -318,7 +350,7 @@ impl GigantoStream {
             .send
             .finish()
             .map_err(|source| SenderError::context("failed to finish stream", source));
-        stop_ack_task(open.ack_task_token, open.ack_task_handle).await;
+        open.ack_task.stop().await;
         finished?;
         Ok(close_ack)
     }
@@ -342,8 +374,13 @@ impl GigantoStream {
             .ok_or(SendError::WriteError(WriteError::ClosedStream))
     }
 
-    /// Opens a new stream on `lease`, or on the current connection, asking
-    /// for a newer connection whenever the one tried is lost.
+    /// Opens a new stream on `lease`, or on the current connection.
+    ///
+    /// A connection found lost before the open is replaced by a newer one.
+    /// When opening fails, [`StreamErrorPolicy::ReopenStream`] asks for a
+    /// newer connection and tries again, while
+    /// [`StreamErrorPolicy::Reconnect`] returns the error, as local mode
+    /// always has.
     ///
     /// Returns the outcome of the reconnect it needed, if any.
     async fn open_new(
@@ -373,6 +410,14 @@ impl GigantoStream {
                 Ok((send, recv)) => {
                     self.install(conn, generation, send, recv);
                     return Ok(outcome);
+                }
+                Err(error) if self.connection.policy() == StreamErrorPolicy::Reconnect => {
+                    // Local mode gives up when a stream cannot open on a
+                    // connection that has just completed its handshake.
+                    return Err(SenderError::context(
+                        "failed to open stream to Giganto",
+                        error,
+                    ));
                 }
                 Err(error) => {
                     warn!("Failed to open stream to Giganto, reconnecting: {error}");
@@ -405,8 +450,10 @@ impl GigantoStream {
         self.open = Some(OpenStream {
             conn,
             send,
-            ack_task_token,
-            ack_task_handle,
+            ack_task: AckTask {
+                token: ack_task_token,
+                handle: Some(ack_task_handle),
+            },
             close_ack,
         });
     }
@@ -415,7 +462,7 @@ impl GigantoStream {
     async fn stop_open(&mut self) -> Option<SendStream> {
         self.current_stream_kind = None;
         let open = self.open.take()?;
-        stop_ack_task(open.ack_task_token, open.ack_task_handle).await;
+        open.ack_task.stop().await;
         Some(open.send)
     }
 
@@ -465,7 +512,7 @@ impl GigantoStream {
 
     #[cfg(test)]
     pub(super) fn ack_task_token(&self) -> Option<CancellationToken> {
-        self.open.as_ref().map(|open| open.ack_task_token.clone())
+        self.open.as_ref().map(|open| open.ack_task.token.clone())
     }
 }
 
@@ -480,20 +527,6 @@ async fn send_close_marker(send: &mut SendStream) -> std::result::Result<(), Sen
         Err(SendError::WriteError(_)) => Err(SenderError::SendFinish),
         Err(e) => Err(SenderError::Send(e)),
         Ok(()) => Ok(()),
-    }
-}
-
-/// Cancels an ACK receiver task and waits for it, so no ACK task outlives
-/// its stream.
-async fn stop_ack_task(
-    token: CancellationToken,
-    handle: JoinHandle<std::result::Result<(), SenderError>>,
-) {
-    token.cancel();
-    match handle.await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => warn!("ACK receiver task ended with error: {error}"),
-        Err(error) => warn!("ACK receiver task join failed: {error}"),
     }
 }
 
@@ -548,8 +581,8 @@ mod tests {
 
     use super::super::test_support::{
         TEST_CERT_PEM, TEST_KEY_PEM, TEST_ROOT_PEM, TEST_SERVER_NAME, TEST_TIMEOUT,
-        accept_server_stream, build_server_endpoint, connect_test_connection, fixture_path,
-        is_close_marker, recv_batch,
+        accept_server_stream, build_server_endpoint, connect_test_connection, connects_from,
+        fixture_path, is_close_marker, recv_batch,
     };
     use super::super::{StreamErrorPolicy, create_endpoint};
     use super::*;
@@ -1189,5 +1222,131 @@ mod tests {
             .expect("recover opens a new stream on the live connection");
         assert!(matches!(outcome, ReconnectOutcome::StreamReopened));
         assert!(stream.is_open());
+    }
+
+    #[tokio::test]
+    async fn local_stream_open_on_a_lost_connection_fails_without_reconnecting() {
+        let reload = ReloadSignal::new();
+        let (connection, session) = connect_test_connection(
+            StreamErrorPolicy::Reconnect,
+            &reload,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("connection should be established");
+        // The server goes away after the handshake, before the stream opens.
+        session.connection.close(0u32.into(), b"server-gone");
+        let Current::Live(conn, _) = connection.current() else {
+            panic!("the owner should still hold the connection it handshook");
+        };
+        timeout(TEST_TIMEOUT, conn.closed())
+            .await
+            .expect("the client should see the server close in time");
+
+        let client = session.connection.remote_address();
+        let (opened, reconnected) = tokio::join!(
+            connection.open_stream(CancellationToken::new(), AckDelivery::LogOnly),
+            connects_from(&session.server_endpoint, client, Duration::from_secs(3)),
+        );
+        let error = opened.expect_err("local mode must not retry a failed stream open");
+        assert!(
+            matches!(
+                &error,
+                SenderError::Context { context, .. } if *context == "failed to open stream to Giganto"
+            ),
+            "unexpected stream open error: {error:?}",
+        );
+        assert!(
+            !reconnected,
+            "local mode must not reconnect to open a stream"
+        );
+        assert_eq!(connection.generation(), 0);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_stream_stops_its_ack_task() {
+        let (
+            connection,
+            session,
+            [
+                (dropped, dropped_acks, _dropped_server),
+                (mut other, _, mut other_server),
+            ],
+        ) = two_streams(AckDelivery::Deliver).await;
+        let mut dropped_acks = dropped_acks.expect("delivering streams have an ACK receiver");
+        let ack_task = dropped
+            .ack_task_token()
+            .expect("an open stream has an ACK task");
+
+        // The server keeps the dropped stream's ACK side open.
+        drop(dropped);
+        assert!(ack_task.is_cancelled());
+        assert_eq!(
+            timeout(TEST_TIMEOUT, dropped_acks.recv())
+                .await
+                .expect("the ACK receiver should end once its stream is dropped"),
+            None
+        );
+
+        other
+            .send_batch(&[(8, b"other".to_vec())])
+            .await
+            .expect("the other stream keeps sending");
+        assert_eq!(
+            recv_batch(&mut other_server.recv)
+                .await
+                .expect("the other batch should arrive"),
+            vec![(8, b"other".to_vec())]
+        );
+        assert_eq!(connection.generation(), 0);
+        assert!(session.connection.close_reason().is_none());
+    }
+
+    #[tokio::test]
+    async fn cancelled_close_stops_its_ack_task() {
+        let (
+            connection,
+            session,
+            [
+                (mut closing, acks, mut server),
+                (mut other, _, mut other_server),
+            ],
+        ) = two_streams(AckDelivery::Deliver).await;
+        let mut acks = acks.expect("delivering streams have an ACK receiver");
+        let ack_task = closing
+            .ack_task_token()
+            .expect("an open stream has an ACK task");
+
+        // The server never sends the close ACK, and the caller stops waiting.
+        let (close, marker) = tokio::join!(
+            timeout(Duration::from_millis(300), closing.close()),
+            recv_batch(&mut server.recv),
+        );
+        assert!(is_close_marker(
+            &marker.expect("close marker should arrive")
+        ));
+        assert!(close.is_err(), "the close should still be waiting");
+        assert!(!closing.is_open());
+        assert!(ack_task.is_cancelled());
+
+        drop(closing);
+        assert_eq!(
+            timeout(TEST_TIMEOUT, acks.recv())
+                .await
+                .expect("the ACK receiver should end once its stream is dropped"),
+            None
+        );
+        other
+            .send_batch(&[(9, b"other".to_vec())])
+            .await
+            .expect("the other stream keeps sending");
+        assert_eq!(
+            recv_batch(&mut other_server.recv)
+                .await
+                .expect("the other batch should arrive"),
+            vec![(9, b"other".to_vec())]
+        );
+        assert_eq!(connection.generation(), 0);
+        assert!(session.connection.close_reason().is_none());
     }
 }
