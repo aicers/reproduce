@@ -27,6 +27,7 @@ plugins:
             - Prerequisites: prerequisites.md
             - Configuration: configuration.md
             - Operations: operations.md
+            - Remote Mode: remote-mode.md
             - Troubleshooting: troubleshooting.md
         - locale: ko
           name: 한국어
@@ -36,12 +37,14 @@ plugins:
             - Prerequisites: prerequisites.md
             - Configuration: configuration.md
             - Operations: operations.md
+            - Remote Mode: remote-mode.md
             - Troubleshooting: troubleshooting.md
           nav_translations:
             Overview: 개요
             Prerequisites: 설치 전 준비
             Configuration: 설정
             Operations: 실행
+            Remote Mode: 원격 모드
             Troubleshooting: 문제 해결
 
 extra_css:

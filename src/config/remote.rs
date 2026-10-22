@@ -25,7 +25,7 @@ const MAX_KIND_LEN: usize = 64;
 const MAX_PATH_LEN: usize = 4096;
 
 /// Directories a collector path must not be equal to or lie under.
-const RESERVED_DIRS: [&str; 4] = [
+pub(crate) const RESERVED_DIRS: [&str; 4] = [
     "/etc/clumit-security",
     "/var/lib/clumit-security",
     "/opt/clumit-security",

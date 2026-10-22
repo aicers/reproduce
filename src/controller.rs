@@ -176,7 +176,7 @@ fn reconnect_or_shutdown(
     }
 }
 
-fn log_reconnect_outcome(outcome: ReconnectOutcome) {
+pub(crate) fn log_reconnect_outcome(outcome: ReconnectOutcome) {
     if let ReconnectOutcome::ReloadDeferred(error) = outcome {
         warn!(
             "QUIC endpoint reload deferred; \

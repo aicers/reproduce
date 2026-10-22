@@ -6,6 +6,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Remote mode. Started as `reproduce --cert <CERT> --key <KEY> --ca-certs
+  <CA>[,<CA>...] --state-dir <DIR> <server_name>@<ip>:<port>`, REproduce takes
+  its configuration from the Central Manager instead of a file and runs 1 to 64
+  log collectors over one Giganto connection, each following one log file into
+  a Giganto `Log` kind. Collectors follow files as they grow and across rename
+  and copy-truncate rotation, send every line at least once by resuming from
+  the position Giganto acknowledged, which they save in the state directory,
+  and refuse files under the Clumit Security directories and `/proc`.
+  `reproduce <CONFIG>` is unchanged.
+
 ### Changed
 
 - When its standard output or standard error is connected to the systemd

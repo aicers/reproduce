@@ -2,20 +2,28 @@
 
 ## 실행 커맨드
 
-REproduce는 TOML 설정 파일 경로 하나를 인자로 받아 실행합니다.
+REproduce는 두 가지 형태로 실행합니다. TOML 설정 파일 경로 하나를 인자로 받아
+실행하거나, 설정을 Central Manager에서 받는 원격 모드로 실행합니다(자세한
+내용은 [원격 모드](remote-mode.md) 참고).
 
 ```bash
 reproduce <CONFIG_PATH>
+reproduce --cert <CERT_PATH> --key <KEY_PATH> --ca-certs <CA_PATHS> \
+  --state-dir <DIR> <server_name>@<ip>:<port>
 ```
 
-- `<CONFIG_PATH>`: TOML 설정 파일 경로(필수)
+- `<CONFIG_PATH>`: TOML 설정 파일 경로
+- `--cert`, `--key`, `--ca-certs`, `--state-dir`, `<server_name>@<ip>:<port>`:
+  원격 모드로 실행(모두 필수)
 - `-h`, `--help`: 도움말 출력
 - `-V`, `--version`: 버전 정보 출력
 
 > **참고**
-> 인자가 없거나 두 개 이상이거나 다른 플래그가 주어지면 오류 메시지와 사용법을
-> 출력하고 상태 코드 `1`로 종료합니다. `-h`와 `-V`는 단독 인자일 때만
-> 동작합니다.
+> 인자가 없거나, 위치 인자가 두 개 이상이거나, 설정 파일 경로에 플래그를
+> 섞었거나, 원격 모드 플래그나 Central Manager 주소가 빠졌거나, 원격 모드의
+> 위치 인자가 Central Manager 주소가 아니거나, 다른 플래그가 주어지면 오류
+> 메시지와 사용법을 출력하고 상태 코드 `1`로 종료합니다. `-h`와 `-V`는 단독
+> 인자일 때만 동작합니다.
 >
 > `-`로 시작하는 인자는 모두 플래그로 처리되므로, `-`로 시작하는 설정 파일
 > 경로는 `./-name.toml`처럼 디렉터리를 붙여 지정해야 합니다.

@@ -2,22 +2,33 @@
 
 ## Start Command
 
-Run REproduce with exactly one TOML configuration file path.
+Run REproduce in one of two forms: with exactly one TOML configuration file
+path, or in remote mode, which takes its configuration from the Central Manager
+(see [Remote Mode](remote-mode.md)).
 
 ```bash
 reproduce <CONFIG_PATH>
+reproduce --cert <CERT_PATH> --key <KEY_PATH> --ca-certs <CA_PATHS> \
+  --state-dir <DIR> <server_name>@<ip>:<port>
 ```
+
+<!-- markdownlint-disable MD013 -->
 
 | Argument or flag | Behavior |
 | --- | --- |
 | `<CONFIG_PATH>` | Starts REproduce with the TOML configuration file |
+| `--cert`, `--key`, `--ca-certs`, `--state-dir`, `<server_name>@<ip>:<port>` | Starts REproduce in remote mode |
 | `-h`, `--help` | Prints help and exits |
 | `-V`, `--version` | Prints version information and exits |
 
-If no configuration path is provided, if more than one positional argument is
-provided, or if any other flag is given, REproduce prints an error followed by
-the usage and exits with status code `1`. `-h` and `-V` act only as the sole
-argument.
+<!-- markdownlint-enable MD013 -->
+
+If no argument is provided, if more than one positional argument is provided,
+if a configuration path is mixed with any flag, if a remote-mode flag or the
+Central Manager address is missing, if the positional argument of the remote
+form is not a Central Manager address, or if any other flag is given, REproduce
+prints an error followed by the usage and exits with status code `1`. `-h` and
+`-V` act only as the sole argument.
 
 Any argument starting with `-` is taken as a flag, so a configuration path that
 starts with `-` must be written with a directory prefix, such as
