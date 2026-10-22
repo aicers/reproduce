@@ -189,7 +189,7 @@ async fn run_remote(logging: Logging, args: &RemoteArgs) {
         Ok(material) => material,
         Err(error) => exit_on_startup_error(logging, &error.into()),
     };
-    let mut runtime = CollectorRuntime::new(files.clone(), reload.clone());
+    let mut runtime = CollectorRuntime::new(files.clone(), reload.clone(), state_dir);
     if let Err(error) = install_signal_handlers(reload) {
         exit_on_startup_error(logging, &error);
     }

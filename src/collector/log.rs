@@ -1,7 +1,8 @@
 use std::{
-    fs::File,
+    fs::{File, Metadata},
     io::{BufRead, BufReader},
     path::Path,
+    sync::Arc,
 };
 
 use anyhow::{Context, anyhow};
@@ -15,6 +16,68 @@ use super::{
     wait_for_poll_or_shutdown,
 };
 
+/// A position in a log file: the device and inode of the open file, and the
+/// byte offset just past the last line handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogPosition {
+    pub dev: u64,
+    pub ino: u64,
+    pub offset: u64,
+}
+
+impl LogPosition {
+    /// Returns the position `offset` in the file `metadata` describes.
+    #[must_use]
+    pub fn new(metadata: &Metadata, offset: u64) -> Self {
+        #[cfg(unix)]
+        let (dev, ino) = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.dev(), metadata.ino())
+        };
+        #[cfg(not(unix))]
+        let (dev, ino) = {
+            let _ = metadata;
+            (0, 0)
+        };
+        Self { dev, ino, offset }
+    }
+}
+
+/// Receives the positions a [`LogCollector`] reaches, as remote mode needs
+/// them to checkpoint what Giganto acknowledged.
+pub trait PositionReport: Send + Sync {
+    /// The reader opened its file and starts reading at `position`.
+    fn opened(&self, position: LogPosition);
+
+    /// The reader consumed a line it does not return, such as an empty one;
+    /// `position` is just past it.
+    fn consumed(&self, position: LogPosition);
+
+    /// The reader returns a batch whose last line ends just before
+    /// `position`, and holds it until it is sent.
+    fn returned(&self, position: LogPosition);
+
+    /// The reader is dropped.
+    fn dropped(&self);
+}
+
+/// Where a [`LogCollector`] reports its positions.
+struct Report {
+    sink: Arc<dyn PositionReport>,
+    dev: u64,
+    ino: u64,
+}
+
+impl Report {
+    fn position(&self, offset: u64) -> LogPosition {
+        LogPosition {
+            dev: self.dev,
+            ino: self.ino,
+            offset,
+        }
+    }
+}
+
 /// Collects raw log lines from a binary file, wrapping each in a `Log` record
 /// for sending.
 ///
@@ -23,6 +86,8 @@ use super::{
 /// behaviour.
 pub struct LogCollector {
     lines: BinaryLines<BufReader<File>>,
+    /// Where positions are reported, in remote mode.
+    report: Option<Report>,
     kind: String,
     count_sent: u64,
     file_polling_mode: bool,
@@ -56,6 +121,7 @@ impl LogCollector {
 
         Ok(Self {
             lines,
+            report: None,
             kind,
             count_sent,
             file_polling_mode,
@@ -67,6 +133,40 @@ impl LogCollector {
             pending_commit: None,
             exhausted: false,
         })
+    }
+
+    /// Reports the positions this collector reaches to `report`: its
+    /// starting position now, its position after every line it consumes,
+    /// and the batches it returns until they are sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the open file cannot be inspected.
+    pub fn with_position_report(
+        mut self,
+        report: Arc<dyn PositionReport>,
+    ) -> CollectorResult<Self> {
+        let metadata = self
+            .lines
+            .buf
+            .get_ref()
+            .metadata()
+            .map_err(|e| anyhow!("failed to inspect the open file: {e}"))?;
+        let start = LogPosition::new(&metadata, self.lines.offset());
+        report.opened(start);
+        self.report = Some(Report {
+            sink: report,
+            dev: start.dev,
+            ino: start.ino,
+        });
+        Ok(self)
+    }
+
+    /// Reports that a line was consumed without being returned.
+    fn report_consumed(&self) {
+        if let Some(report) = &self.report {
+            report.sink.consumed(report.position(self.lines.offset()));
+        }
     }
 
     /// Returns the number of successful and failed records observed so far.
@@ -96,6 +196,7 @@ impl Collector for LogCollector {
             let line = match self.lines.next() {
                 Some(Ok(line)) => {
                     if line.is_empty() {
+                        self.report_consumed();
                         continue;
                     }
                     line
@@ -123,6 +224,7 @@ impl Collector for LogCollector {
             // in the original code via `.skip()`).
             if self.conv_cnt < self.skip {
                 self.conv_cnt += 1;
+                self.report_consumed();
                 continue;
             }
 
@@ -143,6 +245,9 @@ impl Collector for LogCollector {
             }
 
             self.pending_commit = Some(self.conv_cnt);
+            if let Some(report) = &self.report {
+                report.sink.returned(report.position(self.lines.offset()));
+            }
             return Ok(Some(CollectedBatch {
                 events: vec![(timestamp, record_data)],
                 record_bytes,
@@ -159,16 +264,31 @@ impl Collector for LogCollector {
     }
 }
 
+impl Drop for LogCollector {
+    fn drop(&mut self) {
+        if let Some(report) = &self.report {
+            report.sink.dropped();
+        }
+    }
+}
+
 /// An iterator over binary lines separated by `\n`, stripping trailing
 /// `\r\n` or `\n`.
 pub struct BinaryLines<B> {
     buf: B,
+    /// The number of bytes consumed.
+    offset: u64,
 }
 
 impl<B> BinaryLines<B> {
     /// Creates a new `BinaryLines` iterator.
     fn new(buf: B) -> Self {
-        Self { buf }
+        Self { buf, offset: 0 }
+    }
+
+    /// Returns the number of bytes consumed, line endings included.
+    fn offset(&self) -> u64 {
+        self.offset
     }
 }
 
@@ -179,7 +299,8 @@ impl<B: BufRead> Iterator for BinaryLines<B> {
         let mut buf = Vec::new();
         match self.buf.read_until(b'\n', &mut buf) {
             Ok(0) => None,
-            Ok(_) => {
+            Ok(read) => {
+                self.offset += read as u64;
                 if matches!(buf.last(), Some(b'\n')) {
                     buf.pop();
                     if matches!(buf.last(), Some(b'\r')) {
@@ -395,6 +516,82 @@ mod tests {
         assert!(collector.next_batch().await.expect("next_batch").is_none());
         assert_eq!(collector.position(), b"2".to_vec());
         assert_eq!(collector.stats(), (0, 0));
+    }
+
+    /// Records the reports of a collector.
+    #[derive(Default)]
+    struct Reports(std::sync::Mutex<Vec<String>>);
+
+    impl Reports {
+        fn push(&self, what: &str, position: LogPosition) {
+            self.0
+                .lock()
+                .expect("lock")
+                .push(format!("{what} {}", position.offset));
+        }
+
+        fn take(&self) -> Vec<String> {
+            std::mem::take(&mut *self.0.lock().expect("lock"))
+        }
+    }
+
+    impl PositionReport for Reports {
+        fn opened(&self, position: LogPosition) {
+            self.push("opened", position);
+        }
+
+        fn consumed(&self, position: LogPosition) {
+            self.push("consumed", position);
+        }
+
+        fn returned(&self, position: LogPosition) {
+            self.push("returned", position);
+        }
+
+        fn dropped(&self) {
+            self.0.lock().expect("lock").push("dropped".to_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn log_collector_reports_byte_positions() {
+        let (_tx, shutdown) = watch::channel(false);
+        let (collector, dir) = make_log_collector(b"ab\r\n\n\ncd\nef", 0, 0, shutdown);
+        let reports = Arc::new(Reports::default());
+        let mut collector = collector
+            .with_position_report(reports.clone())
+            .expect("the open file can be inspected");
+        let metadata = std::fs::metadata(dir.path().join("test.log")).expect("metadata");
+        assert_eq!(reports.take(), ["opened 0"]);
+
+        collector.next_batch().await.expect("read").expect("ab");
+        assert_eq!(reports.take(), ["returned 4"]);
+        // Empty lines are consumed and reported.
+        collector.next_batch().await.expect("read").expect("cd");
+        assert_eq!(reports.take(), ["consumed 5", "consumed 6", "returned 9"]);
+        // A final line without a newline counts too.
+        collector.next_batch().await.expect("read").expect("ef");
+        assert_eq!(reports.take(), ["returned 11"]);
+        assert!(collector.next_batch().await.expect("read").is_none());
+        drop(collector);
+        assert_eq!(reports.take(), ["dropped"]);
+
+        let start = LogPosition::new(&metadata, 0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!((start.dev, start.ino), (metadata.dev(), metadata.ino()));
+        }
+        assert_eq!(start.offset, 0);
+    }
+
+    #[tokio::test]
+    async fn log_collector_without_a_report_reports_nothing() {
+        let (_tx, shutdown) = watch::channel(false);
+        let (mut collector, _dir) = make_log_collector(b"ab\n", 0, 0, shutdown);
+        collector.next_batch().await.expect("read").expect("ab");
+        assert!(collector.report.is_none());
+        assert_eq!(collector.position(), b"0".to_vec());
     }
 
     #[tokio::test]

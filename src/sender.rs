@@ -149,6 +149,14 @@ pub enum SenderError {
     #[error("failed to send channel done message")]
     SendFinish,
 
+    /// Finishing the stream failed after its close obtained `close_ack`.
+    #[error("failed to finish stream")]
+    FinishStream {
+        close_ack: CloseAck,
+        #[source]
+        source: quinn::ClosedStream,
+    },
+
     #[error("{0:?}")]
     Send(#[source] SendError),
 
