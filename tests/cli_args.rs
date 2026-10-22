@@ -22,7 +22,9 @@ const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Helper function to create a `Command` for the binary under test.
 fn reproduce_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!()
+    let mut command = assert_cmd::cargo::cargo_bin_cmd!();
+    command.env_remove("JOURNAL_STREAM");
+    command
 }
 
 /// Tests that running with `-h` flag prints help information and exits

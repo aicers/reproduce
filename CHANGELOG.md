@@ -6,6 +6,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- When its standard output or standard error is connected to the systemd
+  journal, REproduce writes each log event as one line that starts with the
+  event's syslog priority, so the journal stores warnings and errors at their
+  own priority, without REproduce's own timestamp or colour codes and with line
+  breaks inside an event written as `\n`. A panic is logged as one error entry,
+  and an error that stops REproduce at start-up, such as an invalid
+  configuration file or a refused command line, is logged as one error entry
+  instead of being printed on standard error. Elsewhere the output is
+  unchanged, except that colour codes are written only to a terminal. Logs
+  written to `log_path` are unchanged.
+
 ### Fixed
 
 - A `SIGHUP` that arrives while a reconnect to Giganto is applying an earlier
