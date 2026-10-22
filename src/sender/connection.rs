@@ -63,7 +63,8 @@ pub struct GigantoConnection {
 struct Shared {
     config: ConnectionConfig,
     policy: StreamErrorPolicy,
-    /// Cancels connecting and reconnecting. Streams have their own tokens.
+    /// Cancels connecting and reconnecting: a child of the caller's connect
+    /// token, also cancelled by `close`. Streams have their own tokens.
     token: CancellationToken,
     state: Mutex<State>,
 }
@@ -147,7 +148,7 @@ impl GigantoConnection {
             shared: Arc::new(Shared {
                 config,
                 policy,
-                token,
+                token: token.child_token(),
                 state: Mutex::new(State {
                     endpoint,
                     conn: Some(conn),
@@ -222,13 +223,15 @@ impl GigantoConnection {
     /// become idle.
     ///
     /// Streams should be closed first; a stream still open is cut off. A
-    /// later reconnect or stream open fails with [`SenderError::Closed`].
+    /// reconnect in flight ends, and it and every later reconnect or stream
+    /// open fail with [`SenderError::Closed`].
     pub async fn close(&self) {
         let (conn, endpoint) = {
             let mut state = self.shared.lock();
             state.closed = true;
             (state.conn.take(), state.endpoint.clone())
         };
+        self.shared.token.cancel();
         if let Some(conn) = conn {
             conn.close(0u32.into(), b"log_done");
             endpoint.wait_idle().await;
@@ -404,8 +407,10 @@ async fn run_reconnect(shared: Arc<Shared>, result: watch::Sender<Option<SharedR
         let mut state = shared.lock();
         state.in_flight = None;
         match attempt {
-            Ok(attempt) if state.closed => {
-                attempt.conn.close(0u32.into(), b"log_done");
+            _ if state.closed => {
+                if let Ok(attempt) = attempt {
+                    attempt.conn.close(0u32.into(), b"log_done");
+                }
                 Err(Arc::new(SenderError::Closed))
             }
             Ok(Attempt {
@@ -829,6 +834,42 @@ mod tests {
                 .await,
             Err(SenderError::Closed)
         ));
+    }
+
+    #[tokio::test]
+    async fn close_ends_a_reconnect_in_flight() {
+        let reload = ReloadSignal::new();
+        let (connection, session) = connect_test_connection(
+            StreamErrorPolicy::ReopenStream,
+            &reload,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("connection should be established");
+        let reconnect = tokio::spawn({
+            let connection = connection.clone();
+            async move { connection.reconnect(0).await }
+        });
+        // Let the reconnect start and close generation 0.
+        timeout(TEST_TIMEOUT, session.connection.closed())
+            .await
+            .expect("the reconnect should close the failed connection");
+
+        connection.close().await;
+        let result = timeout(Duration::from_millis(500), reconnect)
+            .await
+            .expect("close must end the reconnect in flight at once")
+            .expect("reconnect task should join");
+        assert!(
+            matches!(result, Err(SenderError::Closed)),
+            "a reconnect ended by close must report Closed, got {result:?}",
+        );
+        assert!(
+            timeout(Duration::from_secs(3), session.server_endpoint.accept())
+                .await
+                .is_err(),
+            "a closed connection must not connect again",
+        );
     }
 
     #[tokio::test]
