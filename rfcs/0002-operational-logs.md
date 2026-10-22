@@ -859,9 +859,11 @@ src/store/identifier.rs`, `src/admin/ingest.rs:23-35`); this RFC builds on it.
   across a reboot without skipping the previous boot's tail, and reports a gap
   after `journalctl --rotate` and `--vacuum-files=1` (also when the vacuum
   happens during a Giganto outage, reported at reconnect, and when it happens
-  while the follow process and the stream stay alive behind back-pressure: one
-  warning when reading resumes if an entry is actually missing, none if
-  journalctl still read every entry); a `MESSAGE` over 4096
+  while the follow process and the stream stay alive behind back-pressure: at
+  least one warning when reading resumes if an entry the test wrote is missing;
+  if all test entries arrive, the warning count is recorded without asserting
+  zero, since unselected entries may still have been lost, while exact counts
+  are asserted only with the deterministic fake journalctl); a `MESSAGE` over 4096
   bytes arrives whole; against Giganto 0.31.0 the records are returned by
   `opLogRawEvents` with the expected `sensor` and `serviceName`, alongside a
   `log` collector on the same connection.
