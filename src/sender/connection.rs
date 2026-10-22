@@ -464,7 +464,8 @@ mod tests {
 
     use super::super::test_support::{
         RECONNECT_TIMEOUT, TEST_TIMEOUT, accept_connection, accept_server_stream,
-        build_server_endpoint, connect_test_connection, copied_fixture_config, fixture_config,
+        build_server_endpoint, connect_test_connection, connects_from, copied_fixture_config,
+        fixture_config,
     };
     use super::*;
     use crate::sender::{CloseAck, REQUIRED_GIGANTO_VERSION};
@@ -506,10 +507,11 @@ mod tests {
         write_until_error(&mut second).await;
 
         let server_endpoint = session.server_endpoint.clone();
+        let client = session.connection.remote_address();
         let server_task = tokio::spawn(async move {
             let reconnected = accept_connection(&server_endpoint, RECONNECT_TIMEOUT).await?;
-            let extra = timeout(Duration::from_secs(3), server_endpoint.accept()).await;
-            Ok::<_, anyhow::Error>((reconnected, extra.is_err()))
+            let extra = connects_from(&server_endpoint, client, Duration::from_secs(3)).await;
+            Ok::<_, anyhow::Error>((reconnected, !extra))
         });
 
         let (first_outcome, second_outcome) = tokio::join!(first.recover(), second.recover());
@@ -564,9 +566,12 @@ mod tests {
             "a request for an older generation must never close a newer connection",
         );
         assert!(
-            timeout(Duration::from_secs(3), session.server_endpoint.accept())
-                .await
-                .is_err(),
+            !connects_from(
+                &session.server_endpoint,
+                newer.remote_address(),
+                Duration::from_secs(3),
+            )
+            .await,
             "no further connection may be made for a stale generation",
         );
     }
@@ -626,8 +631,13 @@ mod tests {
                 .context("server endpoint should stay open")?;
             let conn = incoming.await.context("QUIC setup should complete")?;
             let _ = server_handshake(&conn, "0.0.1").await;
-            let extra = timeout(Duration::from_secs(3), server_endpoint.accept()).await;
-            Ok::<_, anyhow::Error>(extra.is_err())
+            let extra = connects_from(
+                &server_endpoint,
+                conn.remote_address(),
+                Duration::from_secs(3),
+            )
+            .await;
+            Ok::<_, anyhow::Error>(!extra)
         });
         let (first_result, second_result) = tokio::join!(first.recover(), second.recover());
         for result in [first_result, second_result] {
@@ -712,9 +722,12 @@ mod tests {
         assert_eq!(batch, vec![(5, b"still here".to_vec())]);
         assert!(session.connection.close_reason().is_none());
         assert!(
-            timeout(Duration::from_secs(3), session.server_endpoint.accept())
-                .await
-                .is_err(),
+            !connects_from(
+                &session.server_endpoint,
+                session.connection.remote_address(),
+                Duration::from_secs(3),
+            )
+            .await,
             "reopening a stream must not reconnect",
         );
     }
@@ -865,9 +878,12 @@ mod tests {
             "a reconnect ended by close must report Closed, got {result:?}",
         );
         assert!(
-            timeout(Duration::from_secs(3), session.server_endpoint.accept())
-                .await
-                .is_err(),
+            !connects_from(
+                &session.server_endpoint,
+                session.connection.remote_address(),
+                Duration::from_secs(3),
+            )
+            .await,
             "a closed connection must not connect again",
         );
     }

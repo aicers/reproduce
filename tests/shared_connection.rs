@@ -106,6 +106,24 @@ async fn ack(send: &mut SendStream, timestamp: i64) -> Result<()> {
         .context("server should send the ACK")
 }
 
+/// Returns whether `client` connects to `server_endpoint` within `within`.
+///
+/// Only connections from `client` count: the test server's port may be one
+/// another client, in this process or another, still retries against.
+async fn connects_from(server_endpoint: &Endpoint, client: SocketAddr, within: Duration) -> bool {
+    timeout(within, async {
+        while let Some(incoming) = server_endpoint.accept().await {
+            if incoming.remote_address() == client {
+                return;
+            }
+            incoming.ignore();
+        }
+        std::future::pending::<()>().await;
+    })
+    .await
+    .is_ok()
+}
+
 /// Connects a connection owner to the test server.
 async fn connect(
     server_endpoint: &Endpoint,
@@ -218,9 +236,12 @@ async fn two_streams_share_one_connection_through_reset_and_close() -> Result<()
     ensure!(server_conn.close_reason().is_none());
     ensure!(connection.generation() == 0);
     ensure!(
-        timeout(Duration::from_millis(500), server_endpoint.accept())
-            .await
-            .is_err(),
+        !connects_from(
+            &server_endpoint,
+            server_conn.remote_address(),
+            Duration::from_millis(500),
+        )
+        .await,
         "the streams must share one connection"
     );
 

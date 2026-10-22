@@ -125,6 +125,28 @@ pub(super) async fn accept_connection(
     Ok(connection)
 }
 
+/// Returns whether `client` connects to `server_endpoint` within `within`.
+///
+/// Only connections from `client` count: a test server's port may be one
+/// another client, in this process or another, still retries against.
+pub(super) async fn connects_from(
+    server_endpoint: &Endpoint,
+    client: SocketAddr,
+    within: Duration,
+) -> bool {
+    timeout(within, async {
+        while let Some(incoming) = server_endpoint.accept().await {
+            if incoming.remote_address() == client {
+                return;
+            }
+            incoming.ignore();
+        }
+        std::future::pending::<()>().await;
+    })
+    .await
+    .is_ok()
+}
+
 pub(super) async fn accept_server_stream(
     connection: &Connection,
 ) -> Result<(SendStream, RecvStream)> {
