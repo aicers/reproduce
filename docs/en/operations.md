@@ -77,7 +77,20 @@ See [Configuration](configuration.md) for the polling fields.
 ## Logs
 
 By default, logs are written to stdout at `INFO` level. Set `log_path` to append
-logs to a file instead.
+logs to a file instead; a `log_path` file is unchanged by the journal format
+below.
+
+Colour codes are written only when stdout is a terminal. Under the systemd
+journal, each event is one journal entry with the priority of its level
+(`ERROR` 3, `WARN` 4, `INFO` 6, `DEBUG` and `TRACE` 7), without REproduce's own
+timestamp or colour codes, and with line breaks inside an event written as `\n`
+and NUL as `\0`. A panic, a refused command line, and an error that stops
+REproduce at startup are each logged as one `ERROR` entry, so they can be found
+with:
+
+```bash
+journalctl -u <unit> -p err
+```
 
 Set `RUST_LOG` to adjust verbosity:
 

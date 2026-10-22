@@ -96,6 +96,25 @@ chosen value is used as the event identifier in the data store.
 
 If `log_path` is omitted, logs are written to stdout. If `log_path` is set, logs
 are appended to the specified file. Startup fails if the file cannot be opened.
+A `log_path` file is written as before: each line starts with a timestamp, and
+it holds no colour codes.
+
+When stdout or stderr is connected to the systemd journal, as it is when
+REproduce runs as a systemd service without `log_path`, each log event becomes
+one journal entry:
+
+- The entry has the journal priority of the event's level: 3 for `ERROR`, 4 for
+  `WARN`, 6 for `INFO`, and 7 for `DEBUG` and `TRACE`.
+- The line has no REproduce timestamp and no colour codes; the journal records
+  the time itself.
+- A line break inside an event is written as `\n` and a NUL character as `\0`,
+  so the event stays one entry.
+- A panic, a refused command line, and an error that stops REproduce at
+  startup, such as an invalid configuration file, are each logged as one
+  `ERROR` entry instead of being printed on stderr.
+
+Elsewhere, stdout logs keep their format, with colour codes only when stdout is
+a terminal.
 
 The default log level is `INFO` when `RUST_LOG` is not set. Set `RUST_LOG`
 before running REproduce to adjust log verbosity.

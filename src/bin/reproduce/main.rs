@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -44,6 +44,7 @@ use reproduce::collector::security_log::SecurityLogCollector;
 use reproduce::collector::sysmon_csv::SysmonCollector;
 use reproduce::collector::zeek::ZeekCollector;
 use reproduce::controller::{PipelineSender, run_pipeline_with_sender};
+use reproduce::logging::{Logging, init_tracing};
 use reproduce::parser::giganto_import::TryFromGigantoRecord;
 use reproduce::parser::security_log::{
     Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
@@ -58,10 +59,7 @@ use reproduce::sender::{GigantoSender, SenderError};
 use serde::Serialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info, warn};
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature = "netflow")]
 use crate::kind_runners::run_netflow_kind;
@@ -99,45 +97,63 @@ ARGS:
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let logging = init_tracing()?;
     match parse() {
-        Invocation::Help => {
+        Ok(Invocation::Help) => {
             println!("{}", version());
             println!();
             print!("{USAGE}");
             Ok(())
         }
-        Invocation::Version => {
+        Ok(Invocation::Version) => {
             println!("{}", version());
             Ok(())
         }
-        Invocation::Local(config_filename) => run_local(&config_filename).await,
-        Invocation::Remote(args) => run_remote(&args),
+        Ok(Invocation::Local(config_filename)) => {
+            run_local(logging, &config_filename).await;
+            Ok(())
+        }
+        Ok(Invocation::Remote(args)) => run_remote(logging, &args),
+        Err(reason) => refuse(logging, &reason),
     }
 }
 
-async fn run_local(config_filename: &Path) -> anyhow::Result<()> {
-    let mut config = config::Config::new(config_filename)?;
-    let _guard = init_tracing(config.log_path.as_deref())?;
+async fn run_local(mut logging: Logging, config_filename: &Path) {
+    let mut config = match config::Config::new(config_filename) {
+        Ok(config) => config,
+        Err(error) => exit_on_startup_error(logging, &error),
+    };
+    if let Some(log_path) = config.log_path.as_deref()
+        && let Err(error) = logging.use_log_file(log_path)
+    {
+        exit_on_startup_error(logging, &error);
+    }
+    tracing::info!("Initialized tracing logger");
     config.resolve_runtime_options();
     let reload = ReloadSignal::new();
-    install_signal_handlers(reload.clone())?;
+    if let Err(error) = install_signal_handlers(reload.clone()) {
+        exit_on_startup_error(logging, &error);
+    }
     let controller = Controller::new(config, reload);
     tracing::info!("Data Broker started");
     if let Err(error) = controller.run().await {
         tracing::error!("Terminated with error: {error}");
-        std::process::exit(1);
+        drop(logging);
+        exit(1);
     }
     tracing::info!("Data Broker completed");
-    Ok(())
 }
 
 /// Runs remote mode, which takes its configuration from the Central Manager.
 ///
 /// The manager client does not exist yet, so after preparing the state
 /// directory this logs that remote mode is not available and exits 1.
-fn run_remote(args: &RemoteArgs) -> anyhow::Result<()> {
-    let guard = init_tracing(None)?;
-    let state_dir = prepare_state_dir(&args.state_dir)?;
+fn run_remote(logging: Logging, args: &RemoteArgs) -> ! {
+    tracing::info!("Initialized tracing logger");
+    let state_dir = match prepare_state_dir(&args.state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(error) => exit_on_startup_error(logging, &error),
+    };
     tracing::info!(
         "Remote mode: manager {}@{}, certificate {}, key {}, CA certificates {}, \
          state directory {}",
@@ -153,71 +169,55 @@ fn run_remote(args: &RemoteArgs) -> anyhow::Result<()> {
         state_dir.display()
     );
     tracing::error!("Remote mode is not available in this build");
-    drop(guard);
+    drop(logging);
     exit(1);
 }
 
 /// Parses the command line arguments.
 ///
-/// Prints the reason and the usage and exits 1 when the invocation is
-/// refused.
-fn parse() -> Invocation {
+/// # Errors
+///
+/// Returns the reason the invocation is refused.
+fn parse() -> Result<Invocation, String> {
     let args = env::args().skip(1).collect::<Vec<_>>();
-    match parse_args(&args) {
-        Ok(invocation) => invocation,
-        Err(reason) => {
-            eprintln!("Error: {reason}");
-            eprintln!();
-            eprint!("{USAGE}");
-            exit(1);
-        }
+    parse_args(&args)
+}
+
+/// Reports a refused invocation and exits 1.
+///
+/// Under the journal the reason and the usage are logged as one ERROR event;
+/// elsewhere they are printed on stderr.
+fn refuse(logging: Logging, reason: &str) -> ! {
+    if logging.is_journal() {
+        tracing::error!("Error: {reason}\n\n{}", USAGE.trim_end());
+        drop(logging);
+    } else {
+        drop(logging);
+        eprintln!("Error: {reason}");
+        eprintln!();
+        eprint!("{USAGE}");
     }
+    exit(1);
+}
+
+/// Reports an error that stops start-up and exits 1.
+///
+/// Under the journal the error chain is logged as one ERROR event; elsewhere
+/// it is printed on stderr as `main` would print it. The log writer is
+/// flushed before the process exits.
+fn exit_on_startup_error(logging: Logging, error: &anyhow::Error) -> ! {
+    if logging.is_journal() {
+        tracing::error!("{error:#}");
+        drop(logging);
+    } else {
+        drop(logging);
+        eprintln!("Error: {error:?}");
+    }
+    exit(1);
 }
 
 fn version() -> String {
     format!("REproduce {}", env!("CARGO_PKG_VERSION"))
-}
-
-/// Initializes the tracing subscriber and returns a `WorkerGuard`.
-///
-/// Logs will be written to the file specified by `log_path` if provided.
-/// If `log_path` is `None`, logs will be printed to stdout.
-///
-/// Both branches default to INFO when `RUST_LOG` is unset; set `RUST_LOG` to
-/// override the default level.
-fn init_tracing(log_path: Option<&std::path::Path>) -> anyhow::Result<WorkerGuard> {
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    let (layer, guard) = if let Some(log_path) = log_path {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-            .with_context(|| format!("Failed to open the log file: {}", log_path.display()))?;
-        let (non_blocking, file_guard) = tracing_appender::non_blocking(file);
-        (
-            fmt::Layer::default()
-                .with_ansi(false)
-                .with_target(false)
-                .with_writer(non_blocking)
-                .with_filter(env_filter),
-            file_guard,
-        )
-    } else {
-        let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
-        (
-            fmt::Layer::default()
-                .with_ansi(true)
-                .with_writer(stdout_writer)
-                .with_filter(env_filter),
-            stdout_guard,
-        )
-    };
-
-    tracing_subscriber::Registry::default().with(layer).init();
-    tracing::info!("Initialized tracing logger");
-    Ok(guard)
 }
 
 const SERVICE_NAMES: [&str; 7] = [
