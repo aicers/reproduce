@@ -571,59 +571,106 @@ All rules in this section apply to remote-mode collectors only.
   `src/trust/activation.rs:398-427`, per-host delivery
   `src/trust/delivery.rs:385-392`), so key revocations and build withdrawals
   wait for every Host Agent to read *V*.
-- **[DECISION] Applying it to this RFC: one step.** No versioned bootler release
-  has shipped (§2.3), so no released consumer reads below 8 and step 1 is
-  skipped: deploy-core goes to `MANIFEST_FORMAT_VERSION =
-  MAX_MANIFEST_FORMAT_VERSION = 8` in one release (the deploy-core issue,
-  [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167)).
-  The one-step path holds only while no versioned bootler release ships with a
-  roxyd or REview that reads below format 8: the first versioned bootler release
-  after that deploy-core change must carry the roxyd and review releases of
+- **[DECISION] Applying it to this RFC: two steps in bootler (amended
+  2026-10-23).** deploy-core went to `MANIFEST_FORMAT_VERSION =
+  MAX_MANIFEST_FORMAT_VERSION = 8` in one release, `0.3.0` (the deploy-core
+  issue,
+  [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167)),
+  and the roxyd and review releases of
   [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351) and
-  [aicers/review#2369](https://github.com/aicers/review/issues/2369). If any
-  versioned bootler release ships before that with an older roxyd or REview pin,
-  the hosts it reaches need a readers release, and the RFC is revised to the
-  two-step path before work continues.
-- **[DECISION] Release order.** deploy-core, then roxyd and review with the new
-  pin, then bootler
-  ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985)), which
-  carries those roxyd and review releases in the same change. Before installing
-  REproduce, operators update the REview host with `bootler-security update` and
-  each module host's roxyd through the UI; REview's format check (§4.9) refuses,
-  with a reason, any package a host's roxyd cannot read.
+  [aicers/review#2369](https://github.com/aicers/review/issues/2369) link it, so
+  they read 8. bootler, whose release tool is the writer of every Security
+  package, applies the rule in two changes. A pull request's Security asset is
+  prepared by the release tool on bootler's `main`, not by the pull request's
+  own (bootler `docs/release.md`, "Signed Security releases"), so one change
+  that moved the tool to format 8 and added `reproduce` would get an asset from
+  the old tool, without `modules/reproduce.pkg`, which its own installer
+  refuses. Both changes are sub-issues of
+  [aicers/bootler#985](https://github.com/aicers/bootler/issues/985), which they
+  replace as this RFC's bootler change:
+  - **Step 1,
+    [aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004):** the
+    tool and the CLI move to deploy-core `0.3.0`, the `roxyd` and `review` pins
+    move to readers of format 8, and `aice-web-next` to a commit that vendors
+    that REview's schema and shows its format refusal
+    ([aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240)).
+    Its asset is prepared by the tool on `main` before it, which still stamps 7,
+    so it is the readers release. From its merge on, `main`'s tool stamps 8 on
+    every Security asset and trust generation, and `main` pins readers of 8, so
+    every Security asset `main` carries afterwards is readable by its own roxyd
+    and REview.
+  - **Step 2,
+    [aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005):** the
+    recipe adds `reproduce`. Its asset is the first with
+    `modules/reproduce.pkg`; like every Security asset after step 1, it is
+    stamped 8.
+
+  The reader pins are in step 1, not step 2: from step 1's merge `main` stamps
+  8, so a Security asset published between the steps, another pin mover's,
+  would otherwise carry roxyd `0.1.8` and REview `0.61.0`, which read only up to
+  7. No versioned bootler release has shipped (§2.3). While none ships before
+  step 1 merges, every versioned bootler release carries readers of 8 and none
+  needs the "cannot be skipped" mark. If one ships earlier, step 1's release is
+  its hosts' readers release: it carries the mark in bootler's release notes,
+  and this RFC is amended before step 1 merges.
+- **[DECISION] Release order.** deploy-core; then roxyd and review with the new
+  pin; then bootler step 1
+  ([aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004)), which
+  pins those roxyd and review releases and an aice-web-next commit that vendors
+  that REview's schema and carries aice-web-next#1240; then, once the REproduce
+  release with §4.1-§4.6 is published and aice-web-next#1239 is merged, bootler
+  step 2 ([aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005)).
+  Before installing REproduce, operators update the REview host with
+  `bootler-security update` and each module host's roxyd through the UI;
+  REview's format check (§4.9) refuses, with a reason, any package a host's
+  roxyd cannot read.
 - **[DECISION] bootler bookkeeping.**
-  - Bump deploy-core; bump the payload recipe pins of `roxyd`, `review` and
-    `aice-web-next` (`versions/components.toml:501-503`, `:535-537`, `:603-605`)
-    to the releases of
-    [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351) and
-    [aicers/review#2369](https://github.com/aicers/review/issues/2369) and an
-    aice-web-next commit carrying
-    [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239)
-    and
-    [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240),
-    in the same change as the rest of this bookkeeping
-    ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985)), so
-    every release of bootler that stamps format 8 also carries readers of it and
-    a UI that can configure REproduce.
-  - `UnitTemplateSource` (`core/src/product.rs:491-524`) gains the field; the
-    five existing unit constants (`:728`, `:765`, `:955`, `:992`, `:1021`)
-    declare none.
-  - Add `reproduce` to `PACKAGE_REGISTRY`, the process paths, `SPEC_CATALOGUE`,
-    `REGISTERED_MODULES` (`core/src/provisioning_file.rs:49`), and every
-    five-module test list and golden (the `PACKAGED_MODULES` and
-    `MANAGER_DIALLING_MODULES` constants, `product.rs:3876-3884`, and the lists
-    in identity, provisioning, carrier, staging, release-tool and
-    `e2e/single/assert_release_records.sh`). Tests that use `reproduce` as the
-    stock unregistered package id switch to a fixture id that will never be
-    registered (`not-a-package`).
-  - The comment block at `versions/components.toml:613-619` ("reproduce
-    deliberately absent") is rewritten.
-  - `docs/modules.md` gains a REproduce section in the existing shape
-    (Invocation, Configuration, Data directory, Privileges beyond the product
-    account — `adm` —, Listening addresses — none —, Certificate reload,
-    Compatibility) and joins the shared tables; `docs/release.md` member counts
-    and the RFC 0004 sentences that call `reproduce` unpackaged or count five
-    modules are updated.
+  - **Step 1
+    ([aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004)).**
+    Bump deploy-core to `0.3.0`. `UnitTemplateSource`
+    (`core/src/product.rs:491-524`) gains the field, and the five existing unit
+    constants (`:728`, `:765`, `:955`, `:992`, `:1021`) declare none. bootler's
+    exhaustive matches on deploy-core's errors gain messages (en and ko) for the
+    four new variants, and the tests written against format 7 move to 8 as they
+    did for 6 to 7. Add `REPRODUCE_UNIT` (above) with its golden, its process
+    path and its `SPEC_CATALOGUE` row (`SIGHUP` reload); all three are final in
+    step 1, because step 2's asset is prepared by step 1's tool from that row.
+    `reproduce` joins the test-only `PACKAGED_MODULES` and
+    `MANAGER_DIALLING_MODULES` (`product.rs:3876-3884`), so the unit's property
+    tests run on it in step 1. Let a Security recipe opt `reproduce` in, as
+    bootler did for `bootroot-agent` and `bootroot-remote`: a recipe that pins
+    `reproduce` packages it as a module after `crusher`, with its spec, and
+    refuses any dispositions but `["stage"]`; any other recipe keeps the
+    ten-member set. The runtime registry does not change. `docs/release.md`
+    states the readers-first rule above. Move the payload recipe pins of
+    `roxyd`, `review` and `aice-web-next` (`versions/components.toml:501-503`,
+    `:535-537`, `:603-605`) as step 1 above says. Tests that use `reproduce` as
+    an uncatalogued id switch to a fixture id that will never be registered
+    (`not-a-package`).
+  - **Step 2 ([aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005)).**
+    - Add the `reproduce` recipe entry (above). Move `aice-web-next` to a
+      commit carrying
+      [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239)
+      and
+      [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240)
+      unless step 1's already does, so the release that first ships the
+      `reproduce` package also ships a UI that can configure it.
+    - Fold the opt-in into the registry: add `reproduce` to `PACKAGE_REGISTRY`,
+      `REGISTERED_MODULES` (`core/src/provisioning_file.rs:49`) and every
+      five-module test list and golden (the lists in identity, provisioning,
+      carrier, staging, release-tool and
+      `e2e/single/assert_release_records.sh`); the tests that use `reproduce` as
+      an unregistered id switch to `not-a-package`. bootler's fixed daily
+      update pair is re-cut to two eleven-member releases, since the folded
+      CLI refuses a carrier without `reproduce`.
+    - The comment block at `versions/components.toml:613-619` ("reproduce
+      deliberately absent") is rewritten.
+    - `docs/modules.md` gains a REproduce section in the existing shape
+      (Invocation, Configuration, Data directory, Privileges beyond the product
+      account — `adm` —, Listening addresses — none —, Certificate reload,
+      Compatibility) and joins the shared tables; `docs/release.md` member
+      counts and the RFC 0004 sentences that call `reproduce` unpackaged or
+      count five modules are updated.
 - **[DECISION] Operator prerequisites, stated in bootler's release notes and
   `docs/modules.md`:** update the REview host with the new bootler release (it
   writes the `reproduce` provisioning entry REview admits packages against and
@@ -731,8 +778,9 @@ All rules in this section apply to remote-mode collectors only.
     §4.8): "The Host Agent on {host} reads package formats {min}–{max} and
     cannot read this update (format {v}). Upload the Host Agent package of the
     release that added readers for format {v}, update to it, then update again."
-    This applies to format changes that shipped a readers release; under this
-    RFC's one-step change no deployed host can reach it (§4.8);
+    This applies to a host that skipped a readers release. Under this RFC only
+    a host installed from a Security asset published before §4.8's step 1 can
+    reach it, and the release it names is step 1's;
   - package older than the host reads (`v < min`): "This package is format {v},
     older than the Host Agent on {host} accepts ({min}–{max}). Choose a newer
     build."
@@ -760,11 +808,12 @@ All rules in this section apply to remote-mode collectors only.
   0.31.0 (§2.1).
 - REview: the manager handshake uses review-protocol's protocol version
   (`0.49.0`), accepted by REview 0.61.0. Installing REproduce needs the REview
-  release with §4.9 and a REview host updated by the bootler release of §4.8.
+  release with §4.9 and a REview host updated by the bootler release of §4.8's
+  step 2 or later.
 - roxyd and REview: both must be built with the deploy-core of §4.8 before any
-  package of that bootler release, REproduce included, can be uploaded or
-  installed. REview's format check (§4.9) turns a skipped Host Agent update into
-  a refusal that names what to update.
+  package stamped 8 (every Security asset after §4.8's step 1), REproduce
+  included, can be uploaded or installed. REview's format check (§4.9) turns a
+  skipped Host Agent update into a refusal that names what to update.
 - Local mode: no behaviour change; existing configuration files and checkpoint
   files keep working.
 
@@ -782,15 +831,19 @@ engine's unit and the module pins).
     [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167)
     is merged, one deploy-core release carries both, so roxyd and review adopt
     deploy-core once.
-  - bootler: [aicers/bootler#985](https://github.com/aicers/bootler/issues/985)
+  - bootler: the two changes of
+    [aicers/bootler#985](https://github.com/aicers/bootler/issues/985)
+    ([aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004) and
+    [aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005), §4.8)
     and RFC 0006's B1 stay separate PRs merged in whichever order their
-    dependencies allow. Both move the `roxyd`, `review` and `aice-web-next`
-    pins; whichever merges second pins a release (for aice-web-next, a commit)
-    that contains both RFCs' required items, never one older than the first PR's
-    pin. Each PR's Security E2E names its asset from its own
+    dependencies allow. Step 1 and B1 move the `roxyd`, `review` and
+    `aice-web-next` pins, and step 2 may move `aice-web-next`; whichever merges
+    later pins a release (for aice-web-next, a commit) that contains every
+    merged change's required items, never one older than an earlier PR's pin.
+    Each PR's Security E2E names its asset from its own
     `versions/components.toml` (bootler `docs/release.md`, "Publishing"), so
-    whichever merges second is rebased onto the first and a human publishes the
-    asset for its own head.
+    whichever merges later is rebased onto the earlier ones and a human
+    publishes the asset for its own head.
   - Both RFCs refuse log kinds Giganto parses as named kinds (§4.2), so
     `collectLogKinds` never offers a kind RFC 0006's training refuses.
   - RFC 0006 accepts `reproduce.<profile.hostname>` as a training source name
@@ -939,8 +992,16 @@ This RFC was decomposed on 2026-10-21 into the umbrella
 [aicers/reproduce#984](https://github.com/aicers/reproduce/issues/984) over the
 fourteen issues below, each titled with the prefix `[REproduce module]`,
 reviewed independently against the code at the time, and linked as a sub-issue
-of the umbrella. Releases between dependent issues are human steps (§3); a
-dependency on an issue in another repository means on its published release (for
+of the umbrella. On 2026-10-23
+[aicers/bootler#985](https://github.com/aicers/bootler/issues/985) was split
+into [aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004) and
+[aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005), its
+sub-issues, and became their umbrella (§4.8); the table lists all three. Step 2
+(§4.8) also depends on
+[aicers/reproduce#1013](https://github.com/aicers/reproduce/issues/1013), a
+defect fix filed by aicers/reproduce#983's verification, which is not one of the
+fourteen. Releases between dependent issues are human steps (§3); a dependency
+on an issue in another repository means on its published release (for
 aice-web-next, its merge commit). No REproduce release is cut between
 [aicers/reproduce#979](https://github.com/aicers/reproduce/issues/979) and
 [aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983).
@@ -960,7 +1021,9 @@ aice-web-next, its merge commit). No REproduce release is cut between
 | [aicers/review#2369](https://github.com/aicers/review/issues/2369) | Accept REproduce packages and refuse unreadable manifest formats | [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167), [aicers/review-database#987](https://github.com/aicers/review-database/issues/987), [aicers/review-web#1119](https://github.com/aicers/review-web/issues/1119) |
 | [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239) | Add the Log Collector node form and log-kind helper | [aicers/review#2369](https://github.com/aicers/review/issues/2369) |
 | [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240) | Show the Central Manager's manifest format refusal | [aicers/review#2369](https://github.com/aicers/review/issues/2369) |
-| [aicers/bootler#985](https://github.com/aicers/bootler/issues/985) | Package REproduce as a Security module | [aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983), [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167), [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351), [aicers/review#2369](https://github.com/aicers/review/issues/2369), [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239), [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240) |
+| [aicers/bootler#985](https://github.com/aicers/bootler/issues/985) | Package REproduce as a Security module | [aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004), [aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005) (its sub-issues) |
+| [aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004) | Adopt manifest format 8 with its readers and let a recipe package REproduce | [aicers/deploy-core#167](https://github.com/aicers/deploy-core/issues/167), [aicers/roxyd#351](https://github.com/aicers/roxyd/issues/351), [aicers/review#2369](https://github.com/aicers/review/issues/2369), [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240) |
+| [aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005) | Package REproduce in the Security recipe | [aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004), [aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983), [aicers/reproduce#1013](https://github.com/aicers/reproduce/issues/1013), [aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239), [aicers/aice-web-next#1240](https://github.com/aicers/aice-web-next/issues/1240) |
 
 ## 9. Decisions recorded at decomposition
 
@@ -1048,12 +1111,14 @@ them, and they are recorded here so this RFC matches them.
   product's own operational logs in a later RFC — can be added without reworking
   them or colliding with a log kind named `journal`.
 - **bootler**
-  ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985)). Before
-  pinning, the issue confirms that the pinned REview admits the pinned
-  REproduce's protocol version and the other modules', that Giganto admits
-  REproduce's ingest version, and that aice-web-next vendors that REview's
-  schema. bootler's exhaustive matches on deploy-core errors gain message arms
-  for the new variants.
+  ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985), split
+  into [aicers/bootler#1004](https://github.com/aicers/bootler/issues/1004) and
+  [aicers/bootler#1005](https://github.com/aicers/bootler/issues/1005), §4.8).
+  Before pinning, each confirms, for the pins it moves, that the pinned REview
+  admits the pinned REproduce's protocol version and the other modules', that
+  Giganto admits REproduce's ingest version, and that aice-web-next vendors that
+  REview's schema. bootler's exhaustive matches on deploy-core errors gain
+  message arms for the new variants.
 - **Review of the issue tree** (comment on
   [aicers/reproduce#984](https://github.com/aicers/reproduce/issues/984),
   2026-10-22). An observed copy-truncate starts a new content epoch: the
