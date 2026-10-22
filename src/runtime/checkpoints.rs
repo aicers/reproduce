@@ -396,7 +396,14 @@ impl Saves<LogPosition> {
 impl<P: Send + Sync + 'static> Saves<P> {
     /// Saves `position`, logging a failure when the state changes.
     pub(super) async fn save(self: &Arc<Self>, position: &P) -> Outcome {
-        let outcome = self.write(self.request(), position, false).await;
+        self.save_as(self.request(), position).await
+    }
+
+    /// Saves `position` as the save numbered `sequence`, which
+    /// [`request`](Self::request) returned, logging a failure when the state
+    /// changes.
+    async fn save_as(self: &Arc<Self>, sequence: u64, position: &P) -> Outcome {
+        let outcome = self.write(sequence, position, false).await;
         match &outcome {
             Outcome::Landed => {
                 debug!(
@@ -481,7 +488,7 @@ impl<P: Send + Sync + 'static> Saves<P> {
 
     /// Writes `position` as the save numbered `sequence`, unless the state
     /// is retired or a later save has landed; `last` retires the state
-    /// after the write.
+    /// with this write, even one that is superseded or fails.
     async fn write(self: &Arc<Self>, sequence: u64, position: &P, last: bool) -> Outcome {
         let bytes = (self.encode)(position);
         let this = Arc::clone(self);
@@ -495,14 +502,14 @@ impl<P: Send + Sync + 'static> Saves<P> {
         if self.retired.load(Ordering::SeqCst) {
             return Outcome::Retired;
         }
-        if self.landed.load(Ordering::SeqCst) > sequence {
-            return Outcome::Superseded;
-        }
-        let result = write_atomically(&self.dirs, &self.tmp, &self.file, bytes);
+        // Under the lock, so no other write sees it before this one ends.
         if last {
             self.retire();
         }
-        match result {
+        if self.landed.load(Ordering::SeqCst) > sequence {
+            return Outcome::Superseded;
+        }
+        match write_atomically(&self.dirs, &self.tmp, &self.file, bytes) {
             Ok(()) => {
                 self.landed.store(sequence, Ordering::SeqCst);
                 self.writes.fetch_add(1, Ordering::SeqCst);
@@ -543,13 +550,17 @@ where
         if let Some(last_write) = last_write {
             tokio::time::sleep_until(last_write + SAVE_INTERVAL).await;
         }
+        // Requested before the snapshot, so a save requested after it, such
+        // as a starting position's, is never overwritten by an older
+        // position.
+        let sequence = saves.request();
         let (version, position) = acks.snapshot();
         let Some(position) = position else {
             saved_version = version;
             continue;
         };
         last_write = Some(Instant::now());
-        match saves.save(&position).await {
+        match saves.save_as(sequence, &position).await {
             outcome if outcome.saved() => saved_version = version,
             Outcome::Retired => return,
             _ => tokio::time::sleep(POLLING_INTERVAL).await,
@@ -837,6 +848,29 @@ mod tests {
         assert_eq!(
             fs::read(log_file(state.path(), KIND))?,
             encode_log(KIND, path, &position(7))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_superseded_final_save_still_retires() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let path = Path::new("/a.log");
+        let saves = saves(&state, path);
+        let last = saves.request();
+        let later = saves.request();
+        assert!(matches!(
+            saves.write(later, &position(2), false).await,
+            Outcome::Landed
+        ));
+        assert!(matches!(
+            saves.write(last, &position(1), true).await,
+            Outcome::Superseded
+        ));
+        assert!(matches!(saves.save(&position(3)).await, Outcome::Retired));
+        assert_eq!(
+            fs::read(log_file(state.path(), KIND))?,
+            encode_log(KIND, path, &position(2))
         );
         Ok(())
     }
