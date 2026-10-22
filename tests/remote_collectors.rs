@@ -5,7 +5,8 @@
 //! version requirement, verifies client certificates against an rcgen CA,
 //! and reads every stream's record header and batches. It sends a data ACK
 //! for every record and the close ACK for every close marker, unless told to
-//! withhold the close ACK, and can stop a stream or close a connection.
+//! withhold the data ACKs or the close ACK, and can stop a stream or close a
+//! connection.
 
 mod support;
 
@@ -90,6 +91,9 @@ impl StreamRecord {
 struct GigantoState {
     version_req: Mutex<String>,
     withhold: watch::Sender<Withhold>,
+    /// The kinds whose data ACKs are withheld; their records are still
+    /// stored.
+    withhold_acks: Mutex<HashSet<String>>,
     /// When a connection failed before its Giganto handshake, as a TLS
     /// refusal does.
     refused: Mutex<Vec<Instant>>,
@@ -122,6 +126,7 @@ impl Giganto {
         let state = Arc::new(GigantoState {
             version_req: Mutex::new(GIGANTO_VERSION_REQ.to_string()),
             withhold: watch::channel(Withhold::Nothing).0,
+            withhold_acks: Mutex::new(HashSet::new()),
             refused: Mutex::new(Vec::new()),
             version_refused: Mutex::new(Vec::new()),
             connections: Mutex::new(Vec::new()),
@@ -150,6 +155,11 @@ impl Giganto {
 
     fn withhold(&self, withhold: Withhold) {
         self.state.withhold.send_replace(withhold);
+    }
+
+    /// Withholds the data ACKs of `kinds` from now on, and only theirs.
+    fn withhold_acks(&self, kinds: &[&str]) {
+        *lock(&self.state.withhold_acks) = kinds.iter().map(|kind| (*kind).to_string()).collect();
     }
 
     fn stop_next_streams(&self, count: usize) {
@@ -304,9 +314,13 @@ async fn read_stream(
                     .wait_for(|withhold| !withhold.holds(kind.as_deref()))
                     .await;
             } else if let Ok(log) = bincode::deserialize::<Log>(&data) {
+                let withheld = lock(&state.withhold_acks).contains(&log.kind);
                 lock(&state.streams)[index]
                     .records
                     .push((log.kind, String::from_utf8_lossy(&log.log).into_owned()));
+                if withheld {
+                    continue;
+                }
             }
             let _ = send.write_all(&timestamp.to_be_bytes()).await;
         }
@@ -321,9 +335,14 @@ struct LogFiles {
 
 impl LogFiles {
     fn new() -> Result<Self> {
-        Ok(Self {
-            dir: tempfile::tempdir()?,
-        })
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir(dir.path().join("state"))?;
+        Ok(Self { dir })
+    }
+
+    /// The state directory of the test's runtime.
+    fn state(&self) -> PathBuf {
+        self.path("state")
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -369,8 +388,9 @@ fn config(addr: SocketAddr, collectors: &[(&str, &Path)]) -> RemoteConfig {
     }
 }
 
-fn runtime(files: &TlsFiles, reload: &ReloadSignal) -> CollectorRuntime {
-    CollectorRuntime::new(files.clone(), reload.clone()).with_retry_interval(RETRY)
+fn runtime(files: &TlsFiles, reload: &ReloadSignal, state_dir: &Path) -> CollectorRuntime {
+    CollectorRuntime::new(files.clone(), reload.clone(), state_dir.to_path_buf())
+        .with_retry_interval(RETRY)
 }
 
 /// Waits until `condition` holds, at most `within`.
@@ -394,6 +414,70 @@ fn log_header() -> u32 {
     u32::from(RawEventKind::Log)
 }
 
+/// The checkpoint file of `kind` in `state_dir`.
+fn checkpoint_file(state_dir: &Path, kind: &str) -> PathBuf {
+    state_dir
+        .join("checkpoints")
+        .join("log")
+        .join(format!("{kind}.json"))
+}
+
+/// The checkpoint of `kind`, if it can be read.
+fn checkpoint(state_dir: &Path, kind: &str) -> Option<serde_json::Value> {
+    let bytes = std::fs::read(checkpoint_file(state_dir, kind)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The checkpoint of `kind` for `path` at `offset` in its current file.
+#[cfg(unix)]
+fn record(kind: &str, path: &Path, offset: u64) -> serde_json::Value {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(path).expect("the file exists");
+    serde_json::json!({
+        "type": "log",
+        "kind": kind,
+        "path": path.to_str().expect("a UTF-8 path"),
+        "dev": metadata.dev(),
+        "ino": metadata.ino(),
+        "offset": offset,
+    })
+}
+
+fn length(path: &Path) -> u64 {
+    std::fs::metadata(path).expect("the file exists").len()
+}
+
+/// Waits until the checkpoint of `kind` is `expected`, at most `within`.
+async fn wait_for_checkpoint(
+    state_dir: &Path,
+    kind: &str,
+    expected: &serde_json::Value,
+    within: Duration,
+) {
+    let deadline = Instant::now() + within;
+    loop {
+        let found = checkpoint(state_dir, kind);
+        if found.as_ref() == Some(expected) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the checkpoint of {kind} to be {expected}, found {found:?}"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The stop lines logged for `kind`.
+fn stop_lines(text: &str, kind: &str) -> Vec<String> {
+    let prefix = format!("Stopped collector {kind} for ");
+    text.lines()
+        .filter(|line| line.contains(&prefix))
+        .map(str::to_string)
+        .collect()
+}
+
 /// A PKI, a Giganto server trusting it, and client files issued by it.
 fn setup() -> Result<(Pki, Giganto, Files)> {
     let pki = Pki::new()?;
@@ -409,7 +493,7 @@ async fn two_collectors_share_one_connection() -> Result<()> {
     let a = logs.create("a.log", &["a1", "a2"])?;
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -450,7 +534,7 @@ async fn sixty_four_collectors_share_one_connection() -> Result<()> {
         collectors.push((kind, path));
     }
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     let entries = collectors
         .iter()
@@ -490,7 +574,7 @@ async fn applies_add_and_remove_collectors() -> Result<()> {
     let a = logs.create("a.log", &["a1"])?;
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
     wait_for_lines(&giganto, "kind_a", &["a1"]).await;
@@ -559,7 +643,7 @@ async fn address_change_from_a_silent_port_takes_effect() -> Result<()> {
     let a = logs.create("a.log", &["a1"])?;
     let silent = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     let started = Instant::now();
     runtime
@@ -594,7 +678,7 @@ async fn address_change_moves_kept_streams_to_the_new_connection() -> Result<()>
     let b = logs.create("b.log", &["b1"])?;
     let c = logs.create("c.log", &["c1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(first.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -611,6 +695,9 @@ async fn address_change_moves_kept_streams_to_the_new_connection() -> Result<()>
         "Stopped collector kind_b for {} without a close marker",
         b.display()
     )));
+    sleep(SETTLE).await;
+    let lines = stop_lines(&logs_capture.text(), "kind_b");
+    assert_eq!(lines.len(), 1, "{lines:?}");
     wait_for_lines(&second, "kind_c", &["c1"]).await;
     let old = first.connection(0);
     wait_for("the old connection is closed", WAIT, || {
@@ -642,7 +729,7 @@ async fn tls_refusal_before_the_first_connect_ends_with_new_files() -> Result<()
     let logs = LogFiles::new()?;
     let a = logs.create("a.log", &["a1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
     wait_for("connects are refused and retried", WAIT, || {
@@ -676,7 +763,7 @@ async fn tls_refusal_on_reconnects_ends_after_reload() -> Result<()> {
     let a = logs.create("a.log", &["a1"])?;
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -726,7 +813,7 @@ async fn version_refusal_is_retried() -> Result<()> {
     let logs = LogFiles::new()?;
     let a = logs.create("a.log", &["a1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     // Before the first connection.
     runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
@@ -775,7 +862,7 @@ async fn lost_connection_is_replaced_once_for_every_stream() -> Result<()> {
     let a = logs.create("a.log", &["a1"])?;
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -830,8 +917,8 @@ async fn stopped_stream_is_reopened_alone_and_spaced() -> Result<()> {
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
     let retry = Duration::from_secs(1);
-    let mut runtime =
-        CollectorRuntime::new(files.files.clone(), reload.clone()).with_retry_interval(retry);
+    let mut runtime = CollectorRuntime::new(files.files.clone(), reload.clone(), logs.state())
+        .with_retry_interval(retry);
 
     runtime
         .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -907,7 +994,7 @@ async fn missing_and_unusable_paths_do_not_stop_others() -> Result<()> {
     let dir = logs.path("dir.log");
     std::fs::create_dir(&dir)?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(
@@ -967,12 +1054,13 @@ async fn missing_and_unusable_paths_do_not_stop_others() -> Result<()> {
 
 #[tokio::test]
 async fn removal_without_a_close_ack_returns_by_the_deadline() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
     let (_pki, giganto, files) = setup()?;
     let logs = LogFiles::new()?;
     let a = logs.create("a.log", &["a1"])?;
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -992,6 +1080,8 @@ async fn removal_without_a_close_ack_returns_by_the_deadline() -> Result<()> {
     assert!(giganto.streams_of("kind_b")[0].close_marker);
     let kept = &giganto.streams_of("kind_a")[0];
     assert!(kept.ended.is_none() && !kept.close_marker);
+    sleep(SETTLE).await;
+    assert_one_deadline_stop_line(&logs_capture.text(), "kind_b", &b);
 
     giganto.withhold(Withhold::Nothing);
     runtime.shutdown().await;
@@ -1000,12 +1090,13 @@ async fn removal_without_a_close_ack_returns_by_the_deadline() -> Result<()> {
 
 #[tokio::test]
 async fn shutdown_without_close_acks_returns_after_the_deadline() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
     let (_pki, giganto, files) = setup()?;
     let logs = LogFiles::new()?;
     let a = logs.create("a.log", &["a1"])?;
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -1020,7 +1111,29 @@ async fn shutdown_without_close_acks_returns_after_the_deadline() -> Result<()> 
     assert!(elapsed >= CLOSE_DEADLINE, "{elapsed:?}");
     assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
     assert!(giganto.streams().iter().all(|stream| stream.close_marker));
+    sleep(SETTLE).await;
+    let text = logs_capture.text();
+    assert_one_deadline_stop_line(&text, "kind_a", &a);
+    assert_one_deadline_stop_line(&text, "kind_b", &b);
     Ok(())
+}
+
+/// Asserts that the collector of `kind` logged one stop line, for a close
+/// cut off at the deadline.
+///
+/// The close's own 15 s wait for the close ACK ends within the same timer
+/// tick as the deadline, so either side can log the line, never both.
+fn assert_one_deadline_stop_line(text: &str, kind: &str, path: &Path) {
+    let lines = stop_lines(text, kind);
+    assert_eq!(lines.len(), 1, "{text}");
+    let prefix = format!("Stopped collector {kind} for {} ", path.display());
+    assert!(
+        lines[0].contains(&format!(
+            "{prefix}at the close deadline, without waiting further"
+        )) || lines[0].contains(&format!("{prefix}with close ACK TimedOut")),
+        "{}",
+        lines[0]
+    );
 }
 
 #[tokio::test]
@@ -1031,7 +1144,7 @@ async fn shutdown_after_a_dropped_apply_stops_every_collector() -> Result<()> {
     let a = logs.create("a.log", &["a1"])?;
     let b = logs.create("b.log", &["b1"])?;
     let reload = ReloadSignal::new();
-    let mut runtime = runtime(&files.files, &reload);
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
 
     runtime
         .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
@@ -1075,6 +1188,291 @@ async fn shutdown_after_a_dropped_apply_stops_every_collector() -> Result<()> {
             "{text}"
         );
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn checkpoints_follow_the_acknowledged_lines() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let b = logs.create("b.log", &["b1", "", "b2"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+
+    runtime
+        .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
+        .await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    wait_for_lines(&giganto, "kind_b", &["b1", "b2"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    wait_for_checkpoint(&state, "kind_b", &record("kind_b", &b, length(&b)), WAIT).await;
+
+    // While the readers wait at EOF, each acknowledged line reaches the
+    // checkpoint within a second.
+    append(&a, "a2")?;
+    append(&b, "b3")?;
+    wait_for_lines(&giganto, "kind_a", &["a2"]).await;
+    wait_for_lines(&giganto, "kind_b", &["b3"]).await;
+    let within = Duration::from_secs(1) + Duration::from_millis(500);
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), within).await;
+    wait_for_checkpoint(&state, "kind_b", &record("kind_b", &b, length(&b)), within).await;
+
+    // A clean stop saves everything written.
+    append(&a, "a3")?;
+    wait_for_lines(&giganto, "kind_a", &["a3"]).await;
+    runtime.shutdown().await;
+    assert_eq!(
+        checkpoint(&state, "kind_a"),
+        Some(record("kind_a", &a, length(&a)))
+    );
+    assert_eq!(
+        checkpoint(&state, "kind_b"),
+        Some(record("kind_b", &b, length(&b)))
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_without_acks_saves_the_last_acknowledged_line() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let b = logs.create("b.log", &["b1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+
+    runtime
+        .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
+        .await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    let acknowledged = length(&a);
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, acknowledged), WAIT).await;
+
+    // kind_a's later lines and its close are never acknowledged.
+    giganto.withhold_acks(&["kind_a"]);
+    giganto.withhold(Withhold::Kinds(HashSet::from(["kind_a".to_string()])));
+    append(&a, "a2")?;
+    append(&a, "a3")?;
+    wait_for_lines(&giganto, "kind_a", &["a2", "a3"]).await;
+    sleep(SETTLE).await;
+    assert_eq!(
+        checkpoint(&state, "kind_a"),
+        Some(record("kind_a", &a, acknowledged))
+    );
+
+    let started = Instant::now();
+    runtime.shutdown().await;
+    assert!(started.elapsed() >= CLOSE_DEADLINE);
+    assert_eq!(
+        checkpoint(&state, "kind_a"),
+        Some(record("kind_a", &a, acknowledged))
+    );
+    assert_eq!(
+        checkpoint(&state, "kind_b"),
+        Some(record("kind_b", &b, length(&b)))
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_replaced_stream_keeps_the_acknowledged_position() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    let acknowledged = length(&a);
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, acknowledged), WAIT).await;
+
+    // a2 is never acknowledged, and its stream is stopped.
+    giganto.withhold_acks(&["kind_a"]);
+    append(&a, "a2")?;
+    wait_for_lines(&giganto, "kind_a", &["a2"]).await;
+    giganto.stop_stream_of("kind_a")?;
+    append(&a, "a3")?;
+    wait_for("a3 arrives on a new stream", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(1)
+            .is_some_and(|stream| stream.lines().contains(&"a3".to_string()))
+    })
+    .await;
+
+    // The position stays put while the reader idles.
+    sleep(SETTLE).await;
+    assert_eq!(
+        checkpoint(&state, "kind_a"),
+        Some(record("kind_a", &a, acknowledged))
+    );
+
+    // It moves on once a line sent on the new stream is acknowledged.
+    giganto.withhold_acks(&[]);
+    append(&a, "a4")?;
+    wait_for_lines(&giganto, "kind_a", &["a4"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_starting_position_is_saved_before_sending() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    // A directory in the way of the temporary file makes every save fail.
+    let obstacle = state
+        .join("checkpoints")
+        .join("log")
+        .join("kind_a.json.tmp");
+    std::fs::create_dir_all(&obstacle)?;
+    giganto.withhold_acks(&["kind_a"]);
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    // More than two retries of every 3 s.
+    sleep(Duration::from_secs(7)).await;
+    assert!(giganto.streams().is_empty(), "{:?}", giganto.streams());
+    assert!(checkpoint(&state, "kind_a").is_none());
+    let text = logs_capture.text();
+    let warnings = text
+        .lines()
+        .filter(|line| {
+            line.contains("WARN") && line.contains("Cannot save the checkpoint of kind_a")
+        })
+        .count();
+    assert_eq!(warnings, 1, "{text}");
+
+    std::fs::remove_dir(&obstacle)?;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    // Nothing is acknowledged, so the checkpoint is the starting position.
+    assert_eq!(checkpoint(&state, "kind_a"), Some(record("kind_a", &a, 0)));
+    assert!(
+        logs_capture
+            .text()
+            .contains("Saved the checkpoint of kind_a again")
+    );
+
+    giganto.withhold_acks(&[]);
+    runtime.shutdown().await;
+    assert!(!logs_capture.text().contains("ERROR"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_corrupt_checkpoint_is_replaced_by_the_starting_position() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let file = checkpoint_file(&state, "kind_a");
+    std::fs::create_dir_all(file.parent().context("a parent")?)?;
+    std::fs::write(&file, b"{\"type\":\"log\",")?;
+    giganto.withhold_acks(&["kind_a"]);
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    assert_eq!(checkpoint(&state, "kind_a"), Some(record("kind_a", &a, 0)));
+    let text = logs_capture.text();
+    let expected = format!(
+        "Checkpoint {} is unusable: not valid JSON; using the end of {} instead",
+        file.display(),
+        a.display()
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("WARN") && line.contains(&expected)),
+        "{text}"
+    );
+
+    giganto.withhold_acks(&[]);
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn applies_delete_and_replace_checkpoints() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let moved = logs.create("moved.log", &["m1", "m2"])?;
+    let b = logs.create("b.log", &["b1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+
+    runtime
+        .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
+        .await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    wait_for_lines(&giganto, "kind_b", &["b1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    wait_for_checkpoint(&state, "kind_b", &record("kind_b", &b, length(&b)), WAIT).await;
+    let journal = state.join("checkpoints").join("journal.json");
+    std::fs::write(&journal, b"{}\n")?;
+    let stray = state
+        .join("checkpoints")
+        .join("log")
+        .join("kind_b.json.tmp");
+    std::fs::write(&stray, b"{")?;
+    // kind_b has a line in flight as it is removed.
+    append(&b, "b2")?;
+
+    runtime
+        .apply(config(giganto.addr, &[("kind_a", &moved)]))
+        .await;
+    assert!(!checkpoint_file(&state, "kind_b").exists());
+    assert!(!stray.exists());
+    assert!(journal.exists());
+    assert!(
+        logs_capture
+            .text()
+            .contains("Deleted the checkpoint of kind_b")
+    );
+    wait_for_checkpoint(
+        &state,
+        "kind_a",
+        &record("kind_a", &moved, length(&moved)),
+        WAIT,
+    )
+    .await;
+    assert!(logs_capture.text().contains(&format!(
+        "Checkpoint {} is for {}, not {}; it will be replaced",
+        checkpoint_file(&state, "kind_a").display(),
+        a.display(),
+        moved.display()
+    )));
+
+    // Nothing of a removed collector lands afterwards.
+    sleep(SETTLE).await;
+    assert!(!checkpoint_file(&state, "kind_b").exists());
+    assert_eq!(
+        checkpoint(&state, "kind_a"),
+        Some(record("kind_a", &moved, length(&moved)))
+    );
+
+    runtime.shutdown().await;
+    assert!(!checkpoint_file(&state, "kind_b").exists());
     Ok(())
 }
 
@@ -1171,5 +1569,13 @@ path = "{}"
         giganto.streams(),
         output()
     );
+    for (kind, path) in [("kind_a", &a), ("kind_b", &b)] {
+        assert_eq!(
+            checkpoint(state_dir.path(), kind),
+            Some(record(kind, path, length(path))),
+            "{}",
+            output()
+        );
+    }
     Ok(())
 }

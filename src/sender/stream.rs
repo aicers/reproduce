@@ -328,8 +328,9 @@ impl GigantoStream {
     ///
     /// # Errors
     ///
-    /// Returns an error if the channel-close message cannot be sent or the
-    /// stream cannot be finished.
+    /// Returns an error if the channel-close message cannot be sent, or
+    /// [`SenderError::FinishStream`], carrying what the close obtained, if
+    /// the stream cannot be finished.
     pub async fn close(&mut self) -> std::result::Result<CloseAck, SenderError> {
         let Some(mut open) = self.open.take() else {
             self.current_stream_kind = None;
@@ -349,7 +350,7 @@ impl GigantoStream {
         let finished = open
             .send
             .finish()
-            .map_err(|source| SenderError::context("failed to finish stream", source));
+            .map_err(|source| SenderError::FinishStream { close_ack, source });
         open.ack_task.stop().await;
         finished?;
         Ok(close_ack)
@@ -513,6 +514,13 @@ impl GigantoStream {
     #[cfg(test)]
     pub(super) fn close_timeout(&self) -> Duration {
         self.close_timeout
+    }
+
+    #[cfg(test)]
+    pub(super) fn finish_send(&mut self) {
+        if let Some(open) = &mut self.open {
+            let _ = open.send.finish();
+        }
     }
 
     #[cfg(test)]
@@ -997,6 +1005,39 @@ mod tests {
         assert_eq!(close, CloseAck::TimedOut);
         assert!(!close.received());
         assert_eq!(acks.try_recv(), Some(7));
+    }
+
+    #[tokio::test]
+    async fn close_of_a_finished_stream_reports_whether_its_marker_was_sent() {
+        // With a record header, the close marker cannot be written.
+        let (connection, _session, [(mut stream, _, _server), _]) =
+            two_streams(AckDelivery::LogOnly).await;
+        stream.finish_send();
+        let close = stream.close().await;
+        assert!(
+            matches!(close, Err(SenderError::SendFinish)),
+            "a header-carrying stream fails sending its marker, got {close:?}",
+        );
+
+        // Without one, no marker is sent and finishing fails.
+        let (mut stream, _) = connection
+            .open_stream(CancellationToken::new(), AckDelivery::LogOnly)
+            .await
+            .expect("stream should open");
+        stream.finish_send();
+        let close = stream.close().await;
+        assert!(
+            matches!(
+                close,
+                Err(SenderError::FinishStream {
+                    close_ack: CloseAck::NotSent,
+                    ..
+                })
+            ),
+            "a stream without a header fails finishing, got {close:?}",
+        );
+        let error = close.expect_err("finishing should fail");
+        assert_eq!(error.to_string(), "failed to finish stream");
     }
 
     #[tokio::test]
