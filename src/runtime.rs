@@ -16,10 +16,16 @@
 //! Giganto's ACKs into an acknowledged position, the position just past the
 //! last line Giganto acknowledged, saves it in the state directory as its
 //! checkpoint, and resumes reading from it whenever its stream is replaced.
+//!
+//! On Linux, a configuration may also hold one journal collector, which reads
+//! the host's systemd journal and sends Clumit Security's own entries as
+//! Giganto `OpLog` records on a stream of its own (see [`journal`]).
 
 mod acks;
 mod checkpoints;
 mod follow;
+#[cfg(target_os = "linux")]
+mod journal;
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
@@ -44,7 +50,7 @@ use self::follow::{
     Command, Event, Hook, Initial, LogPosition, Output, Problem, ReaderLink, RefusedDir,
 };
 use crate::collector::POLLING_INTERVAL;
-use crate::config::remote::{CollectorConfig, RESERVED_DIRS, RemoteConfig};
+use crate::config::remote::{CollectorConfig, LogCollectorConfig, RESERVED_DIRS, RemoteConfig};
 use crate::controller::log_reconnect_outcome;
 use crate::manager::{ConfigRuntime, TlsFiles};
 use crate::reload::ReloadSignal;
@@ -93,6 +99,16 @@ pub struct CollectorRuntime {
     published: PublishedSender,
     sequence: u64,
     collectors: HashMap<Key, CollectorHandle>,
+    /// The journal collector, which is identified by its type.
+    #[cfg(target_os = "linux")]
+    journal: Option<CollectorHandle>,
+    /// The lock the journal collector holds while writing its checkpoint
+    /// file.
+    #[cfg(target_os = "linux")]
+    journal_lock: Arc<Mutex<()>>,
+    /// What the journal collector runs and reads.
+    #[cfg(target_os = "linux")]
+    journal_paths: journal::Paths,
     /// Collectors whose stop is set, until they end.
     stopping: Vec<CollectorHandle>,
 }
@@ -102,10 +118,70 @@ struct ConnectionTask {
     task: JoinHandle<()>,
 }
 
+/// What names a collector in its start and stop lines.
+#[derive(Clone, Debug)]
+enum Label {
+    Log {
+        kind: String,
+        path: PathBuf,
+    },
+    #[cfg(target_os = "linux")]
+    Journal,
+}
+
+impl std::fmt::Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Log { kind, path } => write!(f, "collector {kind} for {}", path.display()),
+            #[cfg(target_os = "linux")]
+            Self::Journal => f.write_str("the journal collector"),
+        }
+    }
+}
+
+/// The acknowledged position and the save state of one collector, whatever
+/// the type of its positions.
+#[async_trait]
+trait Checkpoint: Send + Sync {
+    /// Retires the save state: nothing lands after a write in progress.
+    fn retire(&self);
+
+    /// Waits for a write in progress to end.
+    async fn settle(&self);
+
+    /// Saves the acknowledged position as the last save.
+    async fn final_save(&self);
+}
+
+/// The [`Checkpoint`] of a collector whose positions are `P`.
+struct Positions<P> {
+    acks: Arc<Acks<P>>,
+    saves: Arc<Saves<P>>,
+}
+
+#[async_trait]
+impl<P> Checkpoint for Positions<P>
+where
+    P: Clone + PartialEq + Send + Sync + 'static,
+{
+    fn retire(&self) {
+        self.saves.retire();
+    }
+
+    async fn settle(&self) {
+        self.saves.settle().await;
+    }
+
+    async fn final_save(&self) {
+        self.saves
+            .final_save(self.acks.acknowledged().as_ref())
+            .await;
+    }
+}
+
 /// The runtime's side of one collector.
 struct CollectorHandle {
-    kind: String,
-    path: PathBuf,
+    label: Label,
     stop: watch::Sender<bool>,
     /// The token of the collector's stream.
     token: CancellationToken,
@@ -113,8 +189,7 @@ struct CollectorHandle {
     /// Set by whichever logs the collector's stop line first, the collector
     /// or [`abort`](Self::abort).
     stop_logged: Arc<AtomicBool>,
-    acks: Arc<Acks<LogPosition>>,
-    saves: Arc<Saves<LogPosition>>,
+    checkpoint: Arc<dyn Checkpoint>,
     /// The task making the collector's periodic saves.
     saver: JoinHandle<()>,
 }
@@ -135,11 +210,7 @@ impl CollectorHandle {
         if self.stop_logged.swap(true, Ordering::SeqCst) {
             return false;
         }
-        info!(
-            "Stopped collector {} for {} {how}",
-            self.kind,
-            self.path.display()
-        );
+        info!("Stopped {} {how}", self.label);
         true
     }
 }
@@ -175,6 +246,12 @@ impl CollectorRuntime {
             published,
             sequence: 0,
             collectors: HashMap::new(),
+            #[cfg(target_os = "linux")]
+            journal: None,
+            #[cfg(target_os = "linux")]
+            journal_lock: Arc::default(),
+            #[cfg(target_os = "linux")]
+            journal_paths: journal::Paths::default(),
             stopping: Vec::new(),
         }
     }
@@ -188,6 +265,68 @@ impl CollectorRuntime {
         self
     }
 
+    /// Sets the `journalctl` the journal collector runs, the machine-ID file
+    /// and the journal root it checks access with, in place of
+    /// `/usr/bin/journalctl`, `/etc/machine-id` and `/var/log/journal`. For
+    /// tests only.
+    #[doc(hidden)]
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn with_journal_paths(
+        mut self,
+        journalctl: PathBuf,
+        machine_id: PathBuf,
+        journal_root: PathBuf,
+    ) -> Self {
+        self.journal_paths = journal::Paths {
+            journalctl,
+            machine_id,
+            journal_root,
+        };
+        self
+    }
+
+    /// The journal collector, if it runs.
+    #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_self))]
+    fn journal(&self) -> Option<&CollectorHandle> {
+        #[cfg(target_os = "linux")]
+        {
+            self.journal.as_ref()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }
+
+    /// Takes the journal collector out of the runtime, if it runs.
+    #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_self))]
+    fn take_journal(&mut self) -> Option<CollectorHandle> {
+        #[cfg(target_os = "linux")]
+        {
+            self.journal.take()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }
+
+    /// Every running collector.
+    fn running(&self) -> impl Iterator<Item = &CollectorHandle> {
+        self.collectors.values().chain(self.journal())
+    }
+
+    /// Takes every running collector out of the runtime.
+    fn take_running(&mut self) -> Vec<CollectorHandle> {
+        let journal = self.take_journal();
+        self.collectors
+            .drain()
+            .map(|(_, handle)| handle)
+            .chain(journal)
+            .collect()
+    }
+
     /// Stops every collector, closing each stream with its close marker,
     /// saves the checkpoint of each, and closes the Giganto connection.
     ///
@@ -196,22 +335,21 @@ impl CollectorRuntime {
     /// further. A collector an apply removed is not saved.
     pub async fn shutdown(&mut self) {
         let deadline = Instant::now() + CHANNEL_CLOSE_TIMEOUT;
-        for handle in self.stopping.iter().chain(self.collectors.values()) {
+        for handle in self.stopping.iter().chain(self.running()) {
             handle.stop.send_replace(true);
         }
-        let finals = self
-            .collectors
-            .values()
-            .map(|handle| (Arc::clone(&handle.acks), Arc::clone(&handle.saves)))
+        let running = self.take_running();
+        let finals = running
+            .iter()
+            .map(|handle| Arc::clone(&handle.checkpoint))
             .collect::<Vec<_>>();
-        self.stopping
-            .extend(self.collectors.drain().map(|(_, handle)| handle));
+        self.stopping.extend(running);
         if let Some(connection) = &self.connection {
             connection.token.cancel();
         }
         self.finish_stopping(deadline).await;
-        for (acks, saves) in finals {
-            saves.final_save(acks.acknowledged().as_ref()).await;
+        for checkpoint in finals {
+            checkpoint.final_save().await;
         }
 
         if let Some(connection) = self.connection.take() {
@@ -283,7 +421,43 @@ impl CollectorRuntime {
         self.connection = Some(ConnectionTask { token, task });
     }
 
-    fn start_collector(&mut self, config: &CollectorConfig) {
+    /// Returns the sender of a new collector's stream, which sends records
+    /// of `header`, and spawns the task applying its ACKs to `acks`.
+    fn sender<P>(
+        &self,
+        name: String,
+        header: RawEventKind,
+        stop: watch::Receiver<bool>,
+        acks: &Arc<Acks<P>>,
+        token: CancellationToken,
+    ) -> (RemoteSender<P>, JoinHandle<()>)
+    where
+        P: Clone + PartialEq + Send + Sync + 'static,
+    {
+        let (receivers, receiver_queue) = mpsc::unbounded_channel();
+        let drain = tokio::spawn(drain_acks(Arc::clone(acks), receiver_queue));
+        let sender = RemoteSender {
+            name,
+            header,
+            stop,
+            acks: Arc::clone(acks),
+            receivers,
+            link: Link {
+                connection: self.published.subscribe(),
+                token,
+                stream: None,
+                receiver: None,
+                min_sequence: 0,
+                sequence: 0,
+            },
+            retry_interval: self.retry_interval,
+            last_recovered: None,
+            failing: false,
+        };
+        (sender, drain)
+    }
+
+    fn start_collector(&mut self, config: &LogCollectorConfig) {
         let (stop, stop_receiver) = watch::channel(false);
         let token = CancellationToken::new();
         let acks = Arc::new(Acks::new());
@@ -294,7 +468,13 @@ impl CollectorRuntime {
             &config.path,
             lock,
         ));
-        let (receivers, receiver_queue) = mpsc::unbounded_channel();
+        let (sender, drain) = self.sender(
+            config.kind.clone(),
+            RawEventKind::Log,
+            stop_receiver.clone(),
+            &acks,
+            token.clone(),
+        );
         let stop_logged = Arc::new(AtomicBool::new(false));
         let collector = CollectorTask {
             kind: config.kind.clone(),
@@ -312,30 +492,14 @@ impl CollectorRuntime {
             acks: Arc::clone(&acks),
             saves: Arc::clone(&saves),
             stop_logged: Arc::clone(&stop_logged),
-            drain: tokio::spawn(drain_acks(Arc::clone(&acks), receiver_queue)),
-            sender: RemoteSender {
-                kind: config.kind.clone(),
-                stop: stop_receiver,
-                acks: Arc::clone(&acks),
-                receivers,
-                link: Link {
-                    connection: self.published.subscribe(),
-                    token: token.clone(),
-                    stream: None,
-                    receiver: None,
-                    min_sequence: 0,
-                    sequence: 0,
-                },
-                retry_interval: self.retry_interval,
-                last_recovered: None,
-                failing: false,
-            },
+            drain,
+            sender,
         };
-        info!(
-            "Started collector {} for {}",
-            config.kind,
-            config.path.display()
-        );
+        let label = Label::Log {
+            kind: config.kind.clone(),
+            path: config.path.clone(),
+        };
+        info!("Started {label}");
         let task = tokio::spawn(collector.run());
         let periodic = tokio::spawn(checkpoints::run_saver(
             Arc::clone(&acks),
@@ -344,17 +508,120 @@ impl CollectorRuntime {
         self.collectors.insert(
             (config.kind.clone(), config.path.clone()),
             CollectorHandle {
-                kind: config.kind.clone(),
-                path: config.path.clone(),
+                label,
                 stop,
                 token,
                 task,
                 stop_logged,
-                acks,
-                saves,
+                checkpoint: Arc::new(Positions { acks, saves }),
                 saver: periodic,
             },
         );
+    }
+
+    /// Takes the collectors a configuration of `logs`, and of a journal
+    /// collector if `wants_journal`, does not hold out of the runtime.
+    fn take_removed(
+        &mut self,
+        logs: &[&LogCollectorConfig],
+        wants_journal: bool,
+    ) -> Vec<CollectorHandle> {
+        let keys = logs
+            .iter()
+            .map(|log| (log.kind.clone(), log.path.clone()))
+            .collect::<HashSet<_>>();
+        let removed = self
+            .collectors
+            .keys()
+            .filter(|key| !keys.contains(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let journal = if wants_journal {
+            None
+        } else {
+            self.take_journal()
+        };
+        removed
+            .iter()
+            .filter_map(|key| self.collectors.remove(key))
+            .chain(journal)
+            .collect()
+    }
+
+    /// Starts the collectors of `logs`, and the journal collector if
+    /// `wants_journal`, that do not run yet. Returns how many it started.
+    fn start_added(&mut self, logs: &[&LogCollectorConfig], wants_journal: bool) -> usize {
+        let mut started = 0;
+        for log in logs {
+            if !self
+                .collectors
+                .contains_key(&(log.kind.clone(), log.path.clone()))
+            {
+                self.start_collector(log);
+                started += 1;
+            }
+        }
+        if wants_journal {
+            #[cfg(target_os = "linux")]
+            if self.journal.is_none() {
+                self.start_journal();
+                started += 1;
+            }
+            // The configuration parser refuses a journal collector here.
+            #[cfg(not(target_os = "linux"))]
+            warn!(
+                "Journal collectors are supported on Linux only; the journal collector is not run"
+            );
+        }
+        started
+    }
+
+    /// Starts the journal collector.
+    #[cfg(target_os = "linux")]
+    fn start_journal(&mut self) {
+        let (stop, stop_receiver) = watch::channel(false);
+        let token = CancellationToken::new();
+        let acks = Arc::new(Acks::new());
+        let saves = Arc::new(Saves::journal(
+            &self.state_dir,
+            Arc::clone(&self.journal_lock),
+        ));
+        let (sender, drain) = self.sender(
+            Label::Journal.to_string(),
+            RawEventKind::OpLog,
+            stop_receiver.clone(),
+            &acks,
+            token.clone(),
+        );
+        let stop_logged = Arc::new(AtomicBool::new(false));
+        let collector = journal::JournalTask {
+            stop: stop_receiver,
+            settings: journal::Settings {
+                paths: self.journal_paths.clone(),
+                state_dir: self.state_dir.clone(),
+                retry_interval: self.retry_interval,
+            },
+            acks: Arc::clone(&acks),
+            saves: Arc::clone(&saves),
+            stop_logged: Arc::clone(&stop_logged),
+            drain,
+            sender,
+        };
+        info!("Started {}", Label::Journal);
+        let task = tokio::spawn(collector.run());
+        let periodic = tokio::spawn(checkpoints::run_saver(
+            Arc::clone(&acks),
+            Arc::clone(&saves),
+        ));
+        self.journal = Some(CollectorHandle {
+            label: Label::Journal,
+            stop,
+            token,
+            task,
+            stop_logged,
+            checkpoint: Arc::new(Positions { acks, saves }),
+            saver: periodic,
+        });
     }
 }
 
@@ -368,17 +635,19 @@ impl ConfigRuntime for CollectorRuntime {
             current.giganto_ingest_srv_addr != config.giganto_ingest_srv_addr
                 || current.giganto_name != config.giganto_name
         });
-        let keys = config
+        let logs = config
             .collectors
             .iter()
-            .map(|collector| (collector.kind.clone(), collector.path.clone()))
-            .collect::<HashSet<_>>();
-        let removed = self
-            .collectors
-            .keys()
-            .filter(|key| !keys.contains(*key))
-            .cloned()
+            .filter_map(|collector| match collector {
+                CollectorConfig::Log(log) => Some(log),
+                CollectorConfig::Journal => None,
+            })
             .collect::<Vec<_>>();
+        let wants_journal = config
+            .collectors
+            .iter()
+            .any(|collector| matches!(collector, CollectorConfig::Journal));
+        let removed = self.take_removed(&logs, wants_journal);
         let stopped = removed.len();
 
         // A removed collector is never saved again, so it cannot overwrite
@@ -386,42 +655,29 @@ impl ConfigRuntime for CollectorRuntime {
         let mut retired = Vec::new();
         if address_changed {
             self.change_connection(&config);
-            for key in removed {
-                if let Some(handle) = self.collectors.remove(&key) {
-                    handle.saves.retire();
-                    retired.push(Arc::clone(&handle.saves));
-                    handle.abort("without a close marker");
-                }
+            for handle in removed {
+                handle.checkpoint.retire();
+                retired.push(Arc::clone(&handle.checkpoint));
+                handle.abort("without a close marker");
             }
-            for saves in retired {
-                saves.settle().await;
+            for checkpoint in retired {
+                checkpoint.settle().await;
             }
         } else if !removed.is_empty() {
             let deadline = Instant::now() + CHANNEL_CLOSE_TIMEOUT;
-            for key in removed {
-                if let Some(handle) = self.collectors.remove(&key) {
-                    handle.stop.send_replace(true);
-                    handle.saves.retire();
-                    retired.push(Arc::clone(&handle.saves));
-                    self.stopping.push(handle);
-                }
+            for handle in removed {
+                handle.stop.send_replace(true);
+                handle.checkpoint.retire();
+                retired.push(Arc::clone(&handle.checkpoint));
+                self.stopping.push(handle);
             }
-            for saves in retired {
-                saves.settle().await;
+            for checkpoint in retired {
+                checkpoint.settle().await;
             }
             self.finish_stopping(deadline).await;
         }
 
-        let mut started = 0;
-        for collector in &config.collectors {
-            if !self
-                .collectors
-                .contains_key(&(collector.kind.clone(), collector.path.clone()))
-            {
-                self.start_collector(collector);
-                started += 1;
-            }
-        }
+        let started = self.start_added(&logs, wants_journal);
         let changed = address_changed || started > 0 || stopped > 0;
         if changed {
             info!(
@@ -429,10 +685,9 @@ impl ConfigRuntime for CollectorRuntime {
                 config.collectors.len()
             );
         }
-        let kinds = config
-            .collectors
+        let kinds = logs
             .iter()
-            .map(|collector| collector.kind.clone())
+            .map(|log| log.kind.clone())
             .collect::<HashSet<_>>();
         self.config = Some(config);
 
@@ -453,7 +708,7 @@ impl ConfigRuntime for CollectorRuntime {
 
 impl Drop for CollectorRuntime {
     fn drop(&mut self) {
-        for handle in self.stopping.iter().chain(self.collectors.values()) {
+        for handle in self.stopping.iter().chain(self.running()) {
             handle.token.cancel();
             handle.task.abort();
         }
@@ -570,7 +825,7 @@ struct CollectorTask {
     stop_logged: Arc<AtomicBool>,
     /// The task applying the ACKs of the collector's streams.
     drain: JoinHandle<()>,
-    sender: RemoteSender,
+    sender: RemoteSender<LogPosition>,
 }
 
 /// When the controller sends the reader its next resume.
@@ -1034,10 +1289,12 @@ fn stop_outcome(close: &Result<CloseAck, SenderError>) -> String {
 /// Applies the ACKs of a collector's streams as they arrive, from the
 /// receivers its sender hands over with the generation that identifies
 /// each. Ends once the sender is dropped and the last receiver has ended.
-async fn drain_acks(
-    acks: Arc<Acks<LogPosition>>,
+async fn drain_acks<P>(
+    acks: Arc<Acks<P>>,
     mut receivers: mpsc::UnboundedReceiver<(u64, AckReceiver)>,
-) {
+) where
+    P: Clone + PartialEq,
+{
     enum Event {
         Receiver(Option<(u64, AckReceiver)>),
         Replaced,
@@ -1092,10 +1349,13 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
 
 /// The sender of one collector: a stream on the published connection that
 /// follows the connection across address changes.
-struct RemoteSender {
-    kind: String,
+struct RemoteSender<P> {
+    /// Names the collector in log lines.
+    name: String,
+    /// The record header of the stream.
+    header: RawEventKind,
     stop: watch::Receiver<bool>,
-    acks: Arc<Acks<LogPosition>>,
+    acks: Arc<Acks<P>>,
     /// Hands each new ACK receiver to the collector's ACK task.
     receivers: mpsc::UnboundedSender<(u64, AckReceiver)>,
     link: Link,
@@ -1168,7 +1428,7 @@ impl Link {
     }
 }
 
-impl RemoteSender {
+impl<P: Clone + PartialEq> RemoteSender<P> {
     fn is_open(&self) -> bool {
         self.link.stream.is_some()
     }
@@ -1241,16 +1501,16 @@ impl RemoteSender {
 
     fn note_failure(&mut self, error: &dyn StdError) {
         if self.failing {
-            debug!("Sending still fails for {}: {}", self.kind, chain(error));
+            debug!("Sending still fails for {}: {}", self.name, chain(error));
         } else {
-            warn!("Sending failed for {}: {}", self.kind, chain(error));
+            warn!("Sending failed for {}: {}", self.name, chain(error));
             self.failing = true;
         }
     }
 
     fn note_sent(&mut self) {
         if self.failing {
-            info!("Sending again for {}", self.kind);
+            info!("Sending again for {}", self.name);
             self.failing = false;
         }
     }
@@ -1263,11 +1523,12 @@ impl RemoteSender {
     }
 }
 
-impl RemoteSender {
-    /// Sends the `Log` record header on the stream.
+impl<P: Clone + PartialEq> RemoteSender<P> {
+    /// Sends the record header on the stream.
     async fn send_header(&mut self) -> Result<(), SenderError> {
+        let header = self.header;
         let result = match self.stream() {
-            Ok(stream) => stream.send_header(RawEventKind::Log).await,
+            Ok(stream) => stream.send_header(header).await,
             Err(error) => Err(SenderError::Send(error)),
         };
         match &result {
@@ -1381,19 +1642,23 @@ mod tests {
     fn handle(task: JoinHandle<()>) -> CollectorHandle {
         let (stop, _) = watch::channel(false);
         CollectorHandle {
-            kind: "kind_a".to_string(),
-            path: PathBuf::from("/a.log"),
+            label: Label::Log {
+                kind: "kind_a".to_string(),
+                path: PathBuf::from("/a.log"),
+            },
             stop,
             token: CancellationToken::new(),
             task,
             stop_logged: Arc::default(),
-            acks: Arc::new(Acks::new()),
-            saves: Arc::new(Saves::log(
-                Path::new("/nonexistent"),
-                "kind_a",
-                Path::new("/a.log"),
-                Arc::default(),
-            )),
+            checkpoint: Arc::new(Positions {
+                acks: Arc::new(Acks::<LogPosition>::new()),
+                saves: Arc::new(Saves::log(
+                    Path::new("/nonexistent"),
+                    "kind_a",
+                    Path::new("/a.log"),
+                    Arc::default(),
+                )),
+            }),
             saver: tokio::spawn(async {}),
         }
     }
@@ -1523,7 +1788,7 @@ mod tests {
 
         use follow::Step;
 
-        use crate::config::remote::{CollectorConfig, CollectorType, StartPosition};
+        use crate::config::remote::{CollectorConfig, LogCollectorConfig, StartPosition};
 
         let state = tempfile::tempdir()?;
         let logs = tempfile::tempdir()?;
@@ -1536,12 +1801,11 @@ mod tests {
         let config = |kind: &str, path: &Path| RemoteConfig {
             giganto_ingest_srv_addr: silent.local_addr().expect("bound"),
             giganto_name: "localhost".to_string(),
-            collectors: vec![CollectorConfig {
-                collector_type: CollectorType::Log,
+            collectors: vec![CollectorConfig::Log(LogCollectorConfig {
                 kind: kind.to_string(),
                 path: path.to_path_buf(),
                 start: StartPosition::Beginning,
-            }],
+            })],
         };
 
         // The reader of `stalled` blocks in its first open until released.
@@ -1614,7 +1878,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_initial_seek_failure_is_retried_without_giganto() -> anyhow::Result<()> {
-        use crate::config::remote::{CollectorConfig, CollectorType, StartPosition};
+        use crate::config::remote::{CollectorConfig, LogCollectorConfig, StartPosition};
 
         // The collector's task and its reader log to this thread's
         // subscriber.
@@ -1629,12 +1893,11 @@ mod tests {
         let config = RemoteConfig {
             giganto_ingest_srv_addr: silent.local_addr()?,
             giganto_name: "localhost".to_string(),
-            collectors: vec![CollectorConfig {
-                collector_type: CollectorType::Log,
+            collectors: vec![CollectorConfig::Log(LogCollectorConfig {
                 kind: "kind_a".to_string(),
                 path: path.clone(),
                 start: StartPosition::End,
-            }],
+            })],
         };
 
         // The first two seeks fail.

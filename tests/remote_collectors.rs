@@ -3,7 +3,8 @@
 //!
 //! The server completes giganto-client's handshake with a configurable
 //! version requirement, verifies client certificates against an rcgen CA,
-//! and reads every stream's record header and batches. It sends a data ACK
+//! and reads every stream's record header and batches, decoding `Log` and
+//! `OpLog` records by the stream's header. It sends a data ACK
 //! for every record and the close ACK for every close marker, unless told to
 //! withhold the data ACKs or the close ACK, or to hold data ACKs back and send
 //! them later, and can stop reading a kind's streams, stop a stream or close a
@@ -19,11 +20,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use giganto_client::{
-    RawEventKind, connection::server_handshake, frame::recv_raw, ingest::log::Log,
+    RawEventKind,
+    connection::server_handshake,
+    frame::recv_raw,
+    ingest::log::{Log, OpLog},
     ingest::receive_record_header,
 };
 use quinn::{Endpoint, RecvStream, SendStream, VarInt};
-use reproduce::config::remote::{CollectorConfig, CollectorType, RemoteConfig, StartPosition};
+use reproduce::config::remote::{CollectorConfig, LogCollectorConfig, RemoteConfig, StartPosition};
 use reproduce::manager::{ConfigRuntime, TlsFiles};
 use reproduce::reload::ReloadSignal;
 use reproduce::runtime::CollectorRuntime;
@@ -45,6 +49,9 @@ const SETTLE: Duration = Duration::from_millis(1500);
 const CLOSE_DEADLINE: Duration = Duration::from_secs(15);
 /// The version requirement Giganto 0.31.0 accepts.
 const GIGANTO_VERSION_REQ: &str = ">=0.28.0";
+/// What the server keys the journal collector's stream by, in place of a
+/// kind; no log kind can contain `@`.
+const JOURNAL: &str = "@journal";
 
 /// Whose close ACKs the server withholds.
 #[derive(Clone, Debug, Default)]
@@ -71,9 +78,12 @@ struct StreamRecord {
     connection: usize,
     header: u32,
     accepted_at: Instant,
-    /// `(kind, line)` of every `Log` record received.
+    /// `(kind, line)` of every `Log` record received, and
+    /// `(JOURNAL, contents)` of every `OpLog` record.
     records: Vec<(String, String)>,
-    /// The timestamp of every `Log` record received.
+    /// Every `OpLog` record received.
+    op_logs: Vec<OpLog>,
+    /// The timestamp of every record received.
     timestamps: Vec<i64>,
     close_marker: bool,
     /// How the stream ended, if it has.
@@ -82,7 +92,12 @@ struct StreamRecord {
 }
 
 impl StreamRecord {
+    /// The kind of a `Log` stream, once a record arrived, or [`JOURNAL`]
+    /// for an `OpLog` stream.
     fn kind(&self) -> Option<&str> {
+        if self.header == op_log_header() {
+            return Some(JOURNAL);
+        }
         self.records.first().map(|(kind, _)| kind.as_str())
     }
 
@@ -333,6 +348,7 @@ async fn read_stream(
             header: u32::from_le_bytes(header),
             accepted_at: Instant::now(),
             records: Vec::new(),
+            op_logs: Vec::new(),
             timestamps: Vec::new(),
             close_marker: false,
             ended: None,
@@ -382,25 +398,14 @@ async fn read_stream(
                 let _ = withhold
                     .wait_for(|withhold| !withhold.holds(kind.as_deref()))
                     .await;
-            } else if let Ok(log) = bincode::deserialize::<Log>(&data) {
-                let withheld = lock(&state.withhold_acks).contains(&log.kind);
-                let line = String::from_utf8_lossy(&log.log).into_owned();
-                {
-                    let mut pause_after = lock(&state.pause_after);
-                    if pause_after
-                        .as_ref()
-                        .is_some_and(|(kind, after)| *kind == log.kind && *after == line)
-                    {
-                        *pause_after = None;
-                        state.paused.send_modify(|paused| {
-                            paused.insert(log.kind.clone());
-                        });
-                    }
-                }
+            } else if let Some((kind, line, op_log)) = decode(header, &data) {
+                let withheld = lock(&state.withhold_acks).contains(&kind);
+                state.pause_if_after(&kind, &line);
                 {
                     let mut streams = lock(&state.streams);
                     streams[index].timestamps.push(timestamp);
-                    streams[index].records.push((log.kind.clone(), line));
+                    streams[index].records.push((kind.clone(), line));
+                    streams[index].op_logs.extend(op_log);
                 }
                 if withheld {
                     continue;
@@ -408,7 +413,7 @@ async fn read_stream(
                 // Held under the lock, so a release sends every older ACK
                 // first.
                 let mut hold = state.hold.lock().await;
-                if hold.kinds.contains(&log.kind) {
+                if hold.kinds.contains(&kind) {
                     hold.acks.push((index, timestamp));
                     continue;
                 }
@@ -421,6 +426,38 @@ async fn read_stream(
     lock(&state.streams)[index].ended = Some(end);
     // Dropping the send side finishes the stream.
     lock(&state.senders)[index] = None;
+}
+
+impl GigantoState {
+    /// Pauses reading the streams of `kind` if `line` of `kind` is the
+    /// record set by [`Giganto::pause_reading_after`].
+    fn pause_if_after(&self, kind: &str, line: &str) {
+        let mut pause_after = lock(&self.pause_after);
+        if pause_after
+            .as_ref()
+            .is_some_and(|(paused, after)| paused == kind && after == line)
+        {
+            *pause_after = None;
+            self.paused.send_modify(|paused| {
+                paused.insert(kind.to_string());
+            });
+        }
+    }
+}
+
+/// Decodes a record of a stream with `header` into its kind and line, and,
+/// for an `OpLog`, the record.
+fn decode(header: [u8; 4], data: &[u8]) -> Option<(String, String, Option<OpLog>)> {
+    if u32::from_le_bytes(header) == op_log_header() {
+        let op_log = bincode::deserialize::<OpLog>(data).ok()?;
+        return Some((JOURNAL.to_string(), op_log.contents.clone(), Some(op_log)));
+    }
+    let log = bincode::deserialize::<Log>(data).ok()?;
+    Some((
+        log.kind,
+        String::from_utf8_lossy(&log.log).into_owned(),
+        None,
+    ))
 }
 
 /// The log files of a test.
@@ -481,11 +518,12 @@ fn config_start(
         giganto_name: SERVER_NAME.to_string(),
         collectors: collectors
             .iter()
-            .map(|(kind, path)| CollectorConfig {
-                collector_type: CollectorType::Log,
-                kind: (*kind).to_string(),
-                path: path.to_path_buf(),
-                start,
+            .map(|(kind, path)| {
+                CollectorConfig::Log(LogCollectorConfig {
+                    kind: (*kind).to_string(),
+                    path: path.to_path_buf(),
+                    start,
+                })
             })
             .collect(),
     }
@@ -515,6 +553,10 @@ async fn wait_for_lines(giganto: &Giganto, kind: &str, lines: &[&str]) {
 
 fn log_header() -> u32 {
     u32::from(RawEventKind::Log)
+}
+
+fn op_log_header() -> u32 {
+    u32::from(RawEventKind::OpLog)
 }
 
 /// The checkpoint file of `kind` in `state_dir`.
@@ -2377,4 +2419,705 @@ async fn a_blocked_write_does_not_hold_back_the_release_of_a_rotated_away_file()
     wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
     runtime.shutdown().await;
     Ok(())
+}
+
+/// The journal collector against a fake journalctl.
+#[cfg(target_os = "linux")]
+mod journal {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+
+    use giganto_client::ingest::log::OpLogLevel;
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    const MACHINE_ID: &str = "0123456789abcdef0123456789abcdef";
+    const SEQNUM_ID: &str = "fedcba9876543210fedcba9876543210";
+    const BOOT_ID: &str = "00112233445566778899aabbccddeeff";
+    const COMMON: &str = "--output=json --all --no-pager \
+                          --output-fields=MESSAGE,PRIORITY,_SYSTEMD_UNIT,_PID,UNIT,CONTAINER_NAME";
+    const KEPT: &str = "clumit-security-a.service";
+    const DROPPED: &str = "sshd.service";
+
+    /// The cursor of the `n`th test entry.
+    fn cursor(n: u64) -> String {
+        format!(
+            "s={SEQNUM_ID};i={n:x};b={BOOT_ID};m={n:x};t={:x};x={n:x}",
+            time(n)
+        )
+    }
+
+    /// The `__REALTIME_TIMESTAMP` of the `n`th test entry.
+    fn time(n: u64) -> u64 {
+        1_700_000_000_000_000 + n
+    }
+
+    /// The `n`th test entry, with `fields` besides its position.
+    fn entry_with(n: u64, fields: &Value) -> Value {
+        let mut entry = json!({
+            "__CURSOR": cursor(n),
+            "__REALTIME_TIMESTAMP": time(n).to_string(),
+            "__MONOTONIC_TIMESTAMP": n.to_string(),
+            "__SEQNUM": n.to_string(),
+            "__SEQNUM_ID": SEQNUM_ID,
+            "_BOOT_ID": BOOT_ID,
+            "MESSAGE": message(n),
+        });
+        for (key, value) in fields.as_object().expect("an object") {
+            entry[key] = value.clone();
+        }
+        entry
+    }
+
+    /// The `n`th test entry, of `unit`.
+    fn entry(n: u64, unit: &str) -> Value {
+        entry_with(n, &json!({ "_SYSTEMD_UNIT": unit }))
+    }
+
+    fn message(n: u64) -> String {
+        format!("message {n}")
+    }
+
+    fn messages(range: impl IntoIterator<Item = u64>) -> Vec<String> {
+        range.into_iter().map(message).collect()
+    }
+
+    /// A fake journalctl in a directory of its own, with a machine-ID file
+    /// and a journal root holding a readable `system.journal`.
+    struct Fake {
+        dir: TempDir,
+    }
+
+    impl Fake {
+        fn new() -> Result<Self> {
+            let dir = tempfile::tempdir()?;
+            let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/journalctl");
+            std::os::unix::fs::symlink(script, dir.path().join("journalctl"))?;
+            std::fs::write(dir.path().join("entries"), b"")?;
+            std::fs::write(dir.path().join("machine-id"), format!("{MACHINE_ID}\n"))?;
+            let journal = dir.path().join("journal").join(MACHINE_ID);
+            std::fs::create_dir_all(&journal)?;
+            std::fs::write(journal.join("system.journal"), b"")?;
+            Ok(Self { dir })
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.dir.path().join(name)
+        }
+
+        fn push(&self, entries: &[Value]) -> Result<()> {
+            let text = entries.iter().fold(String::new(), |mut text, entry| {
+                let _ = writeln!(text, "{entry}");
+                text
+            });
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(self.path("entries"))?;
+            file.write_all(text.as_bytes())?;
+            Ok(())
+        }
+
+        /// The arguments of every journalctl run, past the common ones.
+        fn args(&self) -> Vec<String> {
+            std::fs::read_to_string(self.path("args"))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| {
+                    line.strip_prefix(COMMON)
+                        .unwrap_or_else(|| panic!("common arguments first: {line}"))
+                        .trim()
+                        .to_string()
+                })
+                .collect()
+        }
+
+        fn pids(&self) -> Vec<u32> {
+            std::fs::read_to_string(self.path("pids"))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| line.parse().expect("a pid"))
+                .collect()
+        }
+
+        /// The process ID of the last journalctl started.
+        fn last_pid(&self) -> u32 {
+            *self.pids().last().expect("journalctl ran")
+        }
+
+        fn runtime(
+            &self,
+            files: &TlsFiles,
+            reload: &ReloadSignal,
+            state_dir: &Path,
+        ) -> CollectorRuntime {
+            runtime(files, reload, state_dir).with_journal_paths(
+                self.path("journalctl"),
+                self.path("machine-id"),
+                self.path("journal"),
+            )
+        }
+    }
+
+    fn running(pid: u32) -> bool {
+        Path::new(&format!("/proc/{pid}")).exists()
+    }
+
+    /// A configuration of the journal collector and `logs` collectors.
+    fn journal_config(addr: SocketAddr, logs: &[(&str, &Path)]) -> RemoteConfig {
+        let mut config = config(addr, logs);
+        config.collectors.push(CollectorConfig::Journal);
+        config
+    }
+
+    fn journal_file(state_dir: &Path) -> PathBuf {
+        state_dir.join("checkpoints").join("journal.json")
+    }
+
+    /// The cursor the journal checkpoint holds, if it can be read.
+    fn checkpoint_cursor(state_dir: &Path) -> Option<String> {
+        let bytes = std::fs::read(journal_file(state_dir)).ok()?;
+        let value = serde_json::from_slice::<Value>(&bytes).ok()?;
+        Some(value["cursor"].as_str()?.to_string())
+    }
+
+    async fn wait_for_cursor(state_dir: &Path, n: u64) {
+        let expected = cursor(n);
+        wait_for(
+            &format!("the journal checkpoint is at entry {n}"),
+            WAIT,
+            || checkpoint_cursor(state_dir).as_deref() == Some(expected.as_str()),
+        )
+        .await;
+    }
+
+    async fn wait_for_messages(giganto: &Giganto, range: impl IntoIterator<Item = u64>) {
+        let expected = messages(range);
+        let lines = expected.iter().map(String::as_str).collect::<Vec<_>>();
+        wait_for_lines(giganto, JOURNAL, &lines).await;
+    }
+
+    #[tokio::test]
+    async fn the_journal_stream_shares_the_connection_with_log_collectors() -> Result<()> {
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[
+            entry_with(1, &json!({ "_SYSTEMD_UNIT": KEPT, "PRIORITY": "3" })),
+            entry(2, DROPPED),
+            entry_with(
+                3,
+                &json!({
+                    "_SYSTEMD_UNIT": "docker.service",
+                    "CONTAINER_NAME": "clumit-security-db",
+                    "PRIORITY": "4",
+                }),
+            ),
+            entry_with(
+                4,
+                &json!({
+                    "_SYSTEMD_UNIT": "init.scope",
+                    "_PID": "1",
+                    "UNIT": "clumit-security-b.service",
+                }),
+            ),
+            // A forged container name.
+            entry_with(
+                5,
+                &json!({ "_SYSTEMD_UNIT": "session-1.scope", "CONTAINER_NAME": "clumit-security-db" }),
+            ),
+        ])?;
+        let logs = LogFiles::new()?;
+        let a = logs.create("a.log", &["a1"])?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime
+            .apply(journal_config(giganto.addr, &[("kind_a", &a)]))
+            .await;
+        wait_for_messages(&giganto, [1, 3, 4]).await;
+        wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+        assert!(
+            logs_capture
+                .text()
+                .contains("Started the journal collector")
+        );
+
+        assert_eq!(giganto.connections(), 1);
+        let streams = giganto.streams();
+        assert_eq!(streams.len(), 2);
+        assert!(streams.iter().all(|stream| stream.connection == 0));
+        let journal = &giganto.streams_of(JOURNAL)[0];
+        assert_eq!(journal.header, op_log_header());
+        assert_eq!(giganto.streams_of("kind_a")[0].header, log_header());
+        let decoded = journal
+            .op_logs
+            .iter()
+            .map(|op_log| {
+                (
+                    op_log.sensor.as_str(),
+                    op_log.service_name.as_str(),
+                    op_log.log_level.clone(),
+                    op_log.contents.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decoded,
+            [
+                (
+                    "",
+                    "clumit-security/unit/clumit-security-a.service",
+                    OpLogLevel::Error,
+                    "message 1"
+                ),
+                (
+                    "",
+                    "clumit-security/container/clumit-security-db",
+                    OpLogLevel::Warn,
+                    "message 3"
+                ),
+                (
+                    "",
+                    "clumit-security/systemd/clumit-security-b.service",
+                    OpLogLevel::Info,
+                    "message 4"
+                ),
+            ]
+        );
+        // Stamped from the entries' times.
+        let stamps = [1, 3, 4]
+            .map(|n| i64::try_from(time(n) * 1000).expect("fits"))
+            .to_vec();
+        assert_eq!(journal.timestamps, stamps);
+
+        // Once everything written is acknowledged, the checkpoint moves past
+        // the entry dropped after the last record.
+        wait_for_cursor(&logs.state(), 5).await;
+
+        runtime.shutdown().await;
+        assert!(giganto.streams().iter().all(|stream| stream.close_marker));
+        assert!(
+            logs_capture
+                .text()
+                .contains("Stopped the journal collector with close ACK Received")
+        );
+        assert!(!running(fake.last_pid()), "journalctl is stopped");
+        wait_for_cursor(&logs.state(), 5).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_dropped_stream_and_a_lost_connection_lose_no_entry() -> Result<()> {
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT), entry(3, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, 1..=3).await;
+        wait_for_cursor(&logs.state(), 3).await;
+        let follow = fake.last_pid();
+        assert_eq!(fake.args().len(), 2);
+
+        // The server stops the stream: journalctl is stopped while it is
+        // down, and the new stream starts catch-up from the acknowledged
+        // entry.
+        giganto.stop_stream_of(JOURNAL)?;
+        wait_for("the stream is replaced", WAIT, || {
+            giganto.streams_of(JOURNAL).len() == 2
+        })
+        .await;
+        assert!(!running(follow), "journalctl was stopped and reaped");
+        wait_for("journalctl runs again", WAIT, || fake.args().len() >= 4).await;
+        assert_eq!(
+            fake.args()[2..4],
+            [
+                format!("--after-cursor={}", cursor(3)),
+                format!("--follow --lines=all --after-cursor={}", cursor(3)),
+            ]
+        );
+        fake.push(&[entry(4, KEPT)])?;
+        wait_for_messages(&giganto, [4]).await;
+        assert_eq!(giganto.streams_of(JOURNAL)[1].lines(), messages([4]));
+        wait_for_cursor(&logs.state(), 4).await;
+
+        // The connection is lost.
+        let follow = fake.last_pid();
+        giganto.close_connections();
+        wait_for("a new connection carries the stream", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .last()
+                .is_some_and(|stream| stream.connection == 1)
+        })
+        .await;
+        assert!(!running(follow), "journalctl was stopped and reaped");
+        fake.push(&[entry(5, KEPT)])?;
+        wait_for_messages(&giganto, [5]).await;
+        let received = giganto.lines(JOURNAL);
+        for expected in messages(1..=5) {
+            assert!(received.contains(&expected), "{expected} in {received:?}");
+        }
+        // Everything acknowledged before a drop is not sent again.
+        assert_eq!(
+            received.iter().filter(|line| *line == "message 1").count(),
+            1,
+            "{received:?}"
+        );
+
+        runtime.shutdown().await;
+        wait_for_cursor(&logs.state(), 5).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unacknowledged_entries_are_sent_again_on_a_new_stream() -> Result<()> {
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+        giganto.hold_acks(&[JOURNAL]).await;
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, 1..=2).await;
+        sleep(SETTLE).await;
+        assert_eq!(checkpoint_cursor(&logs.state()), None);
+
+        // Nothing is acknowledged: the new stream reads from the oldest
+        // entry.
+        giganto.stop_stream_of(JOURNAL)?;
+        wait_for("the entries are sent again", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .get(1)
+                .is_some_and(|stream| stream.lines() == messages(1..=2))
+        })
+        .await;
+        assert!(fake.args().contains(&String::new()));
+        assert_eq!(
+            fake.args().iter().filter(|args| args.is_empty()).count(),
+            2,
+            "{:?}",
+            fake.args()
+        );
+        giganto.release_acks().await;
+        wait_for_cursor(&logs.state(), 2).await;
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_follow_exit_restarts_journalctl_on_the_same_stream() -> Result<()> {
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, [1]).await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() == 2).await;
+        fake.push(&[entry(2, KEPT), entry(3, DROPPED)])?;
+        wait_for_messages(&giganto, [2]).await;
+
+        let status = std::process::Command::new("kill")
+            .args(["-KILL", &fake.last_pid().to_string()])
+            .status()?;
+        assert!(status.success());
+        wait_for("journalctl is started again", WAIT, || {
+            fake.args().len() >= 4
+        })
+        .await;
+        assert_eq!(
+            fake.args()[2..4],
+            [
+                format!("--after-cursor={}", cursor(3)),
+                format!("--follow --lines=all --after-cursor={}", cursor(3)),
+            ]
+        );
+        fake.push(&[entry(4, KEPT)])?;
+        wait_for_messages(&giganto, [4]).await;
+        let streams = giganto.streams_of(JOURNAL);
+        assert_eq!(streams.len(), 1, "the stream is kept");
+        assert_eq!(streams[0].lines(), messages([1, 2, 4]));
+        assert!(streams[0].ended.is_none());
+        assert_eq!(
+            logs_capture
+                .text()
+                .matches("journalctl ended with signal: 9 (SIGKILL) while following the journal")
+                .count(),
+            1
+        );
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn applies_keep_remove_and_add_the_journal_collector() -> Result<()> {
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let a = logs.create("a.log", &["a1"])?;
+        let b = logs.create("b.log", &["b1"])?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime
+            .apply(journal_config(giganto.addr, &[("kind_a", &a)]))
+            .await;
+        wait_for_messages(&giganto, 1..=2).await;
+        wait_for_cursor(&logs.state(), 2).await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() == 2).await;
+        let follow = fake.last_pid();
+
+        // Keeping it restarts nothing.
+        runtime
+            .apply(journal_config(
+                giganto.addr,
+                &[("kind_a", &a), ("kind_b", &b)],
+            ))
+            .await;
+        wait_for_lines(&giganto, "kind_b", &["b1"]).await;
+        sleep(SETTLE).await;
+        assert_eq!(fake.pids(), fake.pids()[..2]);
+        assert!(running(follow));
+        let journal = giganto.streams_of(JOURNAL);
+        assert_eq!(journal.len(), 1);
+        assert!(journal[0].ended.is_none() && !journal[0].close_marker);
+        assert!(
+            logs_capture
+                .text()
+                .contains("Applied a configuration with 3 collectors: 1 started, 0 stopped")
+        );
+
+        // Removing it stops it without a save.
+        giganto.hold_acks(&[JOURNAL]).await;
+        fake.push(&[entry(3, KEPT)])?;
+        wait_for_messages(&giganto, [3]).await;
+        runtime
+            .apply(config(giganto.addr, &[("kind_a", &a), ("kind_b", &b)]))
+            .await;
+        let text = logs_capture.text();
+        assert!(
+            text.contains("Applied a configuration with 2 collectors: 0 started, 1 stopped"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Stopped the journal collector with close ACK Received"),
+            "{text}"
+        );
+        assert!(giganto.streams_of(JOURNAL)[0].close_marker);
+        assert!(!running(follow));
+        sleep(SETTLE).await;
+        assert_eq!(checkpoint_cursor(&logs.state()), Some(cursor(2)));
+        assert_eq!(giganto.streams_of("kind_a").len(), 1);
+
+        // Adding it again resumes from its checkpoint.
+        giganto.release_acks().await;
+        runtime
+            .apply(journal_config(
+                giganto.addr,
+                &[("kind_a", &a), ("kind_b", &b)],
+            ))
+            .await;
+        wait_for("a new stream carries entry 3", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .get(1)
+                .is_some_and(|stream| stream.lines() == messages([3]))
+        })
+        .await;
+        assert_eq!(fake.args()[2], format!("--after-cursor={}", cursor(2)));
+        wait_for_cursor(&logs.state(), 3).await;
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_checkpoint_starts_after_the_saved_tail() -> Result<()> {
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT), entry(3, DROPPED)])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+        let checkpoints = logs.state().join("checkpoints");
+        std::fs::create_dir(&checkpoints)?;
+        std::fs::write(journal_file(&logs.state()), b"garbage")?;
+        // The save of the tail fails while a directory is in the way.
+        let tmp = checkpoints.join("journal.json.tmp");
+        std::fs::create_dir(&tmp)?;
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for("the tail is read", WAIT, || fake.args().len() == 1).await;
+        assert_eq!(fake.args(), ["--lines=1"]);
+        sleep(SETTLE).await;
+        assert!(giganto.streams_of(JOURNAL).is_empty(), "nothing is sent");
+        assert_eq!(fake.args().len(), 1);
+
+        std::fs::remove_dir(&tmp)?;
+        wait_for_cursor(&logs.state(), 3).await;
+        wait_for("the stream opens", WAIT, || {
+            !giganto.streams_of(JOURNAL).is_empty()
+        })
+        .await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() == 3).await;
+        fake.push(&[entry(4, KEPT)])?;
+        wait_for_messages(&giganto, [4]).await;
+        assert_eq!(giganto.lines(JOURNAL), messages([4]));
+        assert_eq!(
+            fake.args()[1..3],
+            [
+                format!("--after-cursor={}", cursor(3)),
+                format!("--follow --lines=all --after-cursor={}", cursor(3)),
+            ]
+        );
+        let text = logs_capture.text();
+        assert_eq!(
+            text.matches("unsent earlier entries may be skipped")
+                .count(),
+            1,
+            "{text}"
+        );
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn journalctl_waits_for_the_stream() -> Result<()> {
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let silent = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime
+            .apply(journal_config(silent.local_addr()?, &[]))
+            .await;
+        sleep(SETTLE).await;
+        assert_eq!(
+            fake.args(),
+            Vec::<String>::new(),
+            "no stream, no journalctl"
+        );
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, [1]).await;
+        assert_eq!(fake.args()[0], "");
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn journalctl_waits_for_the_access_check() -> Result<()> {
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT)])?;
+        std::fs::write(fake.path("machine-id"), b"x\n")?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        let error = "cannot read the system journal; is the unit in group adm?";
+        wait_for("the access error is logged", WAIT, || {
+            logs_capture.text().contains(error)
+        })
+        .await;
+        sleep(SETTLE).await;
+        assert_eq!(logs_capture.text().matches(error).count(), 1);
+        assert_eq!(fake.args(), Vec::<String>::new(), "journalctl does not run");
+        assert!(giganto.streams_of(JOURNAL).is_empty(), "no stream opens");
+
+        std::fs::write(fake.path("machine-id"), format!("{MACHINE_ID}\n"))?;
+        wait_for_messages(&giganto, [1]).await;
+        assert!(
+            logs_capture
+                .text()
+                .contains("Journal collector: the system journal is readable")
+        );
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_address_change_moves_the_journal_stream() -> Result<()> {
+        let pki = Pki::new()?;
+        let first = Giganto::start(&pki)?;
+        let second = Giganto::start(&pki)?;
+        let files = Files::new(&pki, &pki.client()?)?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(first.addr, &[])).await;
+        wait_for_messages(&first, [1]).await;
+        wait_for_cursor(&logs.state(), 1).await;
+        runtime.apply(journal_config(second.addr, &[])).await;
+        wait_for("the stream moves", WAIT, || {
+            !second.streams_of(JOURNAL).is_empty()
+        })
+        .await;
+        fake.push(&[entry(2, KEPT)])?;
+        wait_for_messages(&second, [2]).await;
+        assert_eq!(second.lines(JOURNAL), messages([2]));
+        assert!(!first.streams_of(JOURNAL)[0].close_marker);
+
+        runtime.shutdown().await;
+        assert!(second.streams_of(JOURNAL)[0].close_marker);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shutdown_saves_what_the_close_ack_acknowledges() -> Result<()> {
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT), entry(3, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+        giganto.withhold_acks(&[JOURNAL]);
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, 1..=3).await;
+        sleep(SETTLE).await;
+        assert_eq!(checkpoint_cursor(&logs.state()), None);
+        let follow = fake.last_pid();
+
+        runtime.shutdown().await;
+        assert!(giganto.streams_of(JOURNAL)[0].close_marker);
+        assert!(!running(follow));
+        assert_eq!(checkpoint_cursor(&logs.state()), Some(cursor(3)));
+        let saved = serde_json::from_slice::<Value>(&std::fs::read(journal_file(&logs.state()))?)?;
+        assert_eq!(
+            saved,
+            json!({
+                "type": "journal",
+                "cursor": cursor(3),
+                "seqnum_id": SEQNUM_ID,
+                "seqnum": 3,
+                "realtime_us": time(3),
+            })
+        );
+        Ok(())
+    }
 }

@@ -1,8 +1,8 @@
 //! The checkpoints of remote-mode collectors, in the state directory.
 //!
 //! A log collector's checkpoint is `checkpoints/log/<kind>.json`, holding
-//! the acknowledged position of its file. The rest of `checkpoints/` is left
-//! to other collector types.
+//! the acknowledged position of its file. The journal collector's is
+//! `checkpoints/journal.json`, holding the acknowledged journal entry.
 //!
 //! The store alone encodes positions: [`Saves`] and [`run_saver`] keep,
 //! compare and hand on the positions they save, and write the bytes the
@@ -23,6 +23,8 @@ use tracing::{debug, info, warn};
 
 use super::acks::Acks;
 use super::follow::LogPosition;
+#[cfg(target_os = "linux")]
+use super::journal::JournalPosition;
 use crate::collector::POLLING_INTERVAL;
 
 /// The least time between two periodic saves of one collector.
@@ -152,6 +154,150 @@ fn decode_log(bytes: &[u8], kind: &str, path: &Path) -> Result<Decoded, String> 
         return Ok(Decoded::OtherPath(recorded_path.to_string()));
     }
     Ok(Decoded::Position(position))
+}
+
+/// Returns the checkpoint file of the journal collector.
+#[cfg(target_os = "linux")]
+pub(super) fn journal_file(state_dir: &Path) -> PathBuf {
+    state_dir.join(CHECKPOINTS).join("journal.json")
+}
+
+/// The longest journal cursor a checkpoint may hold, in bytes.
+#[cfg(target_os = "linux")]
+const MAX_CURSOR_LEN: usize = 4096;
+
+/// The fields of a journal record, which has no other.
+#[cfg(target_os = "linux")]
+const JOURNAL_FIELDS: [&str; 5] = ["type", "cursor", "seqnum_id", "seqnum", "realtime_us"];
+
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+struct JournalRecord<'a> {
+    #[serde(rename = "type")]
+    record_type: &'a str,
+    cursor: &'a str,
+    seqnum_id: Option<&'a str>,
+    seqnum: Option<u64>,
+    realtime_us: Option<u64>,
+}
+
+/// Encodes the checkpoint of the journal collector.
+#[cfg(target_os = "linux")]
+pub(super) fn encode_journal(position: &JournalPosition) -> Vec<u8> {
+    let record = JournalRecord {
+        record_type: "journal",
+        cursor: &position.cursor,
+        seqnum_id: position.seqnum_id.as_deref(),
+        seqnum: position.seqnum,
+        realtime_us: position.realtime_us,
+    };
+    let mut bytes = serde_json::to_vec(&record).unwrap_or_default();
+    bytes.push(b'\n');
+    bytes
+}
+
+/// What loading the journal checkpoint found.
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum LoadedJournal {
+    /// No checkpoint file.
+    Missing,
+    /// An unusable file: `reason` names the failed check.
+    Corrupt(String),
+    Found(JournalPosition),
+}
+
+/// Loads the checkpoint of the journal collector.
+#[cfg(target_os = "linux")]
+pub(super) fn load_journal(state_dir: &Path) -> LoadedJournal {
+    match fs::read(journal_file(state_dir)) {
+        Ok(bytes) => match decode_journal(&bytes) {
+            Ok(position) => LoadedJournal::Found(position),
+            Err(reason) => LoadedJournal::Corrupt(reason),
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => LoadedJournal::Missing,
+        Err(error) => LoadedJournal::Corrupt(format!("cannot be read ({error})")),
+    }
+}
+
+/// Decodes a journal record, or returns which check it fails.
+#[cfg(target_os = "linux")]
+fn decode_journal(bytes: &[u8]) -> Result<JournalPosition, String> {
+    let value = serde_json::from_slice::<Value>(bytes).map_err(|_| "not valid JSON".to_string())?;
+    let Value::Object(record) = value else {
+        return Err("not a JSON object".to_string());
+    };
+    let field = |name: &str| {
+        record
+            .get(name)
+            .ok_or_else(|| format!("missing field {name}"))
+    };
+    let optional_integer = |name: &str| match field(name)? {
+        Value::Null => Ok(None),
+        value => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("field {name} is neither null nor a non-negative integer")),
+    };
+    if field("type")?.as_str() != Some("journal") {
+        return Err("type is not journal".to_string());
+    }
+    if let Some(name) = record
+        .keys()
+        .find(|name| !JOURNAL_FIELDS.contains(&name.as_str()))
+    {
+        return Err(format!("unknown field {name}"));
+    }
+    let cursor = field("cursor")?
+        .as_str()
+        .ok_or_else(|| "field cursor is not a string".to_string())?;
+    if !is_cursor(cursor) {
+        return Err("field cursor is not a journal cursor".to_string());
+    }
+    let seqnum_id = match field("seqnum_id")? {
+        Value::Null => None,
+        Value::String(seqnum_id) => Some(seqnum_id.clone()),
+        _ => return Err("field seqnum_id is neither null nor a string".to_string()),
+    };
+    Ok(JournalPosition {
+        cursor: cursor.to_string(),
+        seqnum_id,
+        seqnum: optional_integer("seqnum")?,
+        realtime_us: optional_integer("realtime_us")?,
+    })
+}
+
+/// Tells whether `cursor` has the form journalctl prints for `__CURSOR`:
+/// `s=<32 hex>;i=<hex>;b=<32 hex>;m=<hex>;t=<hex>;x=<hex>`, in lowercase, at
+/// most [`MAX_CURSOR_LEN`] bytes long. journalctl refuses a cursor of
+/// another form.
+#[cfg(target_os = "linux")]
+fn is_cursor(cursor: &str) -> bool {
+    const ITEMS: [(&str, Option<usize>); 6] = [
+        ("s=", Some(32)),
+        ("i=", None),
+        ("b=", Some(32)),
+        ("m=", None),
+        ("t=", None),
+        ("x=", None),
+    ];
+    if cursor.len() > MAX_CURSOR_LEN {
+        return false;
+    }
+    let mut items = cursor.split(';');
+    for (prefix, len) in ITEMS {
+        let Some(hex) = items.next().and_then(|item| item.strip_prefix(prefix)) else {
+            return false;
+        };
+        let lower_hex = !hex.is_empty()
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !lower_hex || len.is_some_and(|len| hex.len() != len) {
+            return false;
+        }
+    }
+    items.next().is_none()
 }
 
 /// Adds what failed to an I/O error.
@@ -398,11 +544,47 @@ impl Saves<LogPosition> {
             let path = path.to_path_buf();
             Box::new(move |position: &LogPosition| encode_log(&kind, &path, position))
         };
+        Self::new(
+            kind.to_string(),
+            vec![state_dir.join(CHECKPOINTS), dir.clone()],
+            dir.join(format!("{kind}.json")),
+            dir.join(format!("{kind}{TEMPORARY_SUFFIX}")),
+            encode,
+            lock,
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Saves<JournalPosition> {
+    /// Returns the save state of the journal collector.
+    pub(super) fn journal(state_dir: &Path, lock: Arc<Mutex<()>>) -> Self {
+        let dir = state_dir.join(CHECKPOINTS);
+        Self::new(
+            "the journal collector".to_string(),
+            vec![dir.clone()],
+            journal_file(state_dir),
+            dir.join(format!("journal{TEMPORARY_SUFFIX}")),
+            Box::new(encode_journal),
+            lock,
+        )
+    }
+}
+
+impl<P> Saves<P> {
+    fn new(
+        kind: String,
+        dirs: Vec<PathBuf>,
+        file: PathBuf,
+        tmp: PathBuf,
+        encode: Encode<P>,
+        lock: Arc<Mutex<()>>,
+    ) -> Self {
         Self {
-            kind: kind.to_string(),
-            dirs: vec![state_dir.join(CHECKPOINTS), dir.clone()],
-            file: dir.join(format!("{kind}.json")),
-            tmp: dir.join(format!("{kind}{TEMPORARY_SUFFIX}")),
+            kind,
+            dirs,
+            file,
+            tmp,
             encode,
             lock,
             requested: AtomicU64::new(0),
@@ -1093,6 +1275,194 @@ mod tests {
         saves.retire();
         acks.consumed(position(101));
         tokio::time::timeout(Duration::from_secs(5), task).await??;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    const CURSOR: &str = "s=0123456789abcdef0123456789abcdef;i=1a;\
+                          b=fedcba9876543210fedcba9876543210;m=2b;t=5f3c;x=9";
+
+    #[cfg(target_os = "linux")]
+    fn journal_position(seqnum: Option<u64>) -> JournalPosition {
+        JournalPosition {
+            cursor: CURSOR.to_string(),
+            seqnum_id: seqnum.map(|_| "00112233445566778899aabbccddeeff".to_string()),
+            seqnum,
+            realtime_us: seqnum.map(|seqnum| 1_700_000_000_000_000 + seqnum),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn encodes_and_decodes_the_exact_journal_record() {
+        let bytes = encode_journal(&journal_position(Some(26)));
+        assert_eq!(
+            String::from_utf8(bytes.clone()).expect("UTF-8"),
+            format!(
+                "{{\"type\":\"journal\",\"cursor\":\"{CURSOR}\",\
+                 \"seqnum_id\":\"00112233445566778899aabbccddeeff\",\"seqnum\":26,\
+                 \"realtime_us\":1700000000000026}}\n"
+            )
+        );
+        assert_eq!(decode_journal(&bytes), Ok(journal_position(Some(26))));
+
+        let bytes = encode_journal(&journal_position(None));
+        assert_eq!(
+            String::from_utf8(bytes.clone()).expect("UTF-8"),
+            format!(
+                "{{\"type\":\"journal\",\"cursor\":\"{CURSOR}\",\"seqnum_id\":null,\
+                 \"seqnum\":null,\"realtime_us\":null}}\n"
+            )
+        );
+        assert_eq!(decode_journal(&bytes), Ok(journal_position(None)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rejects_journal_records_failing_a_check() {
+        let record = |fields: &str| format!("{{\"type\":\"journal\",{fields}}}");
+        let valid = format!(
+            "\"cursor\":\"{CURSOR}\",\"seqnum_id\":null,\"seqnum\":null,\"realtime_us\":null"
+        );
+        let long = format!("{};x={}", &CURSOR[..CURSOR.len() - 4], "a".repeat(4096));
+        let cases = [
+            ("garbage".to_string(), "not valid JSON"),
+            ("[1]".to_string(), "not a JSON object"),
+            (format!("{{{valid}}}"), "missing field type"),
+            (
+                format!("{{\"type\":\"log\",{valid}}}"),
+                "type is not journal",
+            ),
+            (format!("{{\"type\":null,{valid}}}"), "type is not journal"),
+            (record(&format!("{valid},\"x\":1")), "unknown field x"),
+            (
+                record(
+                    "\"cursor\":\"garbage\",\"seqnum_id\":null,\"seqnum\":null,\"realtime_us\":null",
+                ),
+                "field cursor is not a journal cursor",
+            ),
+            (
+                record(&valid.replace("\"seqnum\":null,", "")),
+                "missing field seqnum",
+            ),
+            (
+                record(&valid.replace("\"seqnum\":null", "\"seqnum\":-1")),
+                "field seqnum is neither null nor a non-negative integer",
+            ),
+            (
+                record(&valid.replace("\"realtime_us\":null", "\"realtime_us\":\"5\"")),
+                "field realtime_us is neither null nor a non-negative integer",
+            ),
+            (
+                record(&valid.replace("\"seqnum_id\":null", "\"seqnum_id\":5")),
+                "field seqnum_id is neither null nor a string",
+            ),
+            (
+                record(&valid.replace(&format!("\"{CURSOR}\""), "7")),
+                "field cursor is not a string",
+            ),
+            (
+                record(&valid.replace(CURSOR, &long)),
+                "field cursor is not a journal cursor",
+            ),
+        ];
+        for (bytes, reason) in cases {
+            assert_eq!(
+                decode_journal(bytes.as_bytes()),
+                Err(reason.to_string()),
+                "{bytes}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn journal_cursors_have_journalctls_form() {
+        assert!(is_cursor(CURSOR));
+        let at_most = format!(
+            "s={0};i=1;b={0};m=2;t=3;x={1}",
+            "a".repeat(32),
+            "f".repeat(4096 - 84)
+        );
+        assert_eq!(at_most.len(), 4096);
+        assert!(is_cursor(&at_most));
+        let s = "0123456789abcdef0123456789abcdef";
+        for cursor in [
+            String::new(),
+            "garbage".to_string(),
+            format!("{at_most}f"),
+            format!("s={s};i=1;b={s};m=2;t=3"),
+            format!("s={s};i=1;b={s};m=2;t=3;x=4;y=5"),
+            format!("s={s};i=1;b={s};m=2;t=3;x="),
+            format!("s={s};i=1;b={s};m=2;t=3;x=4;"),
+            format!("s={};i=1;b={s};m=2;t=3;x=4", &s[1..]),
+            format!("s={s};i=1;b={s}0;m=2;t=3;x=4"),
+            format!("s={};i=1;b={s};m=2;t=3;x=4", s.to_uppercase()),
+            format!("s={s};i=1g;b={s};m=2;t=3;x=4"),
+            format!("i=1;s={s};b={s};m=2;t=3;x=4"),
+            format!("s={s};i=1;b={s};m=2;t=3;x=4 "),
+        ] {
+            assert!(!is_cursor(&cursor), "{cursor:?}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn loads_missing_found_and_corrupt_journal_checkpoints() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        assert_eq!(load_journal(state.path()), LoadedJournal::Missing);
+
+        fs::create_dir(state.path().join(CHECKPOINTS))?;
+        let file = journal_file(state.path());
+        assert_eq!(file, state.path().join("checkpoints/journal.json"));
+        fs::write(&file, encode_journal(&journal_position(Some(3))))?;
+        assert_eq!(
+            load_journal(state.path()),
+            LoadedJournal::Found(journal_position(Some(3)))
+        );
+
+        fs::write(&file, b"garbage")?;
+        assert_eq!(
+            load_journal(state.path()),
+            LoadedJournal::Corrupt("not valid JSON".to_string())
+        );
+
+        // An unreadable file, here a directory in its place.
+        fs::remove_file(&file)?;
+        fs::create_dir(&file)?;
+        let LoadedJournal::Corrupt(reason) = load_journal(state.path()) else {
+            panic!("an unreadable file is corrupt");
+        };
+        assert!(reason.starts_with("cannot be read"), "{reason}");
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn journal_saves_write_their_own_file_privately() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let saves = Arc::new(Saves::journal(state.path(), Arc::default()));
+        assert!(saves.save(&journal_position(Some(4))).await.saved());
+        let file = journal_file(state.path());
+        assert_eq!(fs::read(&file)?, encode_journal(&journal_position(Some(4))));
+        assert_eq!(mode(&state.path().join(CHECKPOINTS)), 0o700);
+        assert_eq!(mode(&file), 0o600);
+        assert!(!state.path().join("checkpoints/journal.json.tmp").exists());
+        assert!(!log_dir(state.path()).exists());
+
+        // A failing save, with a directory where the temporary file goes.
+        let tmp = state.path().join("checkpoints/journal.json.tmp");
+        fs::create_dir(&tmp)?;
+        assert!(matches!(
+            saves.save(&journal_position(Some(5))).await,
+            Outcome::Failed(_)
+        ));
+        fs::remove_dir(&tmp)?;
+        saves.final_save(Some(&journal_position(Some(6)))).await;
+        assert_eq!(
+            load_journal(state.path()),
+            LoadedJournal::Found(journal_position(Some(6)))
+        );
         Ok(())
     }
 

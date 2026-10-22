@@ -19,7 +19,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     CHANNEL_CLOSE_MESSAGE, CHANNEL_CLOSE_TIMEOUT, CHANNEL_CLOSE_TIMESTAMP, ReconnectOutcome,
@@ -568,6 +568,9 @@ async fn send_close_marker(send: &mut SendStream) -> std::result::Result<(), Sen
 /// them to `acks` when the caller receives ACKs. The task notifies the close
 /// when the channel-close sentinel is echoed back, after handing it on, and
 /// exits promptly when `token` is cancelled.
+///
+/// A data ACK is logged at DEBUG when it is handed on, as in remote mode,
+/// and at INFO otherwise; the close ACK is logged at INFO.
 async fn recv_ack(
     mut recv: RecvStream,
     close_ack: oneshot::Sender<()>,
@@ -584,6 +587,11 @@ async fn recv_ack(
             Ok(timestamp) => {
                 if timestamp == CHANNEL_CLOSE_TIMESTAMP {
                     info!("Finish ACK: {timestamp}");
+                } else if acks.is_some() {
+                    // Giganto repeats its last ACK every 60 s on every
+                    // stream, and remote mode collects REproduce's own lines
+                    // from the journal.
+                    debug!("ACK: {timestamp}");
                 } else {
                     info!("ACK: {timestamp}");
                 }
@@ -879,6 +887,82 @@ mod tests {
             .await
             .expect("recv_ack task should join cleanly")
             .expect("recv_ack should stop cleanly");
+    }
+
+    /// Captures what is logged on the current thread, at every level.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Captured {
+        fn start() -> (Self, tracing::subscriber::DefaultGuard) {
+            let captured = Self::default();
+            let writer = captured.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(move || writer.clone())
+                .finish();
+            (captured, tracing::subscriber::set_default(subscriber))
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().expect("lock")).into_owned()
+        }
+    }
+
+    #[tokio::test]
+    async fn ack_lines_are_debug_only_when_acks_are_handed_on() {
+        for deliver in [false, true] {
+            let (captured, _guard) = Captured::start();
+            let mut channel = open_ack_channel()
+                .await
+                .expect("raw ACK channel should be established");
+            let token = CancellationToken::new();
+            let (close_ack_tx, close_ack) = oneshot::channel();
+            let (acks_tx, _acks_rx) = mpsc::unbounded_channel();
+            let recv_handle = tokio::spawn(recv_ack(
+                channel.client_recv,
+                close_ack_tx,
+                deliver.then_some((acks_tx, 0)),
+                token.clone(),
+            ));
+            for timestamp in [10_i64, CHANNEL_CLOSE_TIMESTAMP] {
+                channel
+                    .server_send
+                    .write_all(&timestamp.to_be_bytes())
+                    .await
+                    .expect("server should send the ACK");
+            }
+            close_ack.await.expect("close ACK should be notified");
+            token.cancel();
+            recv_handle
+                .await
+                .expect("recv_ack task should join cleanly")
+                .expect("recv_ack should stop cleanly");
+
+            let text = captured.text();
+            let line = |needle: &str| {
+                text.lines()
+                    .find(|line| line.contains(needle))
+                    .unwrap_or_else(|| panic!("{needle} is logged: {text}"))
+                    .to_string()
+            };
+            let ack = line(" ACK: 10");
+            let expected = if deliver { "DEBUG" } else { "INFO" };
+            assert!(ack.contains(expected), "{deliver}: {ack}");
+            assert!(line("Finish ACK: -1").contains("INFO"), "{text}");
+        }
     }
 
     #[tokio::test]
