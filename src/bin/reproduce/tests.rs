@@ -4,7 +4,6 @@ use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use async_trait::async_trait;
 use giganto_client::{
@@ -172,7 +171,7 @@ fn controller_for_file(
         None,
         last_transfer_line_suffix.map(str::to_string),
     ));
-    Controller::new(config, Arc::new(AtomicBool::new(false)))
+    Controller::new(config, ReloadSignal::new())
 }
 
 fn controller_for_directory(input: &Path, kind: &str, prefix: Option<&str>) -> Controller {
@@ -181,7 +180,7 @@ fn controller_for_directory(input: &Path, kind: &str, prefix: Option<&str>) -> C
         file_prefix: prefix.map(str::to_string),
         polling_mode: false,
     });
-    Controller::new(config, Arc::new(AtomicBool::new(false)))
+    Controller::new(config, ReloadSignal::new())
 }
 
 fn write_text_file(dir: &tempfile::TempDir, name: &str, contents: &str) -> PathBuf {
@@ -747,8 +746,7 @@ async fn run_single_does_not_checkpoint_unsent_batch_after_cancelled_reconnect()
         None,
         Some("offset".to_string()),
     ));
-    let controller =
-        Controller::with_shutdown(config, Arc::new(AtomicBool::new(false)), shutdown.clone());
+    let controller = Controller::with_shutdown(config, ReloadSignal::new(), shutdown.clone());
     let mut sender = CancelledBatchReconnectSender {
         shutdown: shutdown_tx,
         batch_attempts: 0,
@@ -912,7 +910,7 @@ async fn run_uses_real_sender_for_single_log_input() {
     let server_task = tokio::spawn(async move { serve_single_connection(server_endpoint).await });
     let controller = Controller::new(
         giganto_config(&path, "custom", server_addr),
-        Arc::new(AtomicBool::new(false)),
+        ReloadSignal::new(),
     );
 
     controller
@@ -954,7 +952,7 @@ async fn run_uses_real_sender_for_directory_input() {
         file_prefix: Some("keep_".to_string()),
         polling_mode: false,
     });
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
 
     controller
         .run()
@@ -1298,7 +1296,7 @@ async fn run_single_rejects_directory_input() {
 async fn run_with_sender_rejects_elastic_input() {
     let mut config = test_config(Path::new("elastic"), "process_create");
     config.input = "elastic".to_string();
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let mut sender = MockSender::default();
 
     let err = controller
@@ -1314,10 +1312,7 @@ async fn run_with_sender_rejects_elastic_input() {
 #[tokio::test]
 async fn run_split_requires_directory_configuration() {
     let temp_dir = tempdir().expect("temporary directory should be created");
-    let controller = Controller::new(
-        test_config(temp_dir.path(), "custom"),
-        Arc::new(AtomicBool::new(false)),
-    );
+    let controller = Controller::new(test_config(temp_dir.path(), "custom"), ReloadSignal::new());
     let mut sender = MockSender::default();
 
     let err = controller
@@ -1349,7 +1344,7 @@ async fn run_split_returns_ok_for_empty_directory_without_polling() {
 async fn run_requires_elastic_configuration_for_elastic_input() {
     let mut config = test_config(Path::new("elastic"), "process_create");
     config.input = "elastic".to_string();
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
 
     let err = controller
         .run()
@@ -1376,7 +1371,7 @@ async fn run_single_requires_file_configuration() {
     let path = write_text_file(&temp_dir, "input.log", "line1\n");
     let mut config = test_config(&path, "custom");
     config.file = None;
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let mut sender = MockSender::default();
 
     let err = controller
@@ -1445,7 +1440,7 @@ async fn dir_polling_creates_per_file_checkpoints() {
         file_prefix: None,
         polling_mode: false,
     });
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let mut sender = MockSender::default();
 
     controller
@@ -1503,7 +1498,7 @@ async fn dir_processing_skips_checkpoint_files_and_avoids_cascading_offsets() {
         file_prefix: None,
         polling_mode: false,
     });
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let mut sender = MockSender::default();
 
     controller
@@ -1637,7 +1632,7 @@ async fn build_file_run_plan_applies_file_polling_for_direct_file_input() {
     let mut config = test_config(&path, "custom");
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
     config.resolve_runtime_options();
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let (_shutdown_tx, shutdown) = watch::channel(false);
 
     let plan = controller
@@ -1655,7 +1650,7 @@ async fn build_file_run_plan_uses_normalized_file_polling_for_directory_input() 
     let mut config = test_config(temp_dir.path(), "custom");
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
     config.resolve_runtime_options();
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let (_shutdown_tx, shutdown) = watch::channel(false);
 
     let plan = controller
@@ -1673,7 +1668,7 @@ async fn build_file_run_plan_uses_normalized_file_polling_for_netflow_file_input
     let mut config = test_config(&path, "netflow5");
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
     config.resolve_runtime_options();
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let (_shutdown_tx, shutdown) = watch::channel(false);
 
     let plan = controller
@@ -1696,7 +1691,7 @@ async fn run_split_uses_normalized_file_polling_and_logs_one_warning() {
     });
     let (_guard, counter) = warn_count::start_warn_count();
     config.resolve_runtime_options();
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let mut sender = MockSender::default();
 
     controller
@@ -1719,7 +1714,7 @@ async fn build_file_run_plan_uses_directory_polling_without_file_polling() {
     let mut config = test_config(temp_dir.path(), "custom");
     config.file = Some(FileConfig::new(Some(false), true, None, None, None));
     config.resolve_runtime_options();
-    let controller = Controller::new(config, Arc::new(AtomicBool::new(false)));
+    let controller = Controller::new(config, ReloadSignal::new());
     let (_shutdown_tx, shutdown) = watch::channel(false);
 
     let plan = controller
@@ -1778,7 +1773,7 @@ async fn sender_token_observes_watch_shutdown_through_controller() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let controller = Controller::with_shutdown(
         test_config(&path, "custom"),
-        Arc::new(AtomicBool::new(false)),
+        ReloadSignal::new(),
         shutdown_rx,
     );
 

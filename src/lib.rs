@@ -3,4 +3,5 @@ pub mod collector;
 pub mod config;
 pub mod controller;
 pub mod parser;
+pub mod reload;
 pub mod sender;
