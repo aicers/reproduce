@@ -804,41 +804,71 @@ impl Reader {
             }
         }
 
-        if let Some((found, opened)) = self.search(position) {
-            info!("Reading {} for {}", found.display(), self.settings.kind);
-            if opened.id != id {
-                info!(
-                    "Resuming {} for {} by its inode only",
-                    found.display(),
-                    self.settings.kind
+        let (found, opened) = match self.search(position) {
+            Search::Found(found, opened) => (found, opened),
+            Search::Retry(problem) => {
+                self.target = Some(Target::Resume(position));
+                return match problem {
+                    Some(problem) => self.problem(problem),
+                    None => Ok(()),
+                };
+            }
+            Search::Lost => {
+                warn!(
+                    "Cannot find the file {} was reading before {}; lines may have been lost",
+                    self.settings.kind,
+                    path.display()
                 );
+                return self.open_zero();
             }
-            self.last_dir = opened.real_path.parent().map(Path::to_path_buf);
-            let Opened { mut file, id, .. } = opened;
-            if let Err(error) = file.seek(SeekFrom::Start(position.offset)) {
-                return self.read_failed(&error);
-            }
+        };
+        info!("Reading {} for {}", found.display(), self.settings.kind);
+        if opened.id != id {
+            info!(
+                "Resuming {} for {} by its inode only",
+                found.display(),
+                self.settings.kind
+            );
+        }
+        self.last_dir = opened.real_path.parent().map(Path::to_path_buf);
+        let Opened {
+            mut file,
+            id: found_id,
+            len,
+            ..
+        } = opened;
+        self.draining = true;
+        if len < position.offset {
+            // Only an exact match can be shorter: a new content epoch of
+            // the predecessor, read from its start once it is saved.
             self.pred = Some(Handle {
                 file,
-                id,
-                offset: position.offset,
+                id: found_id,
+                offset: 0,
             });
-            self.draining = true;
-            return self.begin(id, position.offset);
+            return self.truncated(found_id);
         }
-        warn!(
-            "Cannot find the file {} was reading before {}; lines may have been lost",
-            self.settings.kind,
-            path.display()
-        );
-        self.open_zero()
+        if let Err(error) = file.seek(SeekFrom::Start(position.offset)) {
+            self.draining = false;
+            return self.read_failed(&error);
+        }
+        self.pred = Some(Handle {
+            file,
+            id: found_id,
+            offset: position.offset,
+        });
+        self.begin(found_id, position.offset)
     }
 
     /// Looks for the file of `position` beside the file last opened, or
     /// beside `path` when nothing was opened yet.
-    fn search(&self, position: LogPosition) -> Option<(PathBuf, Opened)> {
+    ///
+    /// A candidate that cannot be opened is not given up on: the search is
+    /// tried again, so a predecessor that is only out of reach for a while
+    /// is not taken for lost.
+    fn search(&self, position: LogPosition) -> Search {
         let path = &self.settings.path;
-        let dir = self
+        let Some(dir) = self
             .last_dir
             .clone()
             .or_else(|| {
@@ -846,11 +876,24 @@ impl Reader {
                     .ok()
                     .and_then(|real| real.parent().map(Path::to_path_buf))
             })
-            .or_else(|| path.parent().map(Path::to_path_buf))?;
+            .or_else(|| path.parent().map(Path::to_path_buf))
+        else {
+            return Search::Lost;
+        };
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Search::Lost,
+            Err(error) => {
+                return Search::Retry(Some(Problem::Stat(io::Error::new(
+                    error.kind(),
+                    format!("{}: {error}", dir.display()),
+                ))));
+            }
+        };
         let id = position.identity();
         let mut exact = Vec::new();
         let mut inode = Vec::new();
-        for entry in fs::read_dir(&dir).ok()?.flatten() {
+        for entry in entries.flatten() {
             let candidate = entry.path();
             let Ok(metadata) = fs::symlink_metadata(&candidate) else {
                 continue;
@@ -865,11 +908,19 @@ impl Reader {
                 inode.push(candidate);
             }
         }
-        exact.into_iter().chain(inode).find_map(|candidate| {
-            let opened =
-                open_checked(&candidate, &self.settings.refused, &self.settings.hook).ok()?;
-            qualifies(opened.id, opened.len, position).then_some((candidate, opened))
-        })
+        for candidate in exact.into_iter().chain(inode) {
+            match open_checked(&candidate, &self.settings.refused, &self.settings.hook) {
+                Ok(opened) if qualifies(opened.id, opened.len, position) => {
+                    return Search::Found(candidate, opened);
+                }
+                // The candidate was replaced since it was inspected.
+                Ok(_) => {}
+                // It was renamed since: the next search finds it again.
+                Err(Problem::Missing) => return Search::Retry(None),
+                Err(problem) => return Search::Retry(Some(problem)),
+            }
+        }
+        Search::Lost
     }
 
     /// Reads the file being read until EOF, and then follows it.
@@ -1061,8 +1112,10 @@ impl Reader {
     }
 
     /// Switches from the drained file `id` to the file `path` names.
+    ///
+    /// Held bytes are returned as a final line only once the switch is
+    /// made: until then, the old file may still complete the line.
     fn switch(&mut self, id: Identity) -> Result<bool, Closed> {
-        self.final_line(id)?;
         let path = self.settings.path.clone();
         match self.open(&path) {
             // `path` names the file read again.
@@ -1071,6 +1124,7 @@ impl Reader {
                 Ok(false)
             }
             Ok(opened) => {
+                self.final_line(id)?;
                 self.pred = self.follow.take();
                 self.draining = false;
                 self.adopt(opened, 0)?;
@@ -1085,18 +1139,21 @@ impl Reader {
 
     /// Continues with the followed file from 0 once the predecessor is
     /// drained. Returns whether the reader switched.
+    ///
+    /// As at a rotation, held bytes are returned as a final line only once
+    /// the switch is made.
     fn finish_drain(&mut self) -> Result<bool, Closed> {
         let Some(pred) = &self.pred else {
             return Ok(false);
         };
         let id = pred.id;
-        self.final_line(id)?;
         if let Some(mut follow) = self.follow.take() {
             if let Err(error) = follow.file.seek(SeekFrom::Start(0)) {
                 self.follow = Some(follow);
                 self.read_failed(&error)?;
                 return Ok(false);
             }
+            self.final_line(id)?;
             follow.offset = 0;
             let next = follow.id;
             self.follow = Some(follow);
@@ -1113,6 +1170,7 @@ impl Reader {
                 Ok(false)
             }
             Ok(opened) => {
+                self.final_line(id)?;
                 self.draining = false;
                 self.adopt(opened, 0)?;
                 Ok(true)
@@ -1123,6 +1181,17 @@ impl Reader {
             }
         }
     }
+}
+
+/// What the search for a predecessor found.
+enum Search {
+    /// The file, and where it was found.
+    Found(PathBuf, Opened),
+    /// A candidate could not be opened: the search is tried again, after
+    /// reporting the problem, if any.
+    Retry(Option<Problem>),
+    /// No file holds the position.
+    Lost,
 }
 
 /// How reading to EOF ended.
@@ -1736,6 +1805,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_partial_line_is_kept_while_a_rotation_cannot_be_followed() {
+        let (dir, path, _state) = files(b"part");
+        let renamed = dir.path().join("a.log.1");
+        let mut run = Run::start(&path, Options::default());
+        resume_at(&mut run, &path, 0).await;
+        run.quiet(POLL * 2).await;
+
+        // The new file cannot be opened: the old one is still read, and the
+        // held bytes stay a part of its unfinished line.
+        fs::rename(&path, &renamed).expect("renamed");
+        mkfifo(&path);
+        assert_problem(run.event().await, "the path is not a regular file");
+        append(&renamed, b"ial\n");
+        assert_eq!(run.batch().await.0, ["partial"]);
+
+        fs::remove_file(&path).expect("removed");
+        fs::write(&path, b"n1\n").expect("created");
+        assert_opened(run.event().await, position(&path, 0));
+        assert_eq!(run.batch().await.0, ["n1"]);
+    }
+
+    #[tokio::test]
+    async fn a_partial_line_is_kept_while_a_drained_predecessor_cannot_be_left() {
+        let (dir, path, _state) = files(b"a1\npart");
+        let old = position(&path, 3);
+        let renamed = dir.path().join("a.log.1");
+        fs::rename(&path, &renamed).expect("renamed");
+        mkfifo(&path);
+        let mut run = Run::start(&path, Options::default());
+        run.resume(old);
+        assert_opened(run.next().await, old);
+        assert_problem(run.event().await, "the path is not a regular file");
+        append(&renamed, b"ial\n");
+        assert_eq!(run.batch().await.0, ["partial"]);
+
+        fs::remove_file(&path).expect("removed");
+        fs::write(&path, b"b1\n").expect("created");
+        assert_opened(run.event().await, position(&path, 0));
+        assert_eq!(run.batch().await.0, ["b1"]);
+    }
+
+    #[tokio::test]
     async fn a_long_line_is_split_into_pieces() {
         let mut bytes = vec![b'x'; MAX_HELD + 10];
         bytes.push(b'\n');
@@ -1849,6 +1960,62 @@ mod tests {
         );
         // The drained predecessor is held as the rotated-away file.
         assert_eq!(open_files_under(dir.path()), 2);
+    }
+
+    #[tokio::test]
+    async fn a_shorter_predecessor_found_by_the_search_is_a_truncation() {
+        let (dir, path, _state) = files(b"a1\na2\n");
+        let old = position(&path, 6);
+        let renamed = dir.path().join("a.log.1");
+        rotate(&path, &renamed, b"b1\n");
+        // Truncated in place: the same inode, shorter than the offset.
+        fs::write(&renamed, b"c1\n").expect("truncated");
+        let mut run = Run::start(&path, Options::default());
+        run.resume(old);
+        assert_truncated(run.next().await, position(&renamed, 0));
+        // Nothing of the new content is read before the resume at its
+        // start.
+        run.quiet(POLL * 2).await;
+        resume_at(&mut run, &renamed, 0).await;
+        assert_eq!(run.batch().await.0, ["c1"]);
+        assert_opened(run.event().await, position(&path, 0));
+        assert_eq!(run.batch().await.0, ["b1"]);
+    }
+
+    #[tokio::test]
+    async fn a_predecessor_that_cannot_be_opened_is_searched_for_again() {
+        let (logs, _guard) = Logs::capture();
+        let (dir, path, _state) = files(b"a1\na2\n");
+        let old = position(&path, 3);
+        let renamed = dir.path().join("a.log.1");
+        rotate(&path, &renamed, b"b1\n");
+        fs::set_permissions(&renamed, fs::Permissions::from_mode(0o000)).expect("locked");
+        // Permissions are not enforced as root.
+        if File::open(&renamed).is_ok() {
+            return;
+        }
+        let mut run = Run::start(&path, Options::default());
+        run.resume(old);
+        match run.next().await {
+            Event::Problem(problem) => assert!(
+                problem.reason().starts_with("cannot open the file: "),
+                "{problem:?}"
+            ),
+            other => panic!("expected a problem, found {other:?}"),
+        }
+        // The path is not read from its beginning in the meantime.
+        run.quiet(POLL * 3).await;
+
+        fs::set_permissions(&renamed, fs::Permissions::from_mode(0o644)).expect("unlocked");
+        assert_opened(run.next().await, old);
+        assert_eq!(run.batch().await.0, ["a2"]);
+        assert_opened(run.event().await, position(&path, 0));
+        assert_eq!(run.batch().await.0, ["b1"]);
+        assert!(
+            !logs.text().contains("Cannot find the file"),
+            "{}",
+            logs.text()
+        );
     }
 
     #[tokio::test]

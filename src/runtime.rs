@@ -700,9 +700,18 @@ impl CollectorTask {
             self.send_resume(control);
 
             let deadline = control.deadline(self.sender.is_open());
+            // A stream that fails while the file is idle is replaced at once
+            // if lines on it await their ACK, so they are sent again without
+            // waiting for a new line; otherwise the next write finds it.
+            let watch = self.unacknowledged();
             let output = tokio::select! {
                 biased;
                 () = stopped(&mut self.stop) => return Err(Stopped),
+                error = self.sender.failed(), if watch => {
+                    self.sender.note_failure(&error);
+                    self.recover(control).await?;
+                    continue;
+                }
                 output = next_result(&mut control.reader) => output,
                 () = tokio::time::sleep_until(deadline) => {
                     self.send_acknowledged(control, false);
@@ -715,6 +724,14 @@ impl CollectorTask {
             }
             self.send_acknowledged(control, false);
         }
+    }
+
+    /// Tells whether lines written on the stream await their ACK: the
+    /// acknowledged position lags the position written or consumed to.
+    fn unacknowledged(&self) -> bool {
+        self.acks
+            .current()
+            .is_some_and(|current| self.acks.acknowledged() != Some(current))
     }
 
     /// Starts a reader thread; until the collector has a starting position,
@@ -1136,6 +1153,18 @@ impl Link {
 impl RemoteSender {
     fn is_open(&self) -> bool {
         self.link.stream.is_some()
+    }
+
+    /// Resolves when the open stream fails while nothing is written to it;
+    /// never while no stream is open.
+    fn failed(&self) -> impl Future<Output = SendError> + 'static {
+        let failed = self.link.stream.as_ref().map(GigantoStream::failed);
+        async move {
+            match failed {
+                Some(failed) => failed.await,
+                None => std::future::pending().await,
+            }
+        }
     }
 
     /// Waits for the connection and opens the stream.

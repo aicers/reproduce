@@ -159,9 +159,11 @@ the byte just past the last line Giganto acknowledged.
 - **Rename rotation.** When the path names a new file, the collector keeps
   reading the old one until 3 seconds pass with no new bytes in it, sends any
   held bytes as its final line, and then reads the new file from its beginning.
-  The old file stays open, unread, until Giganto has acknowledged its last
-  line. A further rotation seen meanwhile is followed only after that, so a
-  collector holds at most two files open.
+  While the new file cannot be opened, the collector keeps reading the old one,
+  where held bytes can still complete their line. The old file stays open,
+  unread, until Giganto has acknowledged its last line. A further rotation seen
+  meanwhile is followed only after that, so a collector holds at most two files
+  open.
 - **Copy-truncate.** When the file becomes shorter than the collector has read,
   held bytes are discarded and the file is read again from its beginning once
   that new position is saved.
@@ -179,7 +181,14 @@ the byte just past the last line Giganto acknowledged.
 
 - Every line is sent at least once. Each collector resumes from the position
   Giganto acknowledged after a reconnect, a stream error or a crash, so lines
-  written to a failed stream are read and sent again.
+  written to a failed stream are read and sent again. A stream that fails while
+  lines on it await acknowledgement is replaced at once, even if the file does
+  not grow.
+- If the file at that position was renamed, the collector finds it in the same
+  directory and reads the rest of it before the path. While such a file exists
+  but cannot be opened, the collector retries every 3 seconds rather than
+  moving on; only when no file holds the position does it read the path from
+  its beginning and log that lines may have been lost.
 - A reconnect or crash can send up to one acknowledgement window per collector
   again: Giganto's `ack_transmission` lines (1024 by default) plus what was in
   flight, or 60 seconds of lines.

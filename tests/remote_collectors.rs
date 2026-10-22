@@ -1865,6 +1865,51 @@ async fn a_closed_connection_sends_the_unacknowledged_lines_again() -> Result<()
 
 #[cfg(unix)]
 #[tokio::test]
+async fn an_idle_collector_sends_the_unacknowledged_lines_again() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    // The file stays unchanged after each failure: no later write finds
+    // the failed stream.
+    giganto.withhold_acks(&["kind_a"]);
+    append(&a, "a2")?;
+    wait_for_lines(&giganto, "kind_a", &["a2"]).await;
+    giganto.stop_stream_of("kind_a")?;
+    wait_for("a second stream carries a2", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(1)
+            .is_some_and(|stream| stream.lines() == ["a2"])
+    })
+    .await;
+
+    giganto.close_connections();
+    wait_for("a third stream carries a2", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(2)
+            .is_some_and(|stream| stream.lines() == ["a2"])
+    })
+    .await;
+    assert_eq!(giganto.connections(), 2);
+
+    giganto.withhold_acks(&[]);
+    append(&a, "a3")?;
+    wait_for_lines(&giganto, "kind_a", &["a3"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_delayed_old_ack_does_not_move_a_truncated_files_checkpoint() -> Result<()> {
     let (logs_capture, _guard) = Logs::capture();
     let (_pki, giganto, files) = setup()?;
