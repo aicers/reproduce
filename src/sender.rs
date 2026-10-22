@@ -71,13 +71,15 @@ enum TimeoutPolicy {
 /// `Reconnected` means the stream now runs on a connection that reflects
 /// the operator's reload intent: either no reload was requested, or a
 /// requested reload was fully applied (the rebuilt endpoint completed its
-/// handshake and was committed, clearing the connection's reload flag).
+/// handshake, and in local mode opened its stream, and was committed,
+/// clearing the connection's reload flag).
 /// It is also what a stream gets when another stream had already replaced
 /// the connection it failed on.
 ///
 /// `ReloadDeferred` means the connection was re-established against the
 /// **last-known-good** endpoint, but a requested reload could not be
-/// applied because the rebuilt endpoint failed its handshake. The
+/// applied because the rebuilt endpoint failed its handshake or, in local
+/// mode, could not open its stream after the handshake. The
 /// last-known-good endpoint is kept and the reload flag remains set so a
 /// later reconnect can retry the reload with fresh material. This is *not*
 /// a fatal error: the daemon must keep running to expose that retry
@@ -92,7 +94,8 @@ pub enum ReconnectOutcome {
     Reconnected,
 
     /// The reconnect succeeded against the last-known-good endpoint
-    /// after the reload candidate failed its handshake. The carried error
+    /// after the reload candidate failed its handshake or, in local mode,
+    /// its stream setup. The carried error
     /// describes why the candidate was rejected, so the caller can log it;
     /// the reload flag remains set.
     ReloadDeferred(Arc<SenderError>),
@@ -259,6 +262,11 @@ impl GigantoSender {
 
     /// Closes the connection, reconnects, and opens a new stream that needs
     /// its record header again.
+    ///
+    /// A pending reload is committed only once the stream opens on the
+    /// rebuilt endpoint; if it cannot, the stream is opened on a connection
+    /// made with the last-known-good endpoint and the reload stays pending,
+    /// reported as [`ReconnectOutcome::ReloadDeferred`].
     ///
     /// # Errors
     ///

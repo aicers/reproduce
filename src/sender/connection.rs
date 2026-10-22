@@ -71,15 +71,32 @@ struct Shared {
 
 #[derive(Debug)]
 struct State {
+    /// The endpoint of the current connection.
     endpoint: Endpoint,
     /// The live connection, or `None` while a reconnect is replacing it,
     /// after a reconnect failed, or after `close`.
     conn: Option<Connection>,
     generation: u64,
     reload: ReloadFlag,
+    /// The last-known-good endpoint, kept while a reload applied under
+    /// [`StreamErrorPolicy::Reconnect`] waits for its first stream.
+    fallback: Option<Fallback>,
     /// Delivers the result of the reconnect in flight, if any.
     in_flight: Option<watch::Receiver<Option<SharedReconnect>>>,
     closed: bool,
+}
+
+/// A reload not yet committed: the connection of `generation` runs on the
+/// rebuilt endpoint, but no stream has opened on it yet.
+///
+/// Local mode commits a reload only once its stream opens, as 0.25.1 did, so
+/// a rebuilt connection that completes its handshake but cannot open a
+/// stream falls back to `endpoint` and leaves the reload pending.
+#[derive(Debug)]
+struct Fallback {
+    generation: u64,
+    endpoint: Endpoint,
+    ticket: ReloadTicket,
 }
 
 /// The result of one reconnect, handed to every stream that waited on it.
@@ -154,6 +171,7 @@ impl GigantoConnection {
                     conn: Some(conn),
                     generation: 0,
                     reload,
+                    fallback: None,
                     in_flight: None,
                     closed: false,
                 }),
@@ -209,6 +227,9 @@ impl GigantoConnection {
     }
 
     /// Returns whether a reload is pending for this connection.
+    ///
+    /// Under [`StreamErrorPolicy::Reconnect`], a reload stays pending after
+    /// the reconnect that applies it until a stream opens on it.
     #[must_use]
     pub fn reload_pending(&self) -> bool {
         self.shared.lock().reload.is_pending()
@@ -270,13 +291,85 @@ impl GigantoConnection {
             if let Some(in_flight) = &state.in_flight {
                 in_flight.clone()
             } else {
-                let (sender, receiver) = watch::channel(None);
-                state.in_flight = Some(receiver.clone());
-                tokio::spawn(run_reconnect(Arc::clone(&self.shared), sender));
-                receiver
+                // A reload no stream confirmed stays pending for this
+                // reconnect, which starts from the last-known-good endpoint.
+                if let Some(fallback) = state.fallback.take() {
+                    state.endpoint = fallback.endpoint;
+                }
+                self.start_reconnect(&mut state, None)
             }
         };
+        Self::wait_for_reconnect(&mut result).await
+    }
 
+    /// Commits a reload that waits for its first stream, once a stream has
+    /// opened on the connection of `generation`.
+    pub(super) fn confirm(&self, generation: u64) {
+        let mut state = self.shared.lock();
+        if let Some(fallback) = state
+            .fallback
+            .take_if(|fallback| fallback.generation == generation)
+        {
+            state.commit_reload(fallback.ticket);
+        }
+    }
+
+    /// Falls back to the last-known-good endpoint after a stream failed to
+    /// open, with `error`, on the connection of `generation`.
+    ///
+    /// Applies only while that connection runs on a rebuilt endpoint no
+    /// stream has opened on: the rebuilt connection is closed, the reload
+    /// stays pending, and the connection made with the last-known-good
+    /// endpoint is returned with [`ReconnectOutcome::ReloadDeferred`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `error` itself when there is nothing to fall back to, and
+    /// otherwise the error the fallback reconnect failed with.
+    pub(super) async fn fall_back(
+        &self,
+        generation: u64,
+        error: SenderError,
+    ) -> std::result::Result<Lease, SenderError> {
+        let mut result = {
+            let mut state = self.shared.lock();
+            if state.closed {
+                return Err(SenderError::Closed);
+            }
+            let Some(fallback) = state
+                .fallback
+                .take_if(|fallback| fallback.generation == generation)
+            else {
+                return Err(error);
+            };
+            warn!(
+                "Reload candidate stream setup failed; \
+                 falling back to last-known-good endpoint and \
+                 leaving reload pending: {error}"
+            );
+            state.endpoint = fallback.endpoint;
+            self.start_reconnect(&mut state, Some(error))
+        };
+        Self::wait_for_reconnect(&mut result).await
+    }
+
+    /// Starts a reconnect and records it as the one in flight. With
+    /// `deferred`, the reconnect falls back at once to the last-known-good
+    /// endpoint, reporting the reload deferred by `deferred`.
+    fn start_reconnect(
+        &self,
+        state: &mut State,
+        deferred: Option<SenderError>,
+    ) -> watch::Receiver<Option<SharedReconnect>> {
+        let (sender, receiver) = watch::channel(None);
+        state.in_flight = Some(receiver.clone());
+        tokio::spawn(run_reconnect(Arc::clone(&self.shared), sender, deferred));
+        receiver
+    }
+
+    async fn wait_for_reconnect(
+        result: &mut watch::Receiver<Option<SharedReconnect>>,
+    ) -> std::result::Result<Lease, SenderError> {
         let shared = result
             .wait_for(Option::is_some)
             .await
@@ -303,6 +396,13 @@ impl GigantoConnection {
     }
 }
 
+impl State {
+    fn commit_reload(&mut self, ticket: ReloadTicket) {
+        self.reload.commit(ticket);
+        info!("QUIC endpoint rebuilt successfully");
+    }
+}
+
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state
@@ -316,31 +416,43 @@ impl Shared {
     /// configured cert/key/CA paths and used for the handshake so that
     /// externally rotated certificates take effect. The replacement endpoint
     /// is only committed, and the reload requests made before its files were
-    /// read are only cleared, after its handshake succeeds. If the rebuild
-    /// fails, or the rebuilt endpoint cannot complete the handshake, the
-    /// last-known-good endpoint is used and the reload is reported deferred.
+    /// read are only cleared, after its handshake succeeds and, under
+    /// [`StreamErrorPolicy::Reconnect`], after a stream opens on it. If the
+    /// rebuild fails, or the rebuilt endpoint cannot complete the handshake,
+    /// the last-known-good endpoint is used and the reload is reported
+    /// deferred.
+    ///
+    /// With `fallback`, the error a rebuilt connection's stream setup failed
+    /// with, the reconnect skips its delay and the reload and connects with
+    /// the last-known-good endpoint at once, reporting the reload deferred.
     ///
     /// The reload candidate uses `TimeoutPolicy::ReturnOnTimeout` so a hung
     /// handshake on the rebuilt endpoint falls back rather than retrying
     /// forever; the last-known-good path keeps `TimeoutPolicy::RetryForever`
     /// so transient server outages reconnect on their own.
-    async fn reconnect_now(&self) -> std::result::Result<Attempt, SenderError> {
+    async fn reconnect_now(
+        &self,
+        fallback: Option<SenderError>,
+    ) -> std::result::Result<Attempt, SenderError> {
         let old = self.lock().conn.take();
         if let Some(old) = old {
             old.close(0u32.into(), b"reconnect");
         }
-        tokio::select! {
-            () = tokio::time::sleep(RECONNECT_DELAY) => {}
-            () = self.token.cancelled() => return Err(SenderError::Cancelled),
+        if fallback.is_none() {
+            tokio::select! {
+                () = tokio::time::sleep(RECONNECT_DELAY) => {}
+                () = self.token.cancelled() => return Err(SenderError::Cancelled),
+            }
         }
 
         let (endpoint, ticket) = {
             let state = self.lock();
-            let ticket = state.reload.is_pending().then(|| state.reload.ticket());
+            let ticket =
+                (fallback.is_none() && state.reload.is_pending()).then(|| state.reload.ticket());
             (state.endpoint.clone(), ticket)
         };
 
-        let mut deferred = None;
+        let mut deferred = fallback;
         if let Some(ticket) = ticket {
             info!("Reload requested, rebuilding QUIC endpoint from fresh TLS material");
             match build_endpoint(&self.config, "failed to join endpoint rebuild task").await {
@@ -355,7 +467,6 @@ impl Shared {
                     .await
                     {
                         Ok(conn) => {
-                            info!("QUIC endpoint rebuilt successfully");
                             return Ok(Attempt {
                                 conn,
                                 reloaded: Some((candidate, ticket)),
@@ -401,8 +512,12 @@ impl Shared {
 
 /// Runs one reconnect to completion and publishes its result to every
 /// waiting stream, even if the stream that started it stops waiting.
-async fn run_reconnect(shared: Arc<Shared>, result: watch::Sender<Option<SharedReconnect>>) {
-    let attempt = shared.reconnect_now().await;
+async fn run_reconnect(
+    shared: Arc<Shared>,
+    result: watch::Sender<Option<SharedReconnect>>,
+    fallback: Option<SenderError>,
+) {
+    let attempt = shared.reconnect_now(fallback).await;
     let published = {
         let mut state = shared.lock();
         state.in_flight = None;
@@ -418,11 +533,19 @@ async fn run_reconnect(shared: Arc<Shared>, result: watch::Sender<Option<SharedR
                 reloaded,
                 deferred,
             }) => {
-                if let Some((endpoint, ticket)) = reloaded {
-                    state.endpoint = endpoint;
-                    state.reload.commit(ticket);
-                }
                 state.generation += 1;
+                if let Some((endpoint, ticket)) = reloaded {
+                    let last_known_good = std::mem::replace(&mut state.endpoint, endpoint);
+                    if shared.policy == StreamErrorPolicy::Reconnect {
+                        state.fallback = Some(Fallback {
+                            generation: state.generation,
+                            endpoint: last_known_good,
+                            ticket,
+                        });
+                    } else {
+                        state.commit_reload(ticket);
+                    }
+                }
                 state.conn = Some(conn.clone());
                 Ok(Lease {
                     conn,
@@ -945,6 +1068,11 @@ mod tests {
             "endpoint should be rebuilt when reload was requested"
         );
         assert!(
+            connection.reload_pending(),
+            "local mode commits the reload only once a stream opens on it"
+        );
+        let _stream = open_log_only(&connection).await;
+        assert!(
             !connection.reload_pending(),
             "the reload flag should be cleared after a successful rebuild"
         );
@@ -1032,6 +1160,7 @@ mod tests {
             ReconnectOutcome::Reconnected
         ));
         server.expect("server handshake should succeed");
+        let _stream = open_log_only(&connection).await;
         let reloaded_addr = connection.endpoint_addr();
         assert_ne!(
             original_addr, reloaded_addr,
@@ -1048,6 +1177,7 @@ mod tests {
         );
         outcome.expect("next reconnect should succeed");
         server.expect("server handshake should succeed");
+        let _stream = open_log_only(&connection).await;
         assert_ne!(
             reloaded_addr,
             connection.endpoint_addr(),
@@ -1094,6 +1224,7 @@ mod tests {
         );
         outcome.expect("first reconnect should succeed");
         server.expect("server handshake should succeed");
+        let _stream = open_log_only(&connection).await;
         assert_ne!(initial_addr, connection.endpoint_addr());
         assert!(!connection.reload_pending());
     }
@@ -1234,6 +1365,69 @@ mod tests {
         assert!(
             connection.reload_pending(),
             "the reload must stay pending so the next reconnect retries it"
+        );
+    }
+
+    // As in 0.25.1, a reload candidate whose handshake succeeds but whose
+    // stream cannot open in local mode falls back to the last-known-good
+    // endpoint and leaves the reload pending, instead of ending the process.
+    #[tokio::test]
+    async fn local_reload_candidate_without_a_stream_falls_back_and_stays_pending() {
+        let reload = ReloadSignal::new();
+        let (connection, session) = connect_test_connection(
+            StreamErrorPolicy::Reconnect,
+            &reload,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("connection should be established");
+        let endpoint_addr = connection.endpoint_addr();
+        reload.request();
+
+        let (outcome, candidate) = tokio::join!(
+            connection.reconnect(0),
+            accept_connection(&session.server_endpoint, RECONNECT_TIMEOUT),
+        );
+        assert!(matches!(
+            outcome.expect("the reload candidate should complete its handshake"),
+            ReconnectOutcome::Reconnected
+        ));
+        assert_ne!(endpoint_addr, connection.endpoint_addr());
+
+        // The server goes away after the candidate's handshake, before its
+        // stream opens.
+        let candidate = candidate.expect("server should accept the reload candidate");
+        candidate.close(0u32.into(), b"server-gone");
+        let Current::Live(conn, 1) = connection.current() else {
+            panic!("the owner should hold the reload candidate's connection");
+        };
+        timeout(TEST_TIMEOUT, conn.closed())
+            .await
+            .expect("the client should see the server close in time");
+
+        let (opened, fallback) = tokio::join!(
+            connection.open_stream(CancellationToken::new(), AckDelivery::LogOnly),
+            accept_connection(&session.server_endpoint, RECONNECT_TIMEOUT),
+        );
+        let (mut stream, _) = opened.expect("the stream should open via the fallback");
+        let fallback = fallback.expect("the fallback should connect");
+        stream
+            .send_header(RawEventKind::Log)
+            .await
+            .expect("the header should be written on the fallback connection");
+        accept_server_stream(&fallback)
+            .await
+            .expect("the stream should arrive on the fallback connection");
+        assert_eq!(connection.generation(), 2);
+        assert_eq!(stream.generation(), 2);
+        assert_eq!(
+            endpoint_addr,
+            connection.endpoint_addr(),
+            "the fallback must use the last-known-good endpoint",
+        );
+        assert!(
+            connection.reload_pending(),
+            "the reload must stay pending so the next reconnect retries it",
         );
     }
 }

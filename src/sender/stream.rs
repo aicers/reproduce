@@ -380,7 +380,9 @@ impl GigantoStream {
     /// When opening fails, [`StreamErrorPolicy::ReopenStream`] asks for a
     /// newer connection and tries again, while
     /// [`StreamErrorPolicy::Reconnect`] returns the error, as local mode
-    /// always has.
+    /// always has, unless the connection runs on a rebuilt endpoint no stream
+    /// has opened on yet: then the owner falls back to the last-known-good
+    /// endpoint, leaving the reload pending, and the open is tried there.
     ///
     /// Returns the outcome of the reconnect it needed, if any.
     async fn open_new(
@@ -408,16 +410,19 @@ impl GigantoStream {
             };
             match opened {
                 Ok((send, recv)) => {
+                    self.connection.confirm(generation);
                     self.install(conn, generation, send, recv);
                     return Ok(outcome);
                 }
                 Err(error) if self.connection.policy() == StreamErrorPolicy::Reconnect => {
                     // Local mode gives up when a stream cannot open on a
-                    // connection that has just completed its handshake.
-                    return Err(SenderError::context(
-                        "failed to open stream to Giganto",
-                        error,
-                    ));
+                    // connection that has just completed its handshake,
+                    // unless a reload candidate can fall back.
+                    let error = SenderError::context("failed to open stream to Giganto", error);
+                    let lease = self.connection.fall_back(generation, error).await?;
+                    outcome = Some(lease.outcome);
+                    conn = lease.conn;
+                    generation = lease.generation;
                 }
                 Err(error) => {
                     warn!("Failed to open stream to Giganto, reconnecting: {error}");
