@@ -2,8 +2,7 @@ use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::{env, process::exit};
 
@@ -54,6 +53,7 @@ use reproduce::parser::sysmon_csv::{
     ElasticDumpOptions, TryFromSysmonRecord, open_sysmon_csv_file,
 };
 use reproduce::parser::zeek::{TryFromZeekRecord, open_raw_event_log_file};
+use reproduce::reload::ReloadSignal;
 use reproduce::sender::{GigantoSender, SenderError};
 use serde::Serialize;
 use tokio::sync::watch;
@@ -119,9 +119,9 @@ async fn run_local(config_filename: &Path) -> anyhow::Result<()> {
     let mut config = config::Config::new(config_filename)?;
     let _guard = init_tracing(config.log_path.as_deref())?;
     config.resolve_runtime_options();
-    let reload_requested = Arc::new(AtomicBool::new(false));
-    install_signal_handlers(Arc::clone(&reload_requested))?;
-    let controller = Controller::new(config, reload_requested);
+    let reload = ReloadSignal::new();
+    install_signal_handlers(reload.clone())?;
+    let controller = Controller::new(config, reload);
     tracing::info!("Data Broker started");
     if let Err(error) = controller.run().await {
         tracing::error!("Terminated with error: {error}");
@@ -787,7 +787,8 @@ where
 /// Owns the process-wide shutdown signal and exposes it to senders.
 struct Controller {
     config: Config,
-    reload_requested: Arc<AtomicBool>,
+    /// Every sender's connection subscribes to it when it is created.
+    reload: ReloadSignal,
     shutdown: watch::Receiver<bool>,
     /// Sender-side cancellation token bridged from the existing watch
     /// shutdown signal; see [`spawn_shutdown_bridge`]. Cloned for
@@ -800,8 +801,8 @@ static SHUTDOWN_SENDER: OnceLock<watch::Sender<bool>> = OnceLock::new();
 
 impl Controller {
     #[must_use]
-    fn new(config: Config, reload_requested: Arc<AtomicBool>) -> Self {
-        Self::with_shutdown(config, reload_requested, shutdown_receiver())
+    fn new(config: Config, reload: ReloadSignal) -> Self {
+        Self::with_shutdown(config, reload, shutdown_receiver())
     }
 
     /// Constructs a controller bridged to a caller-provided watch
@@ -810,14 +811,14 @@ impl Controller {
     /// without mutating the global `SHUTDOWN_SENDER`.
     fn with_shutdown(
         config: Config,
-        reload_requested: Arc<AtomicBool>,
+        reload: ReloadSignal,
         shutdown: watch::Receiver<bool>,
     ) -> Self {
         let token = CancellationToken::new();
         spawn_shutdown_bridge(token.clone(), shutdown.clone());
         Self {
             config,
-            reload_requested,
+            reload,
             shutdown,
             token,
         }
@@ -845,12 +846,8 @@ impl Controller {
             let shutdown = shutdown_receiver();
             self.run_elastic_with_shutdown(shutdown).await?;
         } else {
-            let mut sender = match create_sender(
-                &self.config,
-                Arc::clone(&self.reload_requested),
-                self.sender_token(),
-            )
-            .await
+            let mut sender = match create_sender(&self.config, &self.reload, self.sender_token())
+                .await
             {
                 Ok(sender) => sender,
                 Err(SenderError::Cancelled) if shutdown_requested(&self.shutdown) => return Ok(()),
@@ -967,17 +964,12 @@ impl Controller {
 
         files.sort_unstable();
         for file in files {
-            let mut sender = match create_sender(
-                &self.config,
-                Arc::clone(&self.reload_requested),
-                self.sender_token(),
-            )
-            .await
-            {
-                Ok(sender) => sender,
-                Err(SenderError::Cancelled) if shutdown_requested(&shutdown) => return Ok(()),
-                Err(error) => return Err(error.into()),
-            };
+            let mut sender =
+                match create_sender(&self.config, &self.reload, self.sender_token()).await {
+                    Ok(sender) => sender,
+                    Err(SenderError::Cancelled) if shutdown_requested(&shutdown) => return Ok(()),
+                    Err(error) => return Err(error.into()),
+                };
             info!("File: {file:?}");
             let kind = file_to_kind(&file)?;
             self.run_single_with_shutdown(
@@ -1179,32 +1171,33 @@ async fn wait_for_shutdown_or_timeout(
 
 /// Installs process-wide signal handlers:
 ///
-/// * `SIGHUP` sets `reload_requested` so the next reconnect rebuilds the
-///   QUIC endpoint from fresh TLS material. The process keeps running.
+/// * `SIGHUP` sets the reload flag of every connection subscribed to
+///   `reload`, so each connection's next reconnect rebuilds its QUIC
+///   endpoint from fresh TLS material. The process keeps running.
 /// * `SIGINT` and `SIGTERM` request shutdown via the shared
 ///   `SHUTDOWN_SENDER` channel.
 ///
 /// `ctrlc` is not used because its `termination` feature would also
 /// catch `SIGHUP` and terminate the process, defeating the reload path.
-fn install_signal_handlers(reload_requested: Arc<AtomicBool>) -> Result<()> {
+fn install_signal_handlers(reload: ReloadSignal) -> Result<()> {
     let (sender, _receiver) = watch::channel(false);
     SHUTDOWN_SENDER
         .set(sender.clone())
         .map_err(|_| anyhow!("signal handlers were already installed"))?;
 
-    spawn_sighup_handler(reload_requested)?;
+    spawn_sighup_handler(reload)?;
     spawn_termination_handlers(sender)?;
     Ok(())
 }
 
 #[cfg(unix)]
-fn spawn_sighup_handler(reload_requested: Arc<AtomicBool>) -> Result<()> {
+fn spawn_sighup_handler(reload: ReloadSignal) -> Result<()> {
     let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
         .context("failed to register SIGHUP handler")?;
     tokio::spawn(async move {
         loop {
             sighup.recv().await;
-            reload_requested.store(true, Ordering::SeqCst);
+            reload.request();
             info!("SIGHUP received, reload requested");
         }
     });
@@ -1212,7 +1205,7 @@ fn spawn_sighup_handler(reload_requested: Arc<AtomicBool>) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn spawn_sighup_handler(_reload_requested: Arc<AtomicBool>) -> Result<()> {
+fn spawn_sighup_handler(_reload: ReloadSignal) -> Result<()> {
     // SIGHUP is not available on non-Unix platforms.
     Ok(())
 }
@@ -1391,7 +1384,7 @@ fn file_to_kind(path: &Path) -> Result<&str> {
 
 async fn create_sender(
     config: &Config,
-    reload_requested: Arc<AtomicBool>,
+    reload: &ReloadSignal,
     sender_token: CancellationToken,
 ) -> std::result::Result<GigantoSender, SenderError> {
     debug!("output type=GIGANTO");
@@ -1401,7 +1394,7 @@ async fn create_sender(
         &config.giganto.ca_certs,
         config.giganto.ingest_srv_addr,
         &config.giganto.name,
-        reload_requested,
+        reload,
         sender_token,
     )
     .await

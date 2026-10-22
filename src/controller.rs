@@ -5,7 +5,7 @@ use tokio::sync::watch;
 use tracing::warn;
 
 use crate::collector::{Collector, CollectorError};
-use crate::sender::{GigantoSender, ReconnectOutcome, SenderError};
+use crate::sender::{GigantoSender, GigantoStream, ReconnectOutcome, SenderError};
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -47,6 +47,27 @@ impl PipelineSender for GigantoSender {
 
     async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
         GigantoSender::reconnect(self).await
+    }
+}
+
+#[async_trait]
+impl PipelineSender for GigantoStream {
+    async fn send_header(
+        &mut self,
+        protocol: RawEventKind,
+    ) -> std::result::Result<(), SenderError> {
+        GigantoStream::send_header(self, protocol).await
+    }
+
+    async fn send_batch(
+        &mut self,
+        events: &[(i64, Vec<u8>)],
+    ) -> std::result::Result<(), SendError> {
+        GigantoStream::send_batch(self, events).await
+    }
+
+    async fn reconnect(&mut self) -> std::result::Result<ReconnectOutcome, SenderError> {
+        self.recover().await
     }
 }
 
@@ -652,10 +673,12 @@ mod tests {
             // Mirror the production fallback: rebuilt reload candidate
             // failed, but the last-known-good endpoint reconnected, so the
             // pipeline must keep running with reload intent still pending.
-            Ok(ReconnectOutcome::ReloadDeferred(SenderError::Context {
-                context: "reload candidate handshake failed",
-                source: anyhow::anyhow!("reload candidate handshake failed"),
-            }))
+            Ok(ReconnectOutcome::ReloadDeferred(std::sync::Arc::new(
+                SenderError::Context {
+                    context: "reload candidate handshake failed",
+                    source: anyhow::anyhow!("reload candidate handshake failed"),
+                },
+            )))
         }
     }
 
