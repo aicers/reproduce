@@ -14,8 +14,14 @@ reproduce <CONFIG_PATH>
 | `-h`, `--help` | Prints help and exits |
 | `-V`, `--version` | Prints version information and exits |
 
-If no configuration path is provided, or if more than one positional argument is
-provided, REproduce prints an error and exits with status code `1`.
+If no configuration path is provided, if more than one positional argument is
+provided, or if any other flag is given, REproduce prints an error followed by
+the usage and exits with status code `1`. `-h` and `-V` act only as the sole
+argument.
+
+Any argument starting with `-` is taken as a flag, so a configuration path that
+starts with `-` must be written with a directory prefix, such as
+`./-name.toml`.
 
 ## Runtime Lifecycle
 

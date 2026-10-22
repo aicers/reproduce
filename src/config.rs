@@ -1,3 +1,5 @@
+pub mod remote;
+
 use std::net::SocketAddr;
 
 use serde::{Deserialize, Deserializer, de::Error};
@@ -27,8 +29,17 @@ where
     D: Deserializer<'de>,
 {
     let addr = String::deserialize(deserializer)?;
+    parse_socket_addr(&addr).map_err(D::Error::custom)
+}
+
+/// Parses a socket address written as `IP:PORT`.
+///
+/// # Errors
+///
+/// Returns a message naming the address if it is not in the expected format.
+fn parse_socket_addr(addr: &str) -> Result<SocketAddr, String> {
     addr.parse()
-        .map_err(|error| D::Error::custom(format!("invalid address \"{addr}\": {error}")))
+        .map_err(|error| format!("invalid address \"{addr}\": {error}"))
 }
 
 #[cfg(test)]
