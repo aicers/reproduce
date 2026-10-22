@@ -858,7 +858,9 @@ engine's unit and the module pins).
    reconnect or crash happens (barring §5's cases).
 5. Lines read in the same nanosecond are all stored (no key overwrite).
 6. After a Giganto connection is cut while lines are in flight, every line
-   written before the cut is in Giganto after reconnect.
+   written before the cut is in Giganto after reconnect, except the losses §5
+   accepts — in particular lines written before an observed copy-truncate's
+   transition and not yet acknowledged when it was processed.
 7. An Apply that adds a collector does not move the other collectors' positions;
    one that removes a collector deletes its checkpoint, and one that keeps a
    kind with a new path replaces it.
