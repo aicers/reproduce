@@ -445,7 +445,12 @@ fn build_client_config(
     cert_chain: Vec<CertificateDer<'static>>,
     private_key: PrivateKeyDer<'static>,
 ) -> std::result::Result<quinn::ClientConfig, SenderError> {
-    let client_crypto = rustls::ClientConfig::builder()
+    // The provider is explicit because review-protocol compiles in the
+    // aws-lc-rs provider next to ring, which leaves no process-level default.
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let client_crypto = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|source| SenderError::context("unsupported TLS protocol versions", source))?
         .with_root_certificates(server_root)
         .with_client_auth_cert(cert_chain, private_key)
         .map_err(|source| {
@@ -1520,11 +1525,17 @@ mod tests {
                 .context("should add CA cert to client verifier")?;
         }
 
-        let client_verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(client_roots))
-            .build()
-            .context("client verifier should build")?;
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let client_verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(client_roots),
+            provider.clone(),
+        )
+        .build()
+        .context("client verifier should build")?;
 
-        let server_crypto = rustls::ServerConfig::builder()
+        let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .context("TLS protocol versions should be supported")?
             .with_client_cert_verifier(client_verifier)
             .with_single_cert(cert_chain, private_key)
             .context("mTLS server config should build")?;
@@ -1598,7 +1609,10 @@ mod tests {
             .context("leaf key PEM should parse")?
             .context("leaf key PEM should contain a key")?;
 
-        let server_crypto = rustls::ServerConfig::builder()
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .context("TLS protocol versions should be supported")?
             .with_no_client_auth()
             .with_single_cert(cert_chain, private_key)
             .context("leaf-only server config should build")?;
@@ -1749,7 +1763,10 @@ mod tests {
             .context("fixture certificate chain should parse")?;
         let server_root =
             to_root_cert(&[root_path]).context("fixture root certificate should load")?;
-        let client_crypto = rustls::ClientConfig::builder()
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let client_crypto = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .context("TLS protocol versions should be supported")?
             .with_root_certificates(server_root)
             .with_client_auth_cert(cert_chain, pv_key)
             .context("fixture client config should build")?;
