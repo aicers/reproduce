@@ -8,6 +8,7 @@ use std::time::Duration;
 use std::{env, process::exit};
 
 mod config;
+mod invocation;
 mod kind_runners;
 mod report;
 
@@ -66,6 +67,7 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 use crate::kind_runners::run_netflow_kind;
 use crate::{
     config::{Config, File as FileConfig, InputType, input_type},
+    invocation::{Invocation, RemoteArgs, parse_args, prepare_state_dir},
     kind_runners::{
         run_log_kind, run_operation_log, run_security_kind, run_sysmon_kind, run_zeek_kind,
     },
@@ -74,20 +76,47 @@ use crate::{
 
 const USAGE: &str = "\
 USAGE:
-    REproduce [CONFIG]
+    reproduce <CONFIG>
+    reproduce --cert <CERT_PATH> --key <KEY_PATH> --ca-certs <CA_PATHS> --state-dir <DIR> <MANAGER>
 
 FLAGS:
     -h, --help       Prints help information
     -V, --version    Prints version information
 
-ARG:
-    <CONFIG>    A TOML config file
+OPTIONS (remote mode):
+    --cert <CERT_PATH>     The certificate presented to the Central Manager
+    --key <KEY_PATH>       The private key of the certificate
+    --ca-certs <CA_PATHS>  Comma-separated CA certificates to trust
+    --state-dir <DIR>      The directory for persistent state, created with
+                           mode 0700 when missing
+
+ARGS:
+    <CONFIG>     A TOML config file (local mode); a path starting with `-`
+                 must be written as `./-name.toml`
+    <MANAGER>    The Central Manager as <server_name>@<ip>:<port> (remote
+                 mode); an IPv6 address is bracketed, as name@[::1]:38390
 ";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config_filename = parse();
-    let mut config = config::Config::new(config_filename.as_ref())?;
+    match parse() {
+        Invocation::Help => {
+            println!("{}", version());
+            println!();
+            print!("{USAGE}");
+            Ok(())
+        }
+        Invocation::Version => {
+            println!("{}", version());
+            Ok(())
+        }
+        Invocation::Local(config_filename) => run_local(&config_filename).await,
+        Invocation::Remote(args) => run_remote(&args),
+    }
+}
+
+async fn run_local(config_filename: &Path) -> anyhow::Result<()> {
+    let mut config = config::Config::new(config_filename)?;
     let _guard = init_tracing(config.log_path.as_deref())?;
     config.resolve_runtime_options();
     let reload_requested = Arc::new(AtomicBool::new(false));
@@ -102,29 +131,47 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Parses the command line arguments and returns the first argument.
-fn parse() -> std::path::PathBuf {
-    let args = env::args().collect::<Vec<_>>();
-    let Some(arg) = args.get(1).map(String::as_str) else {
-        eprintln!("Error: insufficient arguments");
-        exit(1);
-    };
-    if args.get(2).is_some() {
-        eprintln!("Error: too many arguments");
-        exit(1);
-    }
+/// Runs remote mode, which takes its configuration from the Central Manager.
+///
+/// The manager client does not exist yet, so after preparing the state
+/// directory this logs that remote mode is not available and exits 1.
+fn run_remote(args: &RemoteArgs) -> anyhow::Result<()> {
+    let guard = init_tracing(None)?;
+    let state_dir = prepare_state_dir(&args.state_dir)?;
+    tracing::info!(
+        "Remote mode: manager {}@{}, certificate {}, key {}, CA certificates {}, \
+         state directory {}",
+        args.manager.server_name,
+        args.manager.addr,
+        args.cert.display(),
+        args.key.display(),
+        args.ca_certs
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        state_dir.display()
+    );
+    tracing::error!("Remote mode is not available in this build");
+    drop(guard);
+    exit(1);
+}
 
-    if arg == "--help" || arg == "-h" {
-        println!("{}", version());
-        println!();
-        print!("{USAGE}");
-        exit(0);
+/// Parses the command line arguments.
+///
+/// Prints the reason and the usage and exits 1 when the invocation is
+/// refused.
+fn parse() -> Invocation {
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    match parse_args(&args) {
+        Ok(invocation) => invocation,
+        Err(reason) => {
+            eprintln!("Error: {reason}");
+            eprintln!();
+            eprint!("{USAGE}");
+            exit(1);
+        }
     }
-    if arg == "--version" || arg == "-V" {
-        println!("{}", version());
-        exit(0);
-    }
-    std::path::PathBuf::from(arg)
 }
 
 fn version() -> String {
