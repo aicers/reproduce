@@ -118,10 +118,20 @@ the byte just past the last line Giganto acknowledged.
 - It is written to `<kind>.json.tmp`, synced to disk and renamed over
   `<kind>.json`. Temporary files an interrupted save left behind are deleted at
   startup.
-- A checkpoint saved for another path of the kind is replaced. A corrupt or
-  unreadable checkpoint is logged as a warning and treated as a checkpoint at
-  the current end of the file, saved before anything is sent, so a damaged
-  checkpoint never sends a whole file again.
+- A checkpoint saved for another path of the kind is replaced.
+- A corrupt or unreadable checkpoint is logged as a warning. If the metadata of
+  the configured log path can be read when the checkpoint is loaded, the log's
+  current end is used instead: it overrides `start` and is saved before
+  anything is sent.
+- If that metadata cannot be read, no fallback position is available, and the
+  collector starts by the rules for a collector with no checkpoint (see
+  Start): at the end of the file by default, or at its beginning with
+  `start = "beginning"`; a path missing at the first attempt to open it is read
+  from its beginning when it appears, whatever `start` says. A previously sent
+  file can then be read again from its beginning: with `start = "beginning"`
+  whenever it is read, and with `start = "end"` when the configured path is
+  missing both when the checkpoint is loaded and at the first attempt to open
+  it, and the same previously sent file is restored later.
 - A checkpoint that cannot be saved is logged once as a warning and retried
   every 3 seconds; the collector keeps running.
 
@@ -146,7 +156,9 @@ the byte just past the last line Giganto acknowledged.
   the first acknowledgement does not skip lines. While it cannot be saved, the
   collector sends nothing.
 - With a checkpoint, `start` is ignored and the collector resumes from the
-  checkpoint.
+  checkpoint. A corrupt or unreadable checkpoint counts as a checkpoint at the
+  log's end when the configured path could be inspected while loading it, and
+  as no checkpoint otherwise.
 
 ## Following Files
 
@@ -186,10 +198,10 @@ the byte just past the last line Giganto acknowledged.
   not grow.
 - If the file at that position was renamed, the collector finds it in the same
   directory and reads the rest of it before the path. While such a file exists
-  but cannot be opened, or the directory's files cannot be inspected, the
-  collector retries every 3 seconds rather than moving on; only when no file
-  holds the position does it read the path from its beginning and log that
-  lines may have been lost.
+  but cannot be opened, disappears before it is opened, or the directory's
+  files cannot be inspected, the collector retries every 3 seconds rather than
+  moving on; only when no file holds the position does it read the path from
+  its beginning and log that lines may have been lost.
 - A reconnect or crash can send up to one acknowledgement window per collector
   again: Giganto's `ack_transmission` lines (1024 by default) plus what was in
   flight, or 60 seconds of lines.
@@ -214,6 +226,12 @@ the byte just past the last line Giganto acknowledged.
   at a wrong offset.
 - **A final line without `\n`** is held until the file is rotated. It is not
   sent at a stop, and is sent after a restart once complete.
+- **Checkpoint corruption.** When a checkpoint is corrupt or unreadable and the
+  configured log path could not be inspected when it was loaded, a previously
+  sent file is sent again whole: with `start = "beginning"` whenever it is
+  read, and with `start = "end"` when the configured path is also missing at
+  the first attempt to open it and the same previously sent file is restored
+  later.
 - **Duplicates.** A reconnect or crash sends up to one acknowledgement window
   per collector again.
 
@@ -247,3 +265,4 @@ A collector's `<reason>` is one of:
 - `cannot open the file: ...`
 - `cannot read the file: ...`
 - `cannot start the reader: ...`
+- `the predecessor candidate <candidate> disappeared before it could be opened`

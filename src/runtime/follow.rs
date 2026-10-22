@@ -135,6 +135,9 @@ pub(super) enum Problem {
     Locate(String),
     /// The reader thread cannot be started.
     Spawn(String),
+    /// The predecessor candidate named disappeared between its inspection
+    /// and its opening.
+    Vanished(String),
 }
 
 impl Problem {
@@ -154,6 +157,9 @@ impl Problem {
             Self::Refused(dir) => format!("the file lies under the refused directory {dir}"),
             Self::Locate(error) => format!("cannot check where the file lies: {error}"),
             Self::Spawn(error) => format!("cannot start the reader: {error}"),
+            Self::Vanished(candidate) => format!(
+                "the predecessor candidate {candidate} disappeared before it could be opened"
+            ),
         }
     }
 }
@@ -173,12 +179,19 @@ pub(super) enum Step {
 #[cfg(test)]
 pub(super) type Before = Arc<dyn Fn(Step, &Path) + Send + Sync>;
 
-/// Called before each file-system [`Step`] of the reader; does nothing
-/// outside tests.
+/// What a test runs before a reader seeks; an error it returns fails the
+/// seek.
+#[cfg(test)]
+pub(super) type BeforeSeek = Arc<dyn Fn() -> io::Result<()> + Send + Sync>;
+
+/// Called before each file-system [`Step`] of the reader, and before each
+/// seek; does nothing outside tests.
 #[derive(Clone, Default)]
 pub(super) struct Hook {
     #[cfg(test)]
     pub(super) before: Option<Before>,
+    #[cfg(test)]
+    pub(super) seek: Option<BeforeSeek>,
 }
 
 impl Hook {
@@ -190,6 +203,16 @@ impl Hook {
         }
         #[cfg(not(test))]
         let _ = (step, path);
+    }
+
+    /// Seeks to `offset` in `file`.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn seek(&self, file: &mut File, offset: u64) -> io::Result<u64> {
+        #[cfg(test)]
+        if let Some(seek) = &self.seek {
+            seek()?;
+        }
+        file.seek(SeekFrom::Start(offset))
     }
 }
 
@@ -440,6 +463,10 @@ struct Reader {
     gate: Gate,
     /// What to open, while no file is read.
     target: Option<Target>,
+    /// What a reader that loaded its checkpoint opens first, until its first
+    /// `Opened` or `Truncated`: a seek that fails before then fails the
+    /// opening, and this target is opened again.
+    initial: Option<Target>,
     /// The file `path` names, or named when it was opened.
     follow: Option<Handle>,
     /// A predecessor of `follow`: drained if `draining`, or else a
@@ -488,6 +515,7 @@ impl Reader {
             number,
             gate: Gate::Paused,
             target: None,
+            initial: None,
             follow: None,
             pred: None,
             draining: false,
@@ -525,7 +553,9 @@ impl Reader {
             if self.send(Event::Loaded(loaded)).is_err() {
                 return;
             }
-            self.target = Some(checkpoint.map_or(Target::Start, Target::Resume));
+            let target = checkpoint.map_or(Target::Start, Target::Resume);
+            self.target = Some(target);
+            self.initial = Some(target);
         }
         let _ = self.main();
     }
@@ -637,6 +667,7 @@ impl Reader {
 
     fn resume(&mut self, number: u64, position: LogPosition) -> Result<(), Closed> {
         self.number = number;
+        self.initial = None;
         self.discard();
         self.last_problem = None;
         self.rotation_since = None;
@@ -685,7 +716,7 @@ impl Reader {
         if len < position.offset {
             return self.truncated(id);
         }
-        if let Err(error) = handle.file.seek(SeekFrom::Start(position.offset)) {
+        if let Err(error) = self.settings.hook.seek(&mut handle.file, position.offset) {
             return self.read_failed(&error);
         }
         handle.offset = position.offset;
@@ -694,6 +725,7 @@ impl Reader {
 
     /// Starts reading the file `id` at `offset`.
     fn begin(&mut self, id: Identity, offset: u64) -> Result<(), Closed> {
+        self.initial = None;
         self.discard();
         self.handled = offset;
         self.rotation_since = None;
@@ -708,6 +740,7 @@ impl Reader {
     /// A new content epoch of the file `id` begins: the reader waits for a
     /// resume at its start.
     fn truncated(&mut self, id: Identity) -> Result<(), Closed> {
+        self.initial = None;
         self.discard();
         self.gate = Gate::Truncated(id);
         self.send(Event::Truncated(LogPosition::at(id, 0)))
@@ -716,22 +749,42 @@ impl Reader {
     /// Opens `path` with the opening checks.
     fn open(&mut self, path: &Path) -> Result<Opened, Problem> {
         let opened = open_checked(path, &self.settings.refused, &self.settings.hook)?;
-        info!("Reading {} for {}", path.display(), self.settings.kind);
         self.last_dir = opened.real_path.parent().map(Path::to_path_buf);
         Ok(opened)
     }
 
-    /// Follows the opened file from `offset`.
+    /// Follows the opened file, which `path` names, from `offset`.
     fn adopt(&mut self, opened: Opened, offset: u64) -> Result<(), Closed> {
         let Opened { mut file, id, .. } = opened;
         if offset != 0
-            && let Err(error) = file.seek(SeekFrom::Start(offset))
+            && let Err(error) = self.settings.hook.seek(&mut file, offset)
         {
             self.follow = None;
-            return self.read_failed(&error);
+            return self.seek_failed(&error);
         }
+        info!(
+            "Reading {} for {}",
+            self.settings.path.display(),
+            self.settings.kind
+        );
         self.follow = Some(Handle { file, id, offset });
         self.begin(id, offset)
+    }
+
+    /// Handles a seek that failed in a file just opened, which is closed.
+    ///
+    /// Before the first `Opened` or `Truncated` of a reader that loaded its
+    /// checkpoint, the opening failed: the target the reader started with is
+    /// opened again at the next poll, with no resume needed. After that, it
+    /// is a read error.
+    fn seek_failed(&mut self, error: &io::Error) -> Result<(), Closed> {
+        match self.initial {
+            Some(initial) => {
+                self.target = Some(initial);
+                self.problem(Problem::Read(error.to_string()))
+            }
+            None => self.read_failed(error),
+        }
     }
 
     fn open_start(&mut self) -> Result<(), Closed> {
@@ -778,6 +831,7 @@ impl Reader {
             match self.open(&path) {
                 Ok(opened) if opened.id == id => {
                     if opened.len < position.offset {
+                        info!("Reading {} for {}", path.display(), self.settings.kind);
                         self.follow = Some(Handle {
                             file: opened.file,
                             id,
@@ -788,12 +842,15 @@ impl Reader {
                     return self.adopt(opened, position.offset);
                 }
                 Ok(opened) if qualifies(opened.id, opened.len, position) => {
-                    info!(
-                        "Resuming {} for {} by its inode only",
-                        path.display(),
-                        self.settings.kind
-                    );
-                    return self.adopt(opened, position.offset);
+                    self.adopt(opened, position.offset)?;
+                    if self.follow.is_some() {
+                        info!(
+                            "Resuming {} for {} by its inode only",
+                            path.display(),
+                            self.settings.kind
+                        );
+                    }
+                    return Ok(());
                 }
                 // `path` changed since it was inspected.
                 Ok(_) => {}
@@ -808,10 +865,7 @@ impl Reader {
             Search::Found(found, opened) => (found, opened),
             Search::Retry(problem) => {
                 self.target = Some(Target::Resume(position));
-                return match problem {
-                    Some(problem) => self.problem(problem),
-                    None => Ok(()),
-                };
+                return self.problem(problem);
             }
             Search::Lost => {
                 warn!(
@@ -822,14 +876,13 @@ impl Reader {
                 return self.open_zero();
             }
         };
-        info!("Reading {} for {}", found.display(), self.settings.kind);
-        if opened.id != id {
-            info!(
-                "Resuming {} for {} by its inode only",
-                found.display(),
-                self.settings.kind
-            );
-        }
+        let by_inode = opened.id != id;
+        let log_opened = |kind: &str| {
+            info!("Reading {} for {kind}", found.display());
+            if by_inode {
+                info!("Resuming {} for {kind} by its inode only", found.display());
+            }
+        };
         self.last_dir = opened.real_path.parent().map(Path::to_path_buf);
         let Opened {
             mut file,
@@ -837,8 +890,9 @@ impl Reader {
             len,
             ..
         } = opened;
-        self.draining = true;
         if len < position.offset {
+            log_opened(&self.settings.kind);
+            self.draining = true;
             // Only an exact match can be shorter: a new content epoch of
             // the predecessor, read from its start once it is saved.
             self.pred = Some(Handle {
@@ -848,10 +902,11 @@ impl Reader {
             });
             return self.truncated(found_id);
         }
-        if let Err(error) = file.seek(SeekFrom::Start(position.offset)) {
-            self.draining = false;
-            return self.read_failed(&error);
+        if let Err(error) = self.settings.hook.seek(&mut file, position.offset) {
+            return self.seek_failed(&error);
         }
+        log_opened(&self.settings.kind);
+        self.draining = true;
         self.pred = Some(Handle {
             file,
             id: found_id,
@@ -863,7 +918,8 @@ impl Reader {
     /// Looks for the file of `position` beside the file last opened, or
     /// beside `path` when nothing was opened yet.
     ///
-    /// A candidate that cannot be opened, or a directory entry that cannot
+    /// A candidate that cannot be opened, including one that disappeared
+    /// since the directory was inspected, or a directory entry that cannot
     /// be inspected while no exact match is found, is not given up on: the
     /// search is tried again, so a predecessor that is only out of reach
     /// for a while is not taken for lost.
@@ -885,10 +941,10 @@ impl Reader {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Search::Lost,
             Err(error) => {
-                return Search::Retry(Some(Problem::Stat(io::Error::new(
+                return Search::Retry(Problem::Stat(io::Error::new(
                     error.kind(),
                     format!("{}: {error}", dir.display()),
-                ))));
+                )));
             }
         };
         let id = position.identity();
@@ -923,10 +979,10 @@ impl Reader {
         if exact.is_empty()
             && let Some(error) = failure
         {
-            return Search::Retry(Some(Problem::Stat(io::Error::new(
+            return Search::Retry(Problem::Stat(io::Error::new(
                 error.kind(),
                 format!("{}: {error}", dir.display()),
-            ))));
+            )));
         }
         for candidate in exact.into_iter().chain(inode) {
             match open_checked(&candidate, &self.settings.refused, &self.settings.hook) {
@@ -936,8 +992,10 @@ impl Reader {
                 // The candidate was replaced since it was inspected.
                 Ok(_) => {}
                 // It was renamed since: the next search finds it again.
-                Err(Problem::Missing) => return Search::Retry(None),
-                Err(problem) => return Search::Retry(Some(problem)),
+                Err(Problem::Missing) => {
+                    return Search::Retry(Problem::Vanished(candidate.display().to_string()));
+                }
+                Err(problem) => return Search::Retry(problem),
             }
         }
         Search::Lost
@@ -1168,7 +1226,7 @@ impl Reader {
         };
         let id = pred.id;
         if let Some(mut follow) = self.follow.take() {
-            if let Err(error) = follow.file.seek(SeekFrom::Start(0)) {
+            if let Err(error) = self.settings.hook.seek(&mut follow.file, 0) {
                 self.follow = Some(follow);
                 self.read_failed(&error)?;
                 return Ok(false);
@@ -1208,9 +1266,8 @@ enum Search {
     /// The file, and where it was found.
     Found(PathBuf, Opened),
     /// A candidate could not be opened, or an entry could not be
-    /// inspected: the search is tried again, after reporting the problem,
-    /// if any.
-    Retry(Option<Problem>),
+    /// inspected: the search is tried again, after reporting the problem.
+    Retry(Problem),
     /// No file holds the position.
     Lost,
 }
@@ -1477,7 +1534,62 @@ mod tests {
                     f(step);
                 }
             })),
+            ..Hook::default()
         }
+    }
+
+    /// Fails the first `failures` seeks of a reader, and records when each
+    /// seek was tried.
+    fn failing_seeks(failures: usize) -> (Hook, Arc<Mutex<Vec<Instant>>>) {
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&attempts);
+        let hook = Hook {
+            seek: Some(Arc::new(move || {
+                let mut attempts = recorded.lock().expect("lock");
+                attempts.push(Instant::now());
+                if attempts.len() <= failures {
+                    Err(io::Error::other(SEEK_FAILURE))
+                } else {
+                    Ok(())
+                }
+            })),
+            ..Hook::default()
+        };
+        (hook, attempts)
+    }
+
+    /// The error a failing seek returns.
+    const SEEK_FAILURE: &str = "injected seek failure";
+
+    /// Asserts that the `failures` seeks that failed were each tried again
+    /// one poll interval later.
+    fn assert_retried_every_poll(attempts: &Mutex<Vec<Instant>>, failures: usize) {
+        let attempts = attempts.lock().expect("lock");
+        assert_eq!(attempts.len(), failures + 1, "{attempts:?}");
+        for pair in attempts.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!(
+                gap + Duration::from_millis(50) >= POLL && gap < POLL * 3,
+                "{gap:?}"
+            );
+        }
+    }
+
+    /// Writes the checkpoint of `kind_a` for `path` at `at`.
+    fn write_checkpoint(state: &Path, path: &Path, at: LogPosition) {
+        let kind_dir = state.join("checkpoints").join("log");
+        fs::create_dir_all(&kind_dir).expect("created");
+        fs::write(
+            kind_dir.join("kind_a.json"),
+            format!(
+                "{{\"type\":\"log\",\"kind\":\"kind_a\",\"path\":\"{}\",\"dev\":{},\"ino\":{},\"offset\":{}}}",
+                path.display(),
+                at.dev,
+                at.ino,
+                at.offset
+            ),
+        )
+        .expect("written");
     }
 
     /// Renames `path` to `to` and creates `path` again holding `bytes`.
@@ -1581,20 +1693,8 @@ mod tests {
     #[tokio::test]
     async fn a_checkpoint_is_resumed_and_start_ignored() {
         let (_dir, path, state) = files(b"a1\na2\n");
-        let kind_dir = state.join("checkpoints").join("log");
-        fs::create_dir_all(&kind_dir).expect("created");
-        let metadata = fs::metadata(&path).expect("exists");
-        let at = LogPosition::new(&metadata, 3);
-        fs::write(
-            kind_dir.join("kind_a.json"),
-            format!(
-                "{{\"type\":\"log\",\"kind\":\"kind_a\",\"path\":\"{}\",\"dev\":{},\"ino\":{},\"offset\":3}}",
-                path.display(),
-                at.dev,
-                at.ino
-            ),
-        )
-        .expect("written");
+        let at = position(&path, 3);
+        write_checkpoint(&state, &path, at);
         let mut run = Run::loading(&path, &state, StartPosition::End);
         assert!(matches!(run.next().await, Event::Loaded(Loaded::Found(found)) if found == at));
         assert_opened(run.next().await, at);
@@ -2157,6 +2257,227 @@ mod tests {
             .map(|index| format!("{index:05}"))
             .collect::<Vec<_>>();
         assert_eq!(received, expected);
+    }
+
+    /// The reason of a seek that failed with [`SEEK_FAILURE`].
+    fn seek_failure_reason() -> String {
+        format!("cannot read the file: {SEEK_FAILURE}")
+    }
+
+    /// With no checkpoint and `start = "end"`, an initial seek that fails
+    /// `failures` times is retried every poll, choosing the end anew.
+    async fn initial_seek_failure_without_a_checkpoint(failures: usize) {
+        let (_dir, path, state) = files(b"a1\n");
+        let (hook, attempts) = failing_seeks(failures);
+        let mut run = Run::start(
+            &path,
+            Options {
+                start: StartPosition::End,
+                hook,
+                load: Some(state),
+                ..Options::default()
+            },
+        );
+        assert!(matches!(run.next().await, Event::Loaded(Loaded::Missing)));
+        assert_problem(run.next().await, &seek_failure_reason());
+        // The file grows before the attempt that succeeds, which starts at
+        // its end then, with no further problem reported.
+        append(&path, b"a2\n");
+        assert_opened(run.next().await, position(&path, 6));
+        assert_retried_every_poll(&attempts, failures);
+
+        resume_at(&mut run, &path, 6).await;
+        append(&path, b"a3\n");
+        assert_eq!(run.batch().await.0, ["a3"]);
+    }
+
+    #[tokio::test]
+    async fn a_transient_initial_seek_failure_without_a_checkpoint_is_retried() {
+        initial_seek_failure_without_a_checkpoint(1).await;
+    }
+
+    #[tokio::test]
+    async fn a_persistent_initial_seek_failure_without_a_checkpoint_is_retried() {
+        initial_seek_failure_without_a_checkpoint(4).await;
+    }
+
+    /// With a checkpoint of the configured file, an initial seek that fails
+    /// `failures` times is retried every poll at the checkpoint.
+    async fn initial_seek_failure_at_a_checkpoint(failures: usize) {
+        let (_dir, path, state) = files(b"a1\na2\n");
+        let at = position(&path, 3);
+        write_checkpoint(&state, &path, at);
+        let (hook, attempts) = failing_seeks(failures);
+        let mut run = Run::start(
+            &path,
+            Options {
+                start: StartPosition::End,
+                hook,
+                load: Some(state),
+                ..Options::default()
+            },
+        );
+        assert!(matches!(run.next().await, Event::Loaded(Loaded::Found(found)) if found == at));
+        assert_problem(run.next().await, &seek_failure_reason());
+        append(&path, b"a3\n");
+        assert_opened(run.next().await, at);
+        assert_retried_every_poll(&attempts, failures);
+
+        resume_at(&mut run, &path, 3).await;
+        assert_eq!(run.batch().await.0, ["a2", "a3"]);
+    }
+
+    #[tokio::test]
+    async fn a_transient_initial_seek_failure_at_a_checkpoint_is_retried() {
+        initial_seek_failure_at_a_checkpoint(1).await;
+    }
+
+    #[tokio::test]
+    async fn a_persistent_initial_seek_failure_at_a_checkpoint_is_retried() {
+        initial_seek_failure_at_a_checkpoint(4).await;
+    }
+
+    /// With a checkpoint of a renamed predecessor, an initial seek in it
+    /// that fails `failures` times is retried every poll by searching for
+    /// it again.
+    async fn initial_seek_failure_in_a_predecessor(failures: usize) {
+        let (logs, _guard) = Logs::capture();
+        let (dir, path, state) = files(b"a1\na2\n");
+        let old = position(&path, 3);
+        write_checkpoint(&state, &path, old);
+        let renamed = dir.path().join("a.log.1");
+        rotate(&path, &renamed, b"b1\n");
+        let (hook, attempts) = failing_seeks(failures);
+        let mut run = Run::start(
+            &path,
+            Options {
+                start: StartPosition::End,
+                hook,
+                load: Some(state),
+                ..Options::default()
+            },
+        );
+        assert!(matches!(run.next().await, Event::Loaded(Loaded::Found(found)) if found == old));
+        assert_problem(run.next().await, &seek_failure_reason());
+        assert_opened(run.next().await, old);
+        assert_retried_every_poll(&attempts, failures);
+        // The predecessor is open, held for its rest.
+        assert_eq!(open_files_under(dir.path()), 1);
+
+        run.resume(old);
+        assert_opened(run.next().await, old);
+        assert_eq!(run.batch().await.0, ["a2"]);
+        assert_opened(run.event().await, position(&path, 0));
+        assert_eq!(run.batch().await.0, ["b1"]);
+        assert!(
+            !logs.text().contains("Cannot find the file"),
+            "{}",
+            logs.text()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transient_initial_seek_failure_in_a_predecessor_is_retried() {
+        initial_seek_failure_in_a_predecessor(1).await;
+    }
+
+    #[tokio::test]
+    async fn a_persistent_initial_seek_failure_in_a_predecessor_is_retried() {
+        initial_seek_failure_in_a_predecessor(4).await;
+    }
+
+    #[tokio::test]
+    async fn a_seek_failure_after_the_start_waits_for_a_resume() {
+        let (_dir, path, _state) = files(b"a1\na2\n");
+        let failing = Arc::new(AtomicBool::new(false));
+        let fails = Arc::clone(&failing);
+        let hook = Hook {
+            seek: Some(Arc::new(move || {
+                if fails.load(Ordering::SeqCst) {
+                    Err(io::Error::other(SEEK_FAILURE))
+                } else {
+                    Ok(())
+                }
+            })),
+            ..Hook::default()
+        };
+        let mut run = Run::start(
+            &path,
+            Options {
+                hook,
+                ..Options::default()
+            },
+        );
+
+        // Opening the file under a resume.
+        failing.store(true, Ordering::SeqCst);
+        run.resume(position(&path, 3));
+        assert_problem(run.next().await, &seek_failure_reason());
+        failing.store(false, Ordering::SeqCst);
+        // Nothing is tried again before the next resume.
+        run.quiet(POLL * 3).await;
+        resume_at(&mut run, &path, 3).await;
+        assert_eq!(run.batch().await.0, ["a2"]);
+
+        // Repositioning on the open file.
+        failing.store(true, Ordering::SeqCst);
+        run.resume(position(&path, 0));
+        assert_problem(run.next().await, &seek_failure_reason());
+        failing.store(false, Ordering::SeqCst);
+        run.quiet(POLL * 3).await;
+        resume_at(&mut run, &path, 0).await;
+        assert_eq!(run.batch().await.0, ["a1", "a2"]);
+    }
+
+    #[tokio::test]
+    async fn a_predecessor_that_vanishes_before_its_opening_is_reported_and_searched_for_again() {
+        let (logs, _guard) = Logs::capture();
+        let (dir, path, _state) = files(b"a1\na2\n");
+        let old = position(&path, 3);
+        rotate(&path, &dir.path().join("a.log.1"), b"b1\n");
+        // The predecessor is renamed as it is opened, twice.
+        let real = fs::canonicalize(dir.path()).expect("resolves");
+        let names = ["a.log.1", "a.log.2", "a.log.3"].map(|name| real.join(name));
+        let renames = Arc::new(Mutex::new(0_usize));
+        let done = Arc::clone(&renames);
+        let candidates = names.clone();
+        let hook = Hook {
+            before: Some(Arc::new(move |step, at: &Path| {
+                let mut done = done.lock().expect("lock");
+                if step == Step::Open && *done < 2 && at == candidates[*done] {
+                    fs::rename(at, &candidates[*done + 1]).expect("renamed");
+                    *done += 1;
+                }
+            })),
+            ..Hook::default()
+        };
+        let mut run = Run::start(
+            &path,
+            Options {
+                hook,
+                ..Options::default()
+            },
+        );
+        run.resume(old);
+        assert_problem(
+            run.next().await,
+            &format!(
+                "the predecessor candidate {} disappeared before it could be opened",
+                names[0].display()
+            ),
+        );
+        // The second disappearance is not reported again, and the position
+        // is kept: the predecessor's rest arrives before the path.
+        assert_opened(run.next().await, old);
+        assert_eq!(*renames.lock().expect("lock"), 2);
+        assert_eq!(run.batch().await.0, ["a2"]);
+        assert_opened(run.event().await, position(&path, 0));
+        assert_eq!(run.batch().await.0, ["b1"]);
+        assert!(
+            !logs.text().contains("Cannot find the file"),
+            "{}",
+            logs.text()
+        );
     }
 
     #[test]
