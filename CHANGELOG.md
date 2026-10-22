@@ -4,6 +4,22 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A remote-mode log collector whose first seek into its log file fails, as in a
+  file whose handle cannot seek for a while, now tries the same file again
+  every 3 seconds and logs the problem once, instead of no longer trying to
+  read it.
+- While a write to Giganto is held up by flow control, a remote-mode log
+  collector still learns of the acknowledgements of earlier lines at least
+  every 3 seconds, so a rotated-away file whose lines were all acknowledged is
+  closed without waiting for the write.
+- When the renamed file a remote-mode log collector resumes in disappears just
+  before it is opened, the collector now logs a warning naming that file,
+  instead of retrying silently.
+
 ## [0.26.0] - 2026-10-23
 
 ### Added
@@ -575,6 +591,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.26.0...main
 [0.26.0]: https://github.com/aicers/reproduce/compare/0.25.1...0.26.0
 [0.25.1]: https://github.com/aicers/reproduce/compare/0.25.0...0.25.1
 [0.25.0]: https://github.com/aicers/reproduce/compare/0.24.1...0.25.0

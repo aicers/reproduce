@@ -34,7 +34,7 @@ use giganto_client::{RawEventKind, frame::SendError, ingest::log::Log};
 use quinn::WriteError;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -627,6 +627,22 @@ impl Control {
         }
         deadline
     }
+
+    /// Sends the reader the acknowledged position in `acks` if it changed
+    /// since it was last sent, or if `always`.
+    fn send_acknowledged(&mut self, acks: &Acks<LogPosition>, always: bool) {
+        let Some(reader) = &self.reader else {
+            return;
+        };
+        let (version, position) = acks.snapshot();
+        if !always && self.sent_version == Some(version) {
+            return;
+        }
+        self.sent_version = Some(version);
+        if let Some(position) = position {
+            reader.send(Command::Acknowledged(position));
+        }
+    }
 }
 
 /// Stamps records with strictly increasing timestamps.
@@ -714,7 +730,7 @@ impl CollectorTask {
                 }
                 output = next_result(&mut control.reader) => output,
                 () = tokio::time::sleep_until(deadline) => {
-                    self.send_acknowledged(control, false);
+                    control.send_acknowledged(&self.acks, false);
                     continue;
                 }
             };
@@ -722,7 +738,7 @@ impl CollectorTask {
                 Some(output) => self.take(control, output).await?,
                 None => self.reader_ended(control),
             }
-            self.send_acknowledged(control, false);
+            control.send_acknowledged(&self.acks, false);
         }
     }
 
@@ -819,7 +835,9 @@ impl CollectorTask {
                 control.due = Some(Due::Acknowledged);
             }
             Event::Problem(problem) => {
-                if matches!(problem, Problem::Read(_)) && control.due.is_none() {
+                // Before the first `Opened` or `Truncated`, the reader tries
+                // its file again by itself.
+                if matches!(problem, Problem::Read(_)) && control.started && control.due.is_none() {
                     control.due = Some(Due::Current(Instant::now() + POLLING_INTERVAL));
                 }
                 self.report(control, problem);
@@ -929,23 +947,7 @@ impl CollectorTask {
                 position,
             });
         }
-        self.send_acknowledged(control, true);
-    }
-
-    /// Sends the reader the acknowledged position if it changed since it
-    /// was last sent, or if `always`.
-    fn send_acknowledged(&self, control: &mut Control, always: bool) {
-        let Some(reader) = &control.reader else {
-            return;
-        };
-        let (version, position) = self.acks.snapshot();
-        if !always && control.sent_version == Some(version) {
-            return;
-        }
-        control.sent_version = Some(version);
-        if let Some(position) = position {
-            reader.send(Command::Acknowledged(position));
-        }
+        control.send_acknowledged(&self.acks, true);
     }
 
     /// Writes a batch of lines ending just before `end` on the stream.
@@ -979,7 +981,23 @@ impl CollectorTask {
             return Ok(());
         }
         self.acks.returned(end);
-        if self.sender.write(&events).await.is_err() {
+        // A write held up, as by flow control, does not hold up the ACKs of
+        // earlier batches: the reader still learns of the acknowledged
+        // position, so it can release a rotated-away file.
+        let mut forward =
+            tokio::time::interval_at(Instant::now() + POLLING_INTERVAL, POLLING_INTERVAL);
+        forward.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let result = {
+            let write = self.sender.write(&events);
+            tokio::pin!(write);
+            loop {
+                tokio::select! {
+                    result = &mut write => break result,
+                    _ = forward.tick() => control.send_acknowledged(&self.acks, false),
+                }
+            }
+        };
+        if result.is_err() {
             self.recover(control).await?;
         }
         Ok(())
@@ -1323,31 +1341,41 @@ mod tests {
 
     use super::*;
 
-    /// Returns what `f` logs.
-    fn logged(f: impl FnOnce()) -> String {
-        #[derive(Clone, Default)]
-        struct Buffer(Arc<Mutex<Vec<u8>>>);
+    /// What is logged to a subscriber.
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
 
-        impl io::Write for Buffer {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.0.lock().expect("lock").extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
+    impl io::Write for Buffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("lock").extend_from_slice(buf);
+            Ok(buf.len())
         }
 
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Buffer {
+        /// A subscriber that logs to the buffer.
+        fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync + use<> {
+            let writer = self.clone();
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish()
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().expect("lock")).into_owned()
+        }
+    }
+
+    /// Returns what `f` logs.
+    fn logged(f: impl FnOnce()) -> String {
         let buffer = Buffer::default();
-        let writer = buffer.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        let text = buffer.0.lock().expect("lock").clone();
-        String::from_utf8_lossy(&text).into_owned()
+        tracing::subscriber::with_default(buffer.subscriber(), f);
+        buffer.text()
     }
 
     fn handle(task: JoinHandle<()>) -> CollectorHandle {
@@ -1529,6 +1557,7 @@ mod tests {
                     let _ = released.lock().expect("lock").recv();
                 }
             })),
+            ..Hook::default()
         };
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1580,6 +1609,85 @@ mod tests {
         release.send(())?;
         std::thread::sleep(Duration::from_millis(500));
         assert!(!checkpoints::log_file(state.path(), "kind_s").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_initial_seek_failure_is_retried_without_giganto() -> anyhow::Result<()> {
+        use crate::config::remote::{CollectorConfig, CollectorType, StartPosition};
+
+        // The collector's task and its reader log to this thread's
+        // subscriber.
+        let logs = Buffer::default();
+        let _guard = tracing::subscriber::set_default(logs.subscriber());
+        let state = tempfile::tempdir()?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("a.log");
+        std::fs::write(&path, b"a1\na2\n")?;
+        // Nothing answers there.
+        let silent = std::net::UdpSocket::bind("127.0.0.1:0")?;
+        let config = RemoteConfig {
+            giganto_ingest_srv_addr: silent.local_addr()?,
+            giganto_name: "localhost".to_string(),
+            collectors: vec![CollectorConfig {
+                collector_type: CollectorType::Log,
+                kind: "kind_a".to_string(),
+                path: path.clone(),
+                start: StartPosition::End,
+            }],
+        };
+
+        // The first two seeks fail.
+        let failures = Mutex::new(2_usize);
+        let hook = Hook {
+            seek: Some(Arc::new(move || {
+                let mut failures = failures.lock().expect("lock");
+                if *failures > 0 {
+                    *failures -= 1;
+                    Err(io::Error::other("injected seek failure"))
+                } else {
+                    Ok(())
+                }
+            })),
+            ..Hook::default()
+        };
+        let files = TlsFiles {
+            cert: state.path().join("cert.pem"),
+            key: state.path().join("key.pem"),
+            ca_certs: Vec::new(),
+        };
+        let mut collectors = CollectorRuntime::new(files, ReloadSignal::new(), state.path().into())
+            .with_retry_interval(Duration::from_millis(200));
+        collectors.hook = hook;
+        collectors.apply(config).await;
+
+        // The reader retries on its own, and the end it starts at is saved
+        // with no Giganto connection.
+        let end = LogPosition::new(&std::fs::metadata(&path)?, 6);
+        let deadline = Instant::now() + POLLING_INTERVAL * 6;
+        while checkpoints::load_log(state.path(), "kind_a", &path) != Loaded::Found(end) {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the starting position to be saved"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        collectors.shutdown().await;
+
+        let text = logs.text();
+        let warnings = text
+            .lines()
+            .filter(|line| line.contains("Collector kind_a for"))
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1, "{text}");
+        assert!(
+            warnings[0].contains(&format!(
+                "WARN reproduce::runtime: Collector kind_a for {}: cannot read the file: \
+                 injected seek failure; retrying every {POLLING_INTERVAL:?}",
+                path.display()
+            )),
+            "{text}"
+        );
         Ok(())
     }
 }

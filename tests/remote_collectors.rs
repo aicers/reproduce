@@ -6,7 +6,8 @@
 //! and reads every stream's record header and batches. It sends a data ACK
 //! for every record and the close ACK for every close marker, unless told to
 //! withhold the data ACKs or the close ACK, or to hold data ACKs back and send
-//! them later, and can stop a stream or close a connection.
+//! them later, and can stop reading a kind's streams, stop a stream or close a
+//! connection.
 
 mod support;
 
@@ -109,6 +110,12 @@ struct GigantoState {
     hold: tokio::sync::Mutex<Hold>,
     /// The send side of every stream, by its index, until it ends.
     senders: Mutex<Vec<Option<Arc<tokio::sync::Mutex<SendStream>>>>>,
+    /// `(kind, line)`: the record after which the kind's streams are read
+    /// no further.
+    pause_after: Mutex<Option<(String, String)>>,
+    /// The kinds whose streams are read no further; their ACKs can still be
+    /// sent.
+    paused: watch::Sender<HashSet<String>>,
 }
 
 /// Data ACKs held back, sent later in order on their streams.
@@ -148,6 +155,8 @@ impl Giganto {
             stop_next: Mutex::new(0),
             hold: tokio::sync::Mutex::new(Hold::default()),
             senders: Mutex::new(Vec::new()),
+            pause_after: Mutex::new(None),
+            paused: watch::channel(HashSet::new()).0,
         });
         let task = tokio::spawn(accept(endpoint.clone(), state.clone()));
         Ok(Self {
@@ -195,6 +204,20 @@ impl Giganto {
                 let _ = send.lock().await.write_all(&timestamp.to_be_bytes()).await;
             }
         }
+    }
+
+    /// Reads no further frame of the streams of `kind` once a frame with
+    /// the record `line` of `kind` was read, until
+    /// [`resume_reading`](Self::resume_reading). Held ACKs can still be
+    /// released meanwhile.
+    fn pause_reading_after(&self, kind: &str, line: &str) {
+        *lock(&self.state.pause_after) = Some((kind.to_string(), line.to_string()));
+    }
+
+    /// Reads every stream again.
+    fn resume_reading(&self) {
+        *lock(&self.state.pause_after) = None;
+        self.state.paused.send_replace(HashSet::new());
     }
 
     fn stop_next_streams(&self, count: usize) {
@@ -327,9 +350,16 @@ async fn read_stream(
     }
 
     let end = loop {
+        let kind = lock(&state.streams)[index].kind().map(str::to_string);
+        let mut paused = state.paused.subscribe();
         let mut buf = Vec::new();
         let read = tokio::select! {
-            read = recv_raw(&mut recv, &mut buf) => read,
+            read = async {
+                let _ = paused
+                    .wait_for(|paused| !kind.as_ref().is_some_and(|kind| paused.contains(kind)))
+                    .await;
+                recv_raw(&mut recv, &mut buf).await
+            } => read,
             () = stop.cancelled() => {
                 let _ = recv.stop(VarInt::from_u32(0));
                 break "stopped".to_string();
@@ -354,13 +384,23 @@ async fn read_stream(
                     .await;
             } else if let Ok(log) = bincode::deserialize::<Log>(&data) {
                 let withheld = lock(&state.withhold_acks).contains(&log.kind);
+                let line = String::from_utf8_lossy(&log.log).into_owned();
+                {
+                    let mut pause_after = lock(&state.pause_after);
+                    if pause_after
+                        .as_ref()
+                        .is_some_and(|(kind, after)| *kind == log.kind && *after == line)
+                    {
+                        *pause_after = None;
+                        state.paused.send_modify(|paused| {
+                            paused.insert(log.kind.clone());
+                        });
+                    }
+                }
                 {
                     let mut streams = lock(&state.streams);
                     streams[index].timestamps.push(timestamp);
-                    streams[index].records.push((
-                        log.kind.clone(),
-                        String::from_utf8_lossy(&log.log).into_owned(),
-                    ));
+                    streams[index].records.push((log.kind.clone(), line));
                 }
                 if withheld {
                     continue;
@@ -1667,6 +1707,40 @@ fn copy_truncate(path: &Path, lines: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Tells whether this process has `path` open.
+#[cfg(unix)]
+fn is_open(path: &Path) -> bool {
+    let path = std::fs::canonicalize(path).expect("the file exists");
+    open_paths().contains(&path)
+}
+
+/// The files this process has open.
+#[cfg(target_os = "linux")]
+fn open_paths() -> Vec<PathBuf> {
+    std::fs::read_dir("/proc/self/fd")
+        .expect("/proc/self/fd")
+        .flatten()
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .collect()
+}
+
+/// The files this process has open.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn open_paths() -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut paths = Vec::new();
+    for fd in 0..4096 {
+        let mut buf = [0_u8; libc::PATH_MAX as usize];
+        // SAFETY: `buf` holds `PATH_MAX` bytes, as `F_GETPATH` requires.
+        if unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) } == 0 {
+            let len = buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len());
+            paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len])));
+        }
+    }
+    paths
+}
+
 /// The lines `kind` received on its streams from the `from`th on.
 fn lines_from(giganto: &Giganto, kind: &str, from: usize) -> Vec<String> {
     giganto
@@ -2231,6 +2305,76 @@ async fn a_symlink_into_proc_is_refused() -> Result<()> {
     sleep(SETTLE).await;
     assert!(giganto.streams_of("kind_p").is_empty());
     assert_eq!(giganto.lines("kind_p"), Vec::<String>::new());
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_blocked_write_does_not_hold_back_the_release_of_a_rotated_away_file() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    // The ACK of the last line of the file rotated away is held back, so
+    // the file is held once the collector reads the new one.
+    giganto.hold_acks(&["kind_a"]).await;
+    append(&a, "a2")?;
+    wait_for_lines(&giganto, "kind_a", &["a2"]).await;
+    giganto.pause_reading_after("kind_a", "b1");
+    let renamed = logs.path("a.log.1");
+    std::fs::rename(&a, &renamed)?;
+    std::fs::write(&a, "b1\n")?;
+    wait_for_lines(&giganto, "kind_a", &["b1"]).await;
+    assert!(is_open(&renamed));
+
+    // A batch larger than the stream's receive window, with nothing after
+    // it: its write waits for the server, which reads no further, and the
+    // reader waits at the end of the file. The reader finds the lines at
+    // its next check, at most 3 seconds later.
+    let filler = "x".repeat(3400);
+    let mut lines = (0..1000)
+        .map(|index| format!("c{index:04}{filler}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    lines.push('\n');
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&a)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, lines.as_bytes()))?;
+    sleep(Duration::from_secs(3) + SETTLE).await;
+
+    // The held ACKs arrive while the write is still blocked: the
+    // acknowledged position leaves the rotated-away file, which is
+    // released within about three seconds.
+    giganto.release_acks().await;
+    let released = Instant::now();
+    wait_for(
+        "the rotated-away file is released",
+        Duration::from_millis(4500),
+        || !is_open(&renamed),
+    )
+    .await;
+    assert_eq!(giganto.lines("kind_a"), ["a1", "a2", "b1"]);
+    sleep(Duration::from_secs(3).saturating_sub(released.elapsed())).await;
+    assert_eq!(
+        giganto.lines("kind_a"),
+        ["a1", "a2", "b1"],
+        "the write stays blocked beyond three seconds"
+    );
+
+    giganto.resume_reading();
+    wait_for("the batch arrives", WAIT, || {
+        giganto.lines("kind_a").len() == 1003
+    })
+    .await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
     runtime.shutdown().await;
     Ok(())
 }
