@@ -1,0 +1,61 @@
+#!/bin/sh
+# A fake journalctl for the journal collector's tests.
+#
+# A test symlinks this script into a directory of its own and runs the
+# link; the script finds that directory from $0. There it
+#
+# - appends its arguments, as one line, to `args`, and its process ID to
+#   `pids`;
+# - writes `stderr`, if it exists, to standard error;
+# - prints the lines of `entries` that follow the line whose __CURSOR is
+#   the --after-cursor value (every line without the option), or only the
+#   last line with --lines=1;
+# - with --follow, runs `tail -f` on `entries` from that line instead, so
+#   that lines a test appends later are streamed too, and a kill leaves no
+#   other process behind;
+# - exits with the status in `status`, or 0.
+
+PATH=/usr/bin:/bin
+dir=$(dirname "$0")
+entries="$dir/entries"
+echo "$*" >> "$dir/args"
+echo "$$" >> "$dir/pids"
+
+cursor=
+last=
+follow=
+for arg in "$@"; do
+    case "$arg" in
+        --after-cursor=*) cursor=${arg#--after-cursor=} ;;
+        --lines=1) last=1 ;;
+        --follow) follow=1 ;;
+    esac
+done
+
+if [ -f "$dir/stderr" ]; then
+    cat "$dir/stderr" >&2
+fi
+
+start=1
+if [ -n "$cursor" ]; then
+    found=$(grep -n -F -e "\"__CURSOR\":\"$cursor\"" "$entries" | head -n 1 | cut -d: -f1)
+    if [ -z "$found" ]; then
+        echo "Failed to seek to cursor: Invalid argument" >&2
+        exit 1
+    fi
+    start=$((found + 1))
+fi
+
+if [ -n "$follow" ]; then
+    exec tail -n "+$start" -f "$entries"
+fi
+
+if [ -n "$last" ]; then
+    tail -n 1 "$entries"
+else
+    tail -n "+$start" "$entries"
+fi
+if [ -f "$dir/status" ]; then
+    exit "$(cat "$dir/status")"
+fi
+exit 0

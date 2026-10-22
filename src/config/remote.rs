@@ -42,18 +42,21 @@ pub struct RemoteConfig {
 
 /// A validated collector entry of a remote configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CollectorConfig {
-    pub collector_type: CollectorType,
+pub enum CollectorConfig {
+    /// Follows a log file and sends each line as a Giganto `Log`.
+    Log(LogCollectorConfig),
+    /// Reads the host's systemd journal and sends the entries of Clumit
+    /// Security's own units and containers as Giganto `OpLog`s. At most one
+    /// configuration entry, accepted on Linux only.
+    Journal,
+}
+
+/// A validated `log` collector entry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LogCollectorConfig {
     pub kind: String,
     pub path: PathBuf,
     pub start: StartPosition,
-}
-
-/// The type of a collector.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CollectorType {
-    /// Follows a log file and sends each line as a Giganto `Log`.
-    Log,
 }
 
 /// Where a collector starts reading a file it has no checkpoint for.
@@ -94,8 +97,8 @@ struct RawConfig {
 struct RawCollector {
     #[serde(rename = "type")]
     collector_type: String,
-    kind: String,
-    path: String,
+    kind: Option<String>,
+    path: Option<String>,
     start: Option<String>,
 }
 
@@ -138,39 +141,64 @@ pub fn parse(s: &str) -> Result<RemoteConfig, RemoteConfigError> {
 
     let mut kinds: HashMap<&str, usize> = HashMap::new();
     let mut paths: HashMap<&str, usize> = HashMap::new();
+    let mut journal: Option<usize> = None;
     let mut collectors = Vec::with_capacity(raw.collectors.len());
     for (index, collector) in raw.collectors.iter().enumerate() {
         let key = |field: &str| format!("collectors[{index}].{field}");
 
-        let collector_type = match collector.collector_type.as_str() {
-            "log" => CollectorType::Log,
+        match collector.collector_type.as_str() {
+            "log" => {}
+            "journal" => {
+                if !cfg!(target_os = "linux") {
+                    return Err(invalid(
+                        key("type"),
+                        "journal collectors are supported on Linux only",
+                    ));
+                }
+                for (field, present) in [
+                    ("kind", collector.kind.is_some()),
+                    ("path", collector.path.is_some()),
+                    ("start", collector.start.is_some()),
+                ] {
+                    if present {
+                        return Err(invalid(key(field), "not allowed for a journal collector"));
+                    }
+                }
+                if let Some(first) = journal {
+                    return Err(invalid(
+                        key("type"),
+                        format!("a journal collector is already configured by collectors[{first}]"),
+                    ));
+                }
+                journal = Some(index);
+                collectors.push(CollectorConfig::Journal);
+                continue;
+            }
             other => {
                 return Err(invalid(
                     key("type"),
-                    format!("unsupported type \"{other}\"; the only type is \"log\""),
+                    format!("unsupported type \"{other}\"; expected \"log\" or \"journal\""),
                 ));
             }
-        };
+        }
 
-        validate_kind(&collector.kind).map_err(|reason| invalid(key("kind"), reason))?;
-        if let Some(first) = kinds.insert(&collector.kind, index) {
+        let required = |field: &str| invalid(key(field), "required for a log collector");
+        let kind = collector.kind.as_deref().ok_or_else(|| required("kind"))?;
+        let path = collector.path.as_deref().ok_or_else(|| required("path"))?;
+
+        validate_kind(kind).map_err(|reason| invalid(key("kind"), reason))?;
+        if let Some(first) = kinds.insert(kind, index) {
             return Err(invalid(
                 key("kind"),
-                format!(
-                    "\"{}\" is already used by collectors[{first}]",
-                    collector.kind
-                ),
+                format!("\"{kind}\" is already used by collectors[{first}]"),
             ));
         }
 
-        validate_path(&collector.path).map_err(|reason| invalid(key("path"), reason))?;
-        if let Some(first) = paths.insert(&collector.path, index) {
+        validate_path(path).map_err(|reason| invalid(key("path"), reason))?;
+        if let Some(first) = paths.insert(path, index) {
             return Err(invalid(
                 key("path"),
-                format!(
-                    "\"{}\" is already used by collectors[{first}]",
-                    collector.path
-                ),
+                format!("\"{path}\" is already used by collectors[{first}]"),
             ));
         }
 
@@ -185,12 +213,11 @@ pub fn parse(s: &str) -> Result<RemoteConfig, RemoteConfigError> {
             }
         };
 
-        collectors.push(CollectorConfig {
-            collector_type,
-            kind: collector.kind.clone(),
-            path: PathBuf::from(&collector.path),
+        collectors.push(CollectorConfig::Log(LogCollectorConfig {
+            kind: kind.to_string(),
+            path: PathBuf::from(path),
             start,
-        });
+        }));
     }
 
     Ok(RemoteConfig {
@@ -296,6 +323,18 @@ start = "end"
         header() + &collector(kind, path)
     }
 
+    fn journal() -> &'static str {
+        "\n[[collectors]]\ntype = \"journal\"\n"
+    }
+
+    /// The `log` collector entry at `index`.
+    fn log_entry(config: &RemoteConfig, index: usize) -> &LogCollectorConfig {
+        match &config.collectors[index] {
+            CollectorConfig::Log(log) => log,
+            CollectorConfig::Journal => panic!("collectors[{index}] is a journal collector"),
+        }
+    }
+
     fn invalid_key(s: &str) -> (String, String) {
         match parse(s) {
             Err(RemoteConfigError::Invalid { key, reason }) => (key, reason),
@@ -318,12 +357,11 @@ start = "end"
             RemoteConfig {
                 giganto_ingest_srv_addr: "10.0.0.5:38370".parse().expect("address"),
                 giganto_name: "001.giganto.ds1.customer.example".to_string(),
-                collectors: vec![CollectorConfig {
-                    collector_type: CollectorType::Log,
+                collectors: vec![CollectorConfig::Log(LogCollectorConfig {
                     kind: "nginx_access".to_string(),
                     path: PathBuf::from("/var/log/nginx/access.log"),
                     start: StartPosition::End,
-                }],
+                })],
             }
         );
     }
@@ -331,12 +369,12 @@ start = "end"
     #[test]
     fn start_defaults_to_end_and_accepts_beginning() {
         let config = parse(&with_collector("app", "/var/log/app.log")).expect("valid");
-        assert_eq!(config.collectors[0].start, StartPosition::End);
+        assert_eq!(log_entry(&config, 0).start, StartPosition::End);
 
         let config =
             parse(&(with_collector("app", "/var/log/app.log") + "start = \"beginning\"\n"))
                 .expect("valid");
-        assert_eq!(config.collectors[0].start, StartPosition::Beginning);
+        assert_eq!(log_entry(&config, 0).start, StartPosition::Beginning);
     }
 
     #[test]
@@ -412,16 +450,24 @@ start = "end"
         let error = parse_error(&header());
         assert!(error.contains("collectors"), "{error}");
 
-        for missing in ["type", "kind", "path"] {
-            let s: String = with_collector("app", "/var/log/app.log")
+        let without = |missing: &str| -> String {
+            with_collector("app", "/var/log/app.log")
                 .lines()
                 .filter(|line| !line.starts_with(missing))
                 .fold(String::new(), |mut s, line| {
                     let _ = writeln!(s, "{line}");
                     s
-                });
-            let error = parse_error(&s);
-            assert!(error.contains(missing), "{error}");
+                })
+        };
+        let error = parse_error(&without("type"));
+        assert!(error.contains("type"), "{error}");
+
+        // `kind` and `path` are optional to the parser, since a journal
+        // collector has neither, and required by a rule for a log collector.
+        for missing in ["kind", "path"] {
+            let (key, reason) = invalid_key(&without(missing));
+            assert_eq!(key, format!("collectors[0].{missing}"));
+            assert_eq!(reason, "required for a log collector");
         }
     }
 
@@ -467,10 +513,93 @@ start = "end"
     }
 
     #[test]
-    fn non_log_type_is_refused() {
+    fn unsupported_type_is_refused() {
         let s = with_collector("app", "/var/log/app.log").replace("\"log\"", "\"file\"");
-        let (key, _) = invalid_key(&s);
+        let (key, reason) = invalid_key(&s);
         assert_eq!(key, "collectors[0].type");
+        assert_eq!(
+            reason,
+            "unsupported type \"file\"; expected \"log\" or \"journal\""
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_journal_collector_is_accepted_alone_and_with_log_collectors() {
+        let config = parse(&(header() + journal())).expect("valid");
+        assert_eq!(config.collectors, [CollectorConfig::Journal]);
+
+        let s = header() + &collector("a", "/var/log/a.log") + journal() + &collector("b", "/b");
+        let config = parse(&s).expect("valid");
+        assert_eq!(config.collectors.len(), 3);
+        assert_eq!(log_entry(&config, 0).kind, "a");
+        assert_eq!(config.collectors[1], CollectorConfig::Journal);
+        assert_eq!(log_entry(&config, 2).path, PathBuf::from("/b"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_second_journal_collector_is_refused() {
+        let s = header() + journal() + &collector("a", "/var/log/a.log") + journal();
+        let (key, reason) = invalid_key(&s);
+        assert_eq!(key, "collectors[2].type");
+        assert!(reason.contains("collectors[0]"), "{reason}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn log_keys_are_refused_in_a_journal_collector() {
+        for line in [
+            "kind = \"app\"",
+            "path = \"/var/log/app.log\"",
+            "start = \"end\"",
+        ] {
+            let s = header() + &collector("a", "/var/log/a.log") + journal() + line + "\n";
+            let field = line.split(' ').next().expect("a key");
+            let error = parse(&s).expect_err("a log key in a journal collector");
+            assert_eq!(
+                error.to_string(),
+                format!("collectors[1].{field}: not allowed for a journal collector")
+            );
+        }
+
+        let error = parse_error(&(header() + journal() + "units = [\"x\"]\n"));
+        assert!(error.contains("units"), "{error}");
+        assert!(error.contains("line 6"), "{error}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_journal_collector_counts_toward_the_limit() {
+        let mut s = header();
+        for i in 0..MAX_COLLECTORS - 1 {
+            s += &collector(&format!("app{i}"), &format!("/var/log/app{i}.log"));
+        }
+        s += journal();
+        let config = parse(&s).expect("63 log collectors and a journal collector");
+        assert_eq!(config.collectors.len(), MAX_COLLECTORS);
+
+        s += &collector("one-too-many", "/var/log/one-too-many.log");
+        let (key, reason) = invalid_key(&s);
+        assert_eq!(key, "collectors");
+        assert!(reason.contains("65"), "{reason}");
+    }
+
+    #[test]
+    fn a_log_collector_may_use_the_kind_journal() {
+        let config = parse(&with_collector("journal", "/var/log/journal.log")).expect("valid");
+        assert_eq!(log_entry(&config, 0).kind, "journal");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn a_journal_collector_is_refused_off_linux() {
+        let s = header() + &collector("a", "/var/log/a.log") + journal();
+        let error = parse(&s).expect_err("not on Linux");
+        assert_eq!(
+            error.to_string(),
+            "collectors[1].type: journal collectors are supported on Linux only"
+        );
     }
 
     #[test]

@@ -6,6 +6,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Remote mode can run one `journal` collector (`type = "journal"`, Linux only).
+  It reads the host's systemd journal through `/usr/bin/journalctl`, from the
+  oldest entry at its first start and from its saved journal cursor afterwards,
+  and sends the entries of Clumit Security's own units and containers, selected
+  only by fields journald sets itself, to Giganto as operational logs. REproduce
+  needs read access to the system journal, through group `adm`.
+
+### Changed
+
+- In remote mode, the `ACK: <timestamp>` line REproduce logs for each Giganto
+  acknowledgement is now logged at DEBUG instead of INFO; `Finish ACK` lines
+  stay at INFO. Local mode is unchanged.
+
 ### Fixed
 
 - A remote-mode log collector whose first seek into its log file fails, as in a
