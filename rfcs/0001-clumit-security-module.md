@@ -368,9 +368,10 @@ All rules in this section apply to remote-mode collectors only.
   directories. A failed check closes the descriptor and is a per-collector
   warning (§4.3), logged when the collector's state changes rather than every 3
   s.
-- **[DECISION] Reading runs off the async runtime** (one blocking task per
-  collector), so a stalled file system cannot stall the manager connection or
-  other collectors.
+- **[DECISION] Reading runs off the async runtime** (one dedicated reader thread
+  per collector, never Tokio's blocking pool, whose shutdown waits for started
+  tasks), so a stalled file system cannot stall the manager connection, other
+  collectors, or process exit.
 - **[DECISION] Start.** The first open and the start position are taken when the
   collector starts, independent of the Giganto connection. With no checkpoint:
   if `path` exists at the collector's first attempt, the collector begins at the
@@ -387,8 +388,11 @@ All rules in this section apply to remote-mode collectors only.
 - **[DECISION] At EOF, every 3 s,** the collector `stat`s `path` (following
   symlinks) and compares it with the open file:
   - same `(dev, ino)` and size ≥ offset: read again;
-  - same `(dev, ino)` and size < offset (copy-truncate): continue from offset 0
-    of the same file; held partial bytes are discarded;
+  - same `(dev, ino)` and size < offset (copy-truncate): a new content epoch of
+    the same file begins. Held partial bytes are discarded, lines already read
+    are still sent, the stream's pending acknowledgements are dropped, its
+    acknowledged position becomes `(dev, ino, 0)` and is durably saved before
+    any new content is read, and reading continues from 0;
   - different `(dev, ino)` (rename rotation): keep reading the old handle until
     one full 3 s interval passes with no new bytes on it (the producer may still
     write to the renamed file until it reopens), then send any held partial
@@ -803,11 +807,13 @@ engine's unit and the module pins).
   holds and then reads the current `path`; the file in between is never read.
   The collector cannot tell this from a single rotation, so the loss is accepted
   and not reported.
-- Copy-truncate: lines appended between the collector's last read (up to 3 s
-  earlier) and the truncation exist only in the copy, which the collector cannot
-  find by inode; they are lost. If the file also grows past the old offset
-  within one interval, the truncation itself is undetectable and the lines
-  between are lost.
+- Copy-truncate: lines written to the stream before a copy-truncate is processed
+  and not yet acknowledged are lost if the stream then fails (their positions
+  are dropped; no spool is kept). lines appended between the collector's last
+  read (up to 3 s earlier) and the truncation exist only in the copy, which the
+  collector cannot find by inode; they are lost. If the file also grows past the
+  old offset within one interval, the truncation itself is undetectable and the
+  lines between are lost.
 - Rename rotation: bytes written to the renamed file after the collector has
   switched away (more than one quiet 3 s interval after the rename) are lost.
 - A file replaced in place by a shorter one with the same inode: treated as
@@ -1046,3 +1052,21 @@ them, and they are recorded here so this RFC matches them.
   REproduce's ingest version, and that aice-web-next vendors that REview's
   schema. bootler's exhaustive matches on deploy-core errors gain message arms
   for the new variants.
+- **Review of the issue tree** (comment on
+  [aicers/reproduce#984](https://github.com/aicers/reproduce/issues/984),
+  2026-10-22). An observed copy-truncate starts a new content epoch: the
+  controller drops the stream's pending acknowledgements, sets its acknowledged
+  position to `(dev, ino, 0)` and saves it durably before the reader reads new
+  content, so no late ACK, stale position or earlier save can move the durable
+  position past unacknowledged new content; unacknowledged pre-truncation lines
+  are an accepted loss
+  ([aicers/reproduce#982](https://github.com/aicers/reproduce/issues/982),
+  [aicers/reproduce#983](https://github.com/aicers/reproduce/issues/983)). Any
+  newly selected starting position (start, corrupt-checkpoint fallback, new
+  epoch) is saved durably before anything after it is sent; a failing save is
+  retried every 3 s and superseded by any later request, and a stop ends the
+  retry. Resuming the current, unchanged file continues after the acknowledged
+  position and never replays it from 0. Each collector reads on its own thread,
+  reporting through a bounded channel to the controller, which alone sends and
+  saves. Clumit Security Web escapes DEL (`U+007F`) in TOML strings
+  ([aicers/aice-web-next#1239](https://github.com/aicers/aice-web-next/issues/1239)).
