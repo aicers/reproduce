@@ -863,9 +863,10 @@ impl Reader {
     /// Looks for the file of `position` beside the file last opened, or
     /// beside `path` when nothing was opened yet.
     ///
-    /// A candidate that cannot be opened is not given up on: the search is
-    /// tried again, so a predecessor that is only out of reach for a while
-    /// is not taken for lost.
+    /// A candidate that cannot be opened, or a directory entry that cannot
+    /// be inspected while no exact match is found, is not given up on: the
+    /// search is tried again, so a predecessor that is only out of reach
+    /// for a while is not taken for lost.
     fn search(&self, position: LogPosition) -> Search {
         let path = &self.settings.path;
         let Some(dir) = self
@@ -893,10 +894,21 @@ impl Reader {
         let id = position.identity();
         let mut exact = Vec::new();
         let mut inode = Vec::new();
-        for entry in entries.flatten() {
-            let candidate = entry.path();
-            let Ok(metadata) = fs::symlink_metadata(&candidate) else {
-                continue;
+        // An entry that cannot be inspected may be the file sought.
+        let mut failure = None;
+        for entry in entries {
+            let inspected = entry.and_then(|entry| {
+                let candidate = entry.path();
+                fs::symlink_metadata(&candidate).map(|metadata| (candidate, metadata))
+            });
+            let (candidate, metadata) = match inspected {
+                Ok(inspected) => inspected,
+                // It was removed since the directory was listed.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    failure.get_or_insert(error);
+                    continue;
+                }
             };
             if !metadata.is_file() {
                 continue;
@@ -907,6 +919,14 @@ impl Reader {
             } else if qualifies(found, metadata.len(), position) {
                 inode.push(candidate);
             }
+        }
+        if exact.is_empty()
+            && let Some(error) = failure
+        {
+            return Search::Retry(Some(Problem::Stat(io::Error::new(
+                error.kind(),
+                format!("{}: {error}", dir.display()),
+            ))));
         }
         for candidate in exact.into_iter().chain(inode) {
             match open_checked(&candidate, &self.settings.refused, &self.settings.hook) {
@@ -1187,8 +1207,9 @@ impl Reader {
 enum Search {
     /// The file, and where it was found.
     Found(PathBuf, Opened),
-    /// A candidate could not be opened: the search is tried again, after
-    /// reporting the problem, if any.
+    /// A candidate could not be opened, or an entry could not be
+    /// inspected: the search is tried again, after reporting the problem,
+    /// if any.
     Retry(Option<Problem>),
     /// No file holds the position.
     Lost,
@@ -2007,6 +2028,44 @@ mod tests {
         run.quiet(POLL * 3).await;
 
         fs::set_permissions(&renamed, fs::Permissions::from_mode(0o644)).expect("unlocked");
+        assert_opened(run.next().await, old);
+        assert_eq!(run.batch().await.0, ["a2"]);
+        assert_opened(run.event().await, position(&path, 0));
+        assert_eq!(run.batch().await.0, ["b1"]);
+        assert!(
+            !logs.text().contains("Cannot find the file"),
+            "{}",
+            logs.text()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_directory_that_cannot_be_searched_is_searched_again() {
+        let (logs, _guard) = Logs::capture();
+        let (dir, path, _state) = files(b"a1\na2\n");
+        let old = position(&path, 3);
+        let renamed = dir.path().join("a.log.1");
+        rotate(&path, &renamed, b"b1\n");
+        // Listing the directory works, inspecting its entries does not.
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o400)).expect("locked");
+        // Permissions are not enforced as root.
+        if fs::symlink_metadata(&renamed).is_ok() {
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).expect("unlocked");
+            return;
+        }
+        let mut run = Run::start(&path, Options::default());
+        run.resume(old);
+        let event = run.next().await;
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).expect("unlocked");
+        match event {
+            Event::Problem(problem) => assert!(
+                problem.reason().starts_with("cannot inspect the path: "),
+                "{problem:?}"
+            ),
+            other => panic!("expected a problem, found {other:?}"),
+        }
+
+        // The predecessor's suffix arrives before the current file.
         assert_opened(run.next().await, old);
         assert_eq!(run.batch().await.0, ["a2"]);
         assert_opened(run.event().await, position(&path, 0));

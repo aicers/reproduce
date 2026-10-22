@@ -186,9 +186,10 @@ the byte just past the last line Giganto acknowledged.
   not grow.
 - If the file at that position was renamed, the collector finds it in the same
   directory and reads the rest of it before the path. While such a file exists
-  but cannot be opened, the collector retries every 3 seconds rather than
-  moving on; only when no file holds the position does it read the path from
-  its beginning and log that lines may have been lost.
+  but cannot be opened, or the directory's files cannot be inspected, the
+  collector retries every 3 seconds rather than moving on; only when no file
+  holds the position does it read the path from its beginning and log that
+  lines may have been lost.
 - A reconnect or crash can send up to one acknowledgement window per collector
   again: Giganto's `ack_transmission` lines (1024 by default) plus what was in
   flight, or 60 seconds of lines.
