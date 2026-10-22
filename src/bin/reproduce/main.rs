@@ -109,13 +109,16 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", version());
             Ok(())
         }
-        Ok(Invocation::Local(config_filename)) => run_local(logging, &config_filename).await,
+        Ok(Invocation::Local(config_filename)) => {
+            run_local(logging, &config_filename).await;
+            Ok(())
+        }
         Ok(Invocation::Remote(args)) => run_remote(logging, &args),
         Err(reason) => refuse(logging, &reason),
     }
 }
 
-async fn run_local(mut logging: Logging, config_filename: &Path) -> anyhow::Result<()> {
+async fn run_local(mut logging: Logging, config_filename: &Path) {
     let mut config = match config::Config::new(config_filename) {
         Ok(config) => config,
         Err(error) => exit_on_startup_error(logging, &error),
@@ -139,14 +142,13 @@ async fn run_local(mut logging: Logging, config_filename: &Path) -> anyhow::Resu
         exit(1);
     }
     tracing::info!("Data Broker completed");
-    Ok(())
 }
 
 /// Runs remote mode, which takes its configuration from the Central Manager.
 ///
 /// The manager client does not exist yet, so after preparing the state
 /// directory this logs that remote mode is not available and exits 1.
-fn run_remote(logging: Logging, args: &RemoteArgs) -> anyhow::Result<()> {
+fn run_remote(logging: Logging, args: &RemoteArgs) -> ! {
     tracing::info!("Initialized tracing logger");
     let state_dir = match prepare_state_dir(&args.state_dir) {
         Ok(state_dir) => state_dir,
