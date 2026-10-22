@@ -21,7 +21,7 @@ aicers/reproduce#982 as amended by aicers/reproduce#988.
 
 Revisions this RFC was written against: reproduce `b18d68a` (RFC 0001 with
 aicers/reproduce#988), giganto
-`8c513eba` (0.31.0), giganto-client 0.28.0 (`39cbbc50`), review `b98790a2`,
+`8c513eba` (0.31.0), giganto-client 0.28.0 (`9f973a27`), review `b98790a2`,
 review-web `dbfec34c`, review-database `ab7df279`, aice-web-next `1e6be3a9`,
 roxyd `4dc6d260`, bootler `b3568a67`, deploy-core `d125326f`, bootroot
 `f8fc6dff`, piglet `6d33c1a0`, hog `02de5fef`, crusher `a1ca7086`,
@@ -93,7 +93,7 @@ Security Web shows any of it.
 ### 2.2 Giganto
 
 - `OpLog { sensor, service_name, log_level: Info | Warn | Error, contents }`
-  (giganto-client 0.28.0 `src/ingest/log.rs:39-53`, `RawEventKind::OpLog = 12`,
+  (giganto-client 0.28.0 `src/ingest/log.rs:30-44`, `RawEventKind::OpLog = 12`,
   `src/lib.rs:51`).
 - Ingest replaces `sensor` with the connection's certificate-derived
   `service.host.domain` (giganto `src/comm/ingest.rs:1340-1358`, identity
@@ -251,13 +251,24 @@ Not in scope:
   its default merged view (no `--system`/`--user`): the sequence-number check of
   §4.3 needs every entry, and the `adm` ACL covers user journals too. No
   libsystemd is linked; the collector is built on Linux only and REproduce's
-  other targets are unaffected.
-- **[DECISION] Access check.** At start the collector checks that it can read
-  `/var/log/journal/<machine-id>/` (machine ID from `/etc/machine-id`); if it
-  cannot, it logs an error ("cannot read the system journal; is the unit in
-  group adm?") every 10 minutes and keeps retrying. journalctl's stderr is read
-  and logged at warning, at most one line per second (no `--quiet`, so its
-  "not seeing messages" notice is logged).
+  other targets are unaffected. An output line longer than 1 MiB is skipped
+  (neither parsed nor sent, its bytes not held) with a rate-limited warning,
+  because any local user can write large entries to the journal.
+- **[DECISION] Access check.** At start the collector validates the machine
+  ID (from `/etc/machine-id`), lists `/var/log/journal/<machine-id>/`, and
+  opens `system.journal` in it read-only, or, when that file is absent, an
+  existing `system@*.journal` archive. Listing the directory alone is not
+  enough: it is mode 2755, readable by everyone, while `system.journal` is
+  0640 with read access for `adm` through its ACL (systemd
+  `tmpfiles.d/systemd.conf.in:42-53`). With no system journal file yet, the
+  check fails and is retried. If it fails, the collector logs an error ("cannot
+  read the system journal; is the unit in group adm?") at most every 10
+  minutes and keeps retrying; journalctl does not run until it passes.
+  `--output=json` implies journalctl's quiet mode, which suppresses its own
+  "not seeing messages" notice (systemd v255 `src/journal/journalctl.c:606-607`,
+  `:2301`), so this file check supplies the missing-permission diagnostic.
+  journalctl's stderr is still read and logged at warning, at most one line
+  per second.
 - **[DECISION] Process supervision.** journalctl runs only while the
   collector's stream is open. When the Giganto connection or the stream drops,
   the collector stops journalctl; when it reopens, it rewinds to its
@@ -336,18 +347,28 @@ Not in scope:
   because journal timestamps are event times.
 - **[DECISION] Resume.** With a checkpoint it starts after the saved cursor.
 - **[DECISION] Lost interval.** The checkpoint also stores the saved entry's
-  `__SEQNUM_ID`, `__SEQNUM` and `__REALTIME_TIMESTAMP`. The check runs at the
-  start of every catch-up from a cursor (start-up, rewind after a reconnect,
-  journalctl restart): if the first entry read has the same
-  `__SEQNUM_ID` and a `__SEQNUM` greater than the saved one plus one, or a
-  different `__SEQNUM_ID`, the collector logs one warning naming the saved and
-  the first-read times ("journal entries between … and … may be missing:
-  removed before they were sent, or lost by journald"). Sequence numbers count
-  every entry, kept or not, so filtering does not cause false warnings; an
-  unclean shutdown can leave a real gap, which is why the wording says "may".
-  The warning reaches Giganto through the journal like any REproduce line. If
-  the first entry has no `__SEQNUM`, the check is skipped with one
-  informational line.
+  `__SEQNUM_ID`, `__SEQNUM` and `__REALTIME_TIMESTAMP`. The collector compares
+  every parsed entry with its predecessor, in catch-up and in follow, before
+  the source filter. The predecessor of the first entry after a start cursor
+  (start-up with a checkpoint, rewind after a reconnect or a missing close ACK,
+  journalctl restart, and the saved tail after a corrupt checkpoint) is
+  that start position; after that it is the entry parsed before, kept or
+  dropped. A follow process held back by a slow sink keeps running across a
+  rotation or vacuum and continues with the entries that survive (systemd v255
+  `src/journal/journalctl.c:2100`, `:2578`), so a check made only when catch-up
+  starts would miss that gap. If an entry has the same `__SEQNUM_ID` as its
+  predecessor and a `__SEQNUM` greater than the predecessor's plus one plus
+  the number of over-long lines (§4.2) skipped between them, or a different
+  `__SEQNUM_ID`, the collector logs one warning naming the two entries' times
+  ("journal entries between … and … may be missing: removed before they were
+  sent, or lost by journald"). Sequence numbers count every entry, kept or
+  not, so filtering does not cause false warnings; an unclean shutdown can
+  leave a real gap, which is why the wording says "may". The warning reaches
+  Giganto through the journal like any REproduce line. The collector keeps the
+  cursor pair of its last warning in memory and does not warn again for the
+  same pair, so a rewind that replays the gap does not repeat it. A comparison
+  where either side lacks sequence numbers is skipped, with one informational
+  line per continuous run of skipped comparisons.
 - **[DECISION] Corrupt checkpoint.** Following RFC 0001 §4.6's load order, a
   corrupt journal checkpoint (unreadable, unparsable, or `type` other than
   `"journal"`) loads as the journal's current tail: the collector reads the
@@ -631,8 +652,13 @@ src/store/identifier.rs`, `src/admin/ingest.rs:23-35`); this RFC builds on it.
   Display item. Tests cover the helper's refusals (missing either permission,
   built-in roles without access-all).
 - **[DECISION] Permission.** `operational-logs:read` joins the catalog
-  (`src/lib/auth/permission-defs.ts`); System Administrator has it by default
-  and it is removable; saving a role that holds it without
+  (`src/lib/auth/permission-defs.ts`). Existing built-in-role editing remains
+  disabled (`src/lib/auth/role-management.ts:254-256`), so the System
+  Administrator grant made by the auth migration below cannot be removed through
+  the role editor in this RFC. Custom roles may add or remove the
+  permission subject to the access-all invariant; the catalog does not mark it
+  as one of the locked permissions (🔒 in
+  `decisions/account-management.md:83-98`). Saving a role that holds it without
   `customers:access-all` is refused with a message naming the requirement; it is
   not added to the Security-Monitor-equivalent set
   (`src/lib/auth/account-role-policy.ts:53-63`). A new auth migration grants it
@@ -821,15 +847,21 @@ src/store/identifier.rs`, `src/admin/ingest.rs:23-35`); this RFC builds on it.
   1000 entries in one microsecond, a step back closes the stream and sends the
   held entry on a new one after the close ACK, a missing close ACK handled as a
   dropped stream, a repeated ACK acknowledges nothing new); lost-interval
-  detection (gap, new `__SEQNUM_ID`, missing `__SEQNUM`); `journalctl` exit and
-  restart; access-check error.
+  detection (gap at a resume, gap later in the same follow process, new
+  `__SEQNUM_ID`, missing `__SEQNUM`, a replayed gap not warned twice);
+  `journalctl` exit and restart; access-check error (a listable directory with
+  an unreadable `system.journal`, run as a non-root user, and the same file
+  readable).
 - reproduce integration test (Ubuntu 24.04 runner or VM with systemd): REproduce
   as a `clumit-security` unit with `SupplementaryGroups=adm` reads the system
   journal (checks the `adm` ACL on 24.04), starts at the oldest entry of a
   multi-boot journal, follows new entries, resumes after `kill -9`, resumes
   across a reboot without skipping the previous boot's tail, and reports a gap
   after `journalctl --rotate` and `--vacuum-files=1` (also when the vacuum
-  happens during a Giganto outage, reported at reconnect); a `MESSAGE` over 4096
+  happens during a Giganto outage, reported at reconnect, and when it happens
+  while the follow process and the stream stay alive behind back-pressure: one
+  warning when reading resumes if an entry is actually missing, none if
+  journalctl still read every entry); a `MESSAGE` over 4096
   bytes arrives whole; against Giganto 0.31.0 the records are returned by
   `opLogRawEvents` with the expected `sensor` and `serviceName`, alongside a
   `log` collector on the same connection.
