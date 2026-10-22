@@ -2185,7 +2185,7 @@ async fn a_symlink_into_proc_is_refused() -> Result<()> {
     wait_for_log(&logs_capture, &expected).await;
     sleep(SETTLE).await;
     assert!(giganto.streams_of("kind_p").is_empty());
-    assert!(giganto.lines("kind_p").is_empty());
+    assert_eq!(giganto.lines("kind_p"), Vec::<String>::new());
     runtime.shutdown().await;
     Ok(())
 }
