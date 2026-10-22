@@ -22,8 +22,8 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use super::acks::Acks;
+use super::follow::LogPosition;
 use crate::collector::POLLING_INTERVAL;
-use crate::collector::log::LogPosition;
 
 /// The least time between two periodic saves of one collector.
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -759,6 +759,76 @@ mod tests {
         };
         assert!(reason.starts_with("cannot be read"), "{reason}");
         assert_eq!(found, end);
+        Ok(())
+    }
+
+    #[test]
+    fn loads_a_mismatched_or_incomplete_record_as_corrupt() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let logs = tempfile::tempdir()?;
+        let path = logs.path().join("a.log");
+        fs::write(&path, b"one\ntwo\nthree\n")?;
+        let metadata = fs::metadata(&path)?;
+        let end = LogPosition::new(&metadata, metadata.len());
+        // The fallback is the log's actual device, inode and length.
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                (end.dev, end.ino, end.offset),
+                (metadata.dev(), metadata.ino(), 14)
+            );
+        }
+        let missing = logs.path().join("missing.log");
+        fs::create_dir_all(log_dir(state.path()))?;
+        let file = log_file(state.path(), KIND);
+
+        for (record, reason) in [
+            (
+                encode_log("other", &path, &position(3)),
+                "kind does not match",
+            ),
+            (
+                format!(
+                    "{{\"type\":\"log\",\"kind\":\"{KIND}\",\"path\":\"{}\",\"ino\":2,\"offset\":3}}",
+                    path.display()
+                )
+                .into_bytes(),
+                "missing field dev",
+            ),
+        ] {
+            fs::write(&file, &record)?;
+            assert_eq!(
+                load_log(state.path(), KIND, &path),
+                Loaded::Corrupt {
+                    reason: reason.to_string(),
+                    end: Some(end),
+                }
+            );
+            // The record names the missing path, so only the missing log
+            // decides the fallback.
+            let record = String::from_utf8(record)?.replace(
+                &path.display().to_string(),
+                &missing.display().to_string(),
+            );
+            fs::write(&file, record)?;
+            assert_eq!(
+                load_log(state.path(), KIND, &missing),
+                Loaded::Corrupt {
+                    reason: reason.to_string(),
+                    end: None,
+                }
+            );
+        }
+
+        // An unreadable file, here a directory in its place, with a missing
+        // log.
+        fs::remove_file(&file)?;
+        fs::create_dir(&file)?;
+        let Loaded::Corrupt { reason, end } = load_log(state.path(), KIND, &missing) else {
+            panic!("an unreadable file is corrupt");
+        };
+        assert!(reason.starts_with("cannot be read"), "{reason}");
+        assert_eq!(end, None);
         Ok(())
     }
 

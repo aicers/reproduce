@@ -12,24 +12,25 @@
 //! waits for a connection with a higher sequence number and opens its stream
 //! there.
 //!
-//! Each collector turns Giganto's ACKs into an acknowledged position, the
-//! position just past the last line Giganto acknowledged, and saves it in
-//! the state directory as its checkpoint.
+//! Each collector follows its file on a reader thread of its own, turns
+//! Giganto's ACKs into an acknowledged position, the position just past the
+//! last line Giganto acknowledged, saves it in the state directory as its
+//! checkpoint, and resumes reading from it whenever its stream is replaced.
 
 mod acks;
 mod checkpoints;
+mod follow;
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt::Write as _;
-use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use giganto_client::{RawEventKind, frame::SendError};
+use giganto_client::{RawEventKind, frame::SendError, ingest::log::Log};
 use quinn::WriteError;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -39,10 +40,12 @@ use tracing::{debug, info, warn};
 
 use self::acks::Acks;
 use self::checkpoints::{Loaded, Saves};
+use self::follow::{
+    Command, Event, Hook, Initial, LogPosition, Output, Problem, ReaderLink, RefusedDir,
+};
 use crate::collector::POLLING_INTERVAL;
-use crate::collector::log::{LogCollector, LogPosition, PositionReport};
-use crate::config::remote::{CollectorConfig, RemoteConfig};
-use crate::controller::{PipelineError, PipelineSender, run_pipeline_with_sender};
+use crate::config::remote::{CollectorConfig, RESERVED_DIRS, RemoteConfig};
+use crate::controller::log_reconnect_outcome;
 use crate::manager::{ConfigRuntime, TlsFiles};
 use crate::reload::ReloadSignal;
 use crate::sender::{
@@ -77,6 +80,10 @@ pub struct CollectorRuntime {
     /// The lock every collector of a kind holds while writing its
     /// checkpoint file.
     file_locks: HashMap<String, Arc<Mutex<()>>>,
+    /// The directories no collector reads a file under.
+    refused: Arc<[RefusedDir]>,
+    /// Called before the readers' file-system steps, in tests.
+    hook: Hook,
     retry_interval: Duration,
     /// The configuration in force.
     config: Option<RemoteConfig>,
@@ -149,7 +156,8 @@ impl CollectorRuntime {
     /// The Giganto connection is made with `files`, the TLS files of the
     /// manager connection, and subscribes to `reload`. Checkpoints are kept
     /// in `state_dir`; temporary files an interrupted save left there are
-    /// deleted now.
+    /// deleted now. The directories collectors refuse to read under are
+    /// inspected now.
     #[must_use]
     pub fn new(files: TlsFiles, reload: ReloadSignal, state_dir: PathBuf) -> Self {
         checkpoints::remove_temporary_files(&state_dir);
@@ -159,6 +167,8 @@ impl CollectorRuntime {
             reload,
             state_dir,
             file_locks: HashMap::new(),
+            refused: follow::refused_dirs(&RESERVED_DIRS).into(),
+            hook: Hook::default(),
             retry_interval: Duration::from_secs(INTERVAL),
             config: None,
             connection: None,
@@ -291,6 +301,14 @@ impl CollectorRuntime {
             path: config.path.clone(),
             stop: stop_receiver.clone(),
             state_dir: self.state_dir.clone(),
+            reader: follow::Settings {
+                kind: config.kind.clone(),
+                path: config.path.clone(),
+                start: config.start,
+                poll: POLLING_INTERVAL,
+                refused: Arc::clone(&self.refused),
+                hook: self.hook.clone(),
+            },
             acks: Arc::clone(&acks),
             saves: Arc::clone(&saves),
             stop_logged: Arc::clone(&stop_logged),
@@ -534,42 +552,19 @@ async fn run_connection(context: ConnectionContext) {
     }
 }
 
-/// Why a collector is not reading its file.
-#[derive(Debug)]
-enum Problem {
-    Missing,
-    NotRegularFile,
-    Stat(io::Error),
-    Open(String),
-    Read(String),
-    Ended(String),
-}
+/// The collector was stopped.
+struct Stopped;
 
-impl Problem {
-    /// Tells whether two problems are the same state, whatever their
-    /// details.
-    fn same_as(&self, other: &Self) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
-    }
-
-    fn reason(&self) -> String {
-        match self {
-            Self::Missing => "the path does not exist".to_string(),
-            Self::NotRegularFile => "the path is not a regular file".to_string(),
-            Self::Stat(error) => format!("cannot inspect the path: {error}"),
-            Self::Open(error) => format!("cannot open the file: {error}"),
-            Self::Read(error) => format!("cannot read the file: {error}"),
-            Self::Ended(error) => format!("sending ended: {error}"),
-        }
-    }
-}
-
-/// The task of one collector.
+/// The task of one collector: the controller of its reader thread. It alone
+/// applies the positions the reader reaches, sends the reader's lines and
+/// saves starting positions.
 struct CollectorTask {
     kind: String,
     path: PathBuf,
     stop: watch::Receiver<bool>,
     state_dir: PathBuf,
+    /// What the collector's reader threads read.
+    reader: follow::Settings,
     acks: Arc<Acks<LogPosition>>,
     saves: Arc<Saves<LogPosition>>,
     stop_logged: Arc<AtomicBool>,
@@ -578,60 +573,91 @@ struct CollectorTask {
     sender: RemoteSender,
 }
 
+/// When the controller sends the reader its next resume.
+#[derive(Clone, Copy, Debug)]
+enum Due {
+    /// From the acknowledged position, once the stream is ready.
+    Acknowledged,
+    /// From the controller's current position, no earlier than the instant.
+    Current(Instant),
+}
+
+/// What a collector's controller keeps between its steps.
+#[derive(Default)]
+struct Control {
+    /// The reader thread, while it runs.
+    reader: Option<ReaderLink>,
+    /// When to start a reader thread again, while there is none.
+    respawn_at: Option<Instant>,
+    /// Whether the reader's first `Opened` or `Truncated` was taken.
+    started: bool,
+    /// Whether the collector has no usable checkpoint, so its first
+    /// position is a newly selected starting position.
+    needs_start: bool,
+    /// A newly selected starting position whose save has not landed, and
+    /// when the save is tried again.
+    unsaved: Option<(LogPosition, Instant)>,
+    /// The number of the last resume sent.
+    resume: u64,
+    due: Option<Due>,
+    /// The version of the acknowledged position last sent to the reader.
+    sent_version: Option<u64>,
+    /// `None` while reading.
+    problem: Option<Problem>,
+    stamps: Stamps,
+}
+
+impl Control {
+    /// The next instant the controller acts at without a result; `open`
+    /// tells whether the stream is open, so a due resume can be sent.
+    fn deadline(&self, open: bool) -> Instant {
+        let mut deadline = Instant::now() + POLLING_INTERVAL;
+        for at in [
+            self.unsaved.map(|(_, at)| at),
+            match self.due {
+                Some(Due::Current(at)) if open && self.unsaved.is_none() => Some(at),
+                _ => None,
+            },
+            self.respawn_at.filter(|_| self.reader.is_none()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            deadline = deadline.min(at);
+        }
+        deadline
+    }
+}
+
+/// Stamps records with strictly increasing timestamps.
+#[derive(Debug, Default)]
+struct Stamps {
+    previous: Option<i64>,
+}
+
+impl Stamps {
+    /// Returns `max(now, previous + 1)`, in nanoseconds.
+    fn next(&mut self, now: i64) -> i64 {
+        let stamp = self
+            .previous
+            .map_or(now, |previous| now.max(previous.saturating_add(1)));
+        self.previous = Some(stamp);
+        stamp
+    }
+}
+
+/// Returns the wall clock in nanoseconds.
+fn now_nanos() -> i64 {
+    i64::try_from(jiff::Timestamp::now().as_nanosecond()).unwrap_or(i64::MAX)
+}
+
 impl CollectorTask {
     async fn run(mut self) {
-        let mut needs_start = self.load_checkpoint().await;
-        // `None` while reading, or before the first attempt.
-        let mut problem: Option<Problem> = None;
-        loop {
-            if *self.stop.borrow() {
-                break;
-            }
-            let found = match self.open_file() {
-                Ok(mut collector) => {
-                    info!("Reading {} for {}", self.path.display(), self.kind);
-                    problem = None;
-                    if std::mem::take(&mut needs_start) && !self.save_start().await {
-                        break;
-                    }
-                    if !self.sender.is_open() && self.sender.open().await.is_err() {
-                        break;
-                    }
-                    let result = run_pipeline_with_sender(
-                        &mut self.sender,
-                        &mut collector,
-                        self.stop.clone(),
-                        &mut |_| {},
-                    )
-                    .await;
-                    drop(collector);
-                    if *self.stop.borrow() {
-                        break;
-                    }
-                    match result {
-                        Err(PipelineError::Collect(error)) => Problem::Read(format!("{error:#}")),
-                        Err(error) => Problem::Ended(chain(&error)),
-                        Ok(()) => Problem::Ended("the reader ended".to_string()),
-                    }
-                }
-                Err(found) => found,
-            };
-            if problem
-                .as_ref()
-                .is_none_or(|problem| !problem.same_as(&found))
-            {
-                warn!(
-                    "Collector {} for {}: {}; retrying every {POLLING_INTERVAL:?}",
-                    self.kind,
-                    self.path.display(),
-                    found.reason()
-                );
-            }
-            problem = Some(found);
-            if wait_or_stop(&mut self.stop, POLLING_INTERVAL).await {
-                break;
-            }
-        }
+        let mut control = Control::default();
+        let _ = self.control(&mut control).await;
+        // Drops the reader's channels without waiting for it: a reader that
+        // returns later reaches nothing.
+        drop(control);
 
         let close = self.sender.close().await;
         if !self.stop_logged.swap(true, Ordering::SeqCst) {
@@ -649,21 +675,164 @@ impl CollectorTask {
         let _ = drain.await;
     }
 
-    /// Loads the checkpoint into the acknowledged position. Returns whether
-    /// the collector has no usable checkpoint, so its first open of the file
-    /// sets the starting position.
-    async fn load_checkpoint(&self) -> bool {
-        let file = checkpoints::log_file(&self.state_dir, &self.kind);
-        let loaded = {
-            let (state_dir, kind, path) =
-                (self.state_dir.clone(), self.kind.clone(), self.path.clone());
-            tokio::task::spawn_blocking(move || checkpoints::load_log(&state_dir, &kind, &path))
-                .await
-                .unwrap_or_else(|error| Loaded::Corrupt {
-                    reason: format!("cannot be read ({error})"),
-                    end: None,
-                })
+    /// Runs the collector until it is stopped.
+    async fn control(&mut self, control: &mut Control) -> Result<(), Stopped> {
+        loop {
+            if *self.stop.borrow() {
+                return Err(Stopped);
+            }
+            if control.reader.is_none() && control.respawn_at.is_none_or(|at| Instant::now() >= at)
+            {
+                self.spawn_reader(control);
+            }
+            if let Some((position, at)) = control.unsaved
+                && Instant::now() >= at
+            {
+                control.unsaved = if self.saves.save(&position).await.saved() {
+                    None
+                } else {
+                    Some((position, Instant::now() + POLLING_INTERVAL))
+                };
+            }
+            if control.started && control.unsaved.is_none() && !self.sender.is_open() {
+                self.open_stream(control).await?;
+            }
+            self.send_resume(control);
+
+            let deadline = control.deadline(self.sender.is_open());
+            // A stream that fails while the file is idle is replaced at once
+            // if lines on it await their ACK, so they are sent again without
+            // waiting for a new line; otherwise the next write finds it.
+            let watch = self.unacknowledged();
+            let output = tokio::select! {
+                biased;
+                () = stopped(&mut self.stop) => return Err(Stopped),
+                error = self.sender.failed(), if watch => {
+                    self.sender.note_failure(&error);
+                    self.recover(control).await?;
+                    continue;
+                }
+                output = next_result(&mut control.reader) => output,
+                () = tokio::time::sleep_until(deadline) => {
+                    self.send_acknowledged(control, false);
+                    continue;
+                }
+            };
+            match output {
+                Some(output) => self.take(control, output).await?,
+                None => self.reader_ended(control),
+            }
+            self.send_acknowledged(control, false);
+        }
+    }
+
+    /// Tells whether lines written on the stream await their ACK: the
+    /// acknowledged position lags the position written or consumed to.
+    fn unacknowledged(&self) -> bool {
+        self.acks
+            .current()
+            .is_some_and(|current| self.acks.acknowledged() != Some(current))
+    }
+
+    /// Starts a reader thread; until the collector has a starting position,
+    /// the reader loads the checkpoint and chooses it.
+    fn spawn_reader(&mut self, control: &mut Control) {
+        let initial = if control.started {
+            Initial::Wait
+        } else {
+            Initial::Load(self.state_dir.clone())
         };
+        match follow::spawn(self.reader.clone(), initial, control.resume) {
+            Ok(reader) => {
+                control.reader = Some(reader);
+                control.respawn_at = None;
+                control.sent_version = None;
+            }
+            Err(error) => {
+                self.report(control, Problem::Spawn(error.to_string()));
+                control.respawn_at = Some(Instant::now() + POLLING_INTERVAL);
+            }
+        }
+    }
+
+    /// The reader thread ended while the collector runs: a new one is
+    /// started after [`POLLING_INTERVAL`] and resumed.
+    fn reader_ended(&mut self, control: &mut Control) {
+        control.reader = None;
+        let at = Instant::now() + POLLING_INTERVAL;
+        control.respawn_at = Some(at);
+        if control.due.is_none() {
+            control.due = Some(Due::Current(at));
+        }
+        self.report(control, Problem::Read("the reader ended".to_string()));
+    }
+
+    /// Logs a problem when the collector's state changes.
+    fn report(&self, control: &mut Control, problem: Problem) {
+        if control
+            .problem
+            .as_ref()
+            .is_none_or(|current| !current.same_as(&problem))
+        {
+            warn!(
+                "Collector {} for {}: {}; retrying every {POLLING_INTERVAL:?}",
+                self.kind,
+                self.path.display(),
+                problem.reason()
+            );
+        }
+        control.problem = Some(problem);
+    }
+
+    /// Applies a result of the reader.
+    async fn take(&mut self, control: &mut Control, output: Output) -> Result<(), Stopped> {
+        if output.resume < control.resume {
+            debug!("Dropped a late result of the reader of {}", self.kind);
+            return Ok(());
+        }
+        match output.event {
+            Event::Loaded(loaded) => control.needs_start = self.loaded(loaded),
+            Event::Opened(position) => {
+                control.problem = None;
+                if !control.started {
+                    control.started = true;
+                    if control.needs_start {
+                        self.start_at(control, position).await;
+                        return Ok(());
+                    }
+                }
+                self.acks.opened(position);
+            }
+            Event::Batch { lines, end } => self.write(control, lines, end).await?,
+            Event::Position(position) => self.acks.consumed(position),
+            Event::Truncated(position) => {
+                info!(
+                    "{} for {} was truncated; reading it again from its beginning",
+                    self.path.display(),
+                    self.kind
+                );
+                control.problem = None;
+                control.started = true;
+                self.start_at(control, position).await;
+                // The resume at the new epoch's start is sent once its save
+                // lands.
+                control.due = Some(Due::Acknowledged);
+            }
+            Event::Problem(problem) => {
+                if matches!(problem, Problem::Read(_)) && control.due.is_none() {
+                    control.due = Some(Due::Current(Instant::now() + POLLING_INTERVAL));
+                }
+                self.report(control, problem);
+            }
+        }
+        Ok(())
+    }
+
+    /// Logs the loaded checkpoint and sets the acknowledged position to it.
+    /// Returns whether the collector has no usable checkpoint, so its first
+    /// position is a newly selected starting position.
+    fn loaded(&self, loaded: Loaded) -> bool {
+        let file = checkpoints::log_file(&self.state_dir, &self.kind);
         let (position, needs_start) = match loaded {
             Loaded::Found(position) => (Some(position), false),
             Loaded::Missing => (None, true),
@@ -701,46 +870,128 @@ impl CollectorTask {
         needs_start
     }
 
-    /// Sets the reader's starting position as the acknowledged position and
-    /// saves it durably, retrying every [`POLLING_INTERVAL`] until it lands.
-    /// Returns `false` if the collector is stopped first.
-    async fn save_start(&mut self) -> bool {
-        let Some(start) = self.acks.current() else {
-            return true;
-        };
-        let mut outcome = checkpoints::start_at(&self.acks, &self.saves, start).await;
-        while !outcome.saved() {
-            if wait_or_stop(&mut self.stop, POLLING_INTERVAL).await {
-                return false;
-            }
-            outcome = self.saves.save(&start).await;
-        }
-        true
+    /// Sets a newly selected starting position as the acknowledged position
+    /// and saves it; a save that does not land is retried every
+    /// [`POLLING_INTERVAL`], and nothing is sent until it lands.
+    async fn start_at(&mut self, control: &mut Control, position: LogPosition) {
+        let outcome = checkpoints::start_at(&self.acks, &self.saves, position).await;
+        self.acks.opened(position);
+        control.unsaved = (!outcome.saved()).then(|| (position, Instant::now() + POLLING_INTERVAL));
     }
 
-    /// Opens the file if the path, following symlinks, is a regular file.
-    fn open_file(&self) -> Result<LogCollector, Problem> {
-        match std::fs::metadata(&self.path) {
-            Ok(metadata) if metadata.is_file() => {}
-            Ok(_) => return Err(Problem::NotRegularFile),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(Problem::Missing);
-            }
-            Err(error) => return Err(Problem::Stat(error)),
+    /// Opens the collector's first stream and sends its record header.
+    async fn open_stream(&mut self, control: &mut Control) -> Result<(), Stopped> {
+        let outcome = self.sender.open().await.map_err(|_| Stopped)?;
+        log_reconnect_outcome(outcome);
+        if self.sender.send_header().await.is_err() {
+            self.recover(control).await?;
         }
-        LogCollector::new(
-            &self.path,
-            self.kind.clone(),
-            0,
-            0,
-            true,
-            false,
-            self.stop.clone(),
-        )
-        .and_then(|collector| {
-            collector.with_position_report(Arc::clone(&self.acks) as Arc<dyn PositionReport>)
-        })
-        .map_err(|error| Problem::Open(format!("{error:#}")))
+        control.due = Some(Due::Acknowledged);
+        Ok(())
+    }
+
+    /// Replaces a failed stream: the batch in hand is not sent again, and
+    /// the reader resumes from the acknowledged position.
+    async fn recover(&mut self, control: &mut Control) -> Result<(), Stopped> {
+        loop {
+            let outcome = self.sender.reconnect().await.map_err(|_| Stopped)?;
+            log_reconnect_outcome(outcome);
+            self.acks.dropped();
+            if self.sender.send_header().await.is_ok() {
+                break;
+            }
+        }
+        control.due = Some(Due::Acknowledged);
+        Ok(())
+    }
+
+    /// Sends the resume that is due, once the stream is ready and no
+    /// starting position is unsaved.
+    fn send_resume(&mut self, control: &mut Control) {
+        if control.unsaved.is_some() || !self.sender.is_open() || control.reader.is_none() {
+            return;
+        }
+        let position = match control.due {
+            Some(Due::Acknowledged) => self.acks.acknowledged(),
+            Some(Due::Current(at)) if Instant::now() >= at => {
+                self.acks.current().or_else(|| self.acks.acknowledged())
+            }
+            _ => return,
+        };
+        control.due = None;
+        let Some(position) = position else {
+            return;
+        };
+        control.resume += 1;
+        if let Some(reader) = &control.reader {
+            reader.send(Command::Resume {
+                number: control.resume,
+                position,
+            });
+        }
+        self.send_acknowledged(control, true);
+    }
+
+    /// Sends the reader the acknowledged position if it changed since it
+    /// was last sent, or if `always`.
+    fn send_acknowledged(&self, control: &mut Control, always: bool) {
+        let Some(reader) = &control.reader else {
+            return;
+        };
+        let (version, position) = self.acks.snapshot();
+        if !always && control.sent_version == Some(version) {
+            return;
+        }
+        control.sent_version = Some(version);
+        if let Some(position) = position {
+            reader.send(Command::Acknowledged(position));
+        }
+    }
+
+    /// Writes a batch of lines ending just before `end` on the stream.
+    async fn write(
+        &mut self,
+        control: &mut Control,
+        lines: Vec<Vec<u8>>,
+        end: LogPosition,
+    ) -> Result<(), Stopped> {
+        if *self.stop.borrow() {
+            return Err(Stopped);
+        }
+        // A batch of a resume sent on this stream is never taken before the
+        // stream is ready.
+        if control.unsaved.is_some() || control.due.is_some() || !self.sender.is_open() {
+            return Ok(());
+        }
+        let events = lines
+            .into_iter()
+            .filter_map(|line| {
+                let record = bincode::serialize(&Log {
+                    kind: self.kind.clone(),
+                    log: line,
+                })
+                .ok()?;
+                Some((control.stamps.next(now_nanos()), record))
+            })
+            .collect::<Vec<_>>();
+        if events.is_empty() {
+            self.acks.consumed(end);
+            return Ok(());
+        }
+        self.acks.returned(end);
+        if self.sender.write(&events).await.is_err() {
+            self.recover(control).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Resolves to the reader's next result, or `None` once it has ended; never
+/// resolves while there is no reader.
+async fn next_result(reader: &mut Option<ReaderLink>) -> Option<Output> {
+    match reader {
+        Some(reader) => reader.results.recv().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -759,24 +1010,6 @@ fn stop_outcome(close: &Result<CloseAck, SenderError>) -> String {
             )
         }
         Err(error) => format!("without a close marker: {}", chain(error)),
-    }
-}
-
-impl PositionReport for Acks<LogPosition> {
-    fn opened(&self, position: LogPosition) {
-        Acks::opened(self, position);
-    }
-
-    fn consumed(&self, position: LogPosition) {
-        Acks::consumed(self, position);
-    }
-
-    fn returned(&self, position: LogPosition) {
-        Acks::returned(self, position);
-    }
-
-    fn dropped(&self) {
-        Acks::dropped(self);
     }
 }
 
@@ -922,6 +1155,18 @@ impl RemoteSender {
         self.link.stream.is_some()
     }
 
+    /// Resolves when the open stream fails while nothing is written to it;
+    /// never while no stream is open.
+    fn failed(&self) -> impl Future<Output = SendError> + 'static {
+        let failed = self.link.stream.as_ref().map(GigantoStream::failed);
+        async move {
+            match failed {
+                Some(failed) => failed.await,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
     /// Waits for the connection and opens the stream.
     ///
     /// # Errors
@@ -1000,11 +1245,11 @@ impl RemoteSender {
     }
 }
 
-#[async_trait]
-impl PipelineSender for RemoteSender {
-    async fn send_header(&mut self, protocol: RawEventKind) -> Result<(), SenderError> {
+impl RemoteSender {
+    /// Sends the `Log` record header on the stream.
+    async fn send_header(&mut self) -> Result<(), SenderError> {
         let result = match self.stream() {
-            Ok(stream) => stream.send_header(protocol).await,
+            Ok(stream) => stream.send_header(RawEventKind::Log).await,
             Err(error) => Err(SenderError::Send(error)),
         };
         match &result {
@@ -1014,7 +1259,8 @@ impl PipelineSender for RemoteSender {
         result
     }
 
-    async fn send_batch(&mut self, events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
+    /// Writes the batch the reader returned, queueing it for its ACK.
+    async fn write(&mut self, events: &[(i64, Vec<u8>)]) -> Result<(), SendError> {
         // Queued before the write, so an ACK arriving as soon as it
         // completes finds the entry.
         let entry = events
@@ -1039,6 +1285,11 @@ impl PipelineSender for RemoteSender {
         result
     }
 
+    /// Replaces a failed stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SenderError::Cancelled`] once the collector is stopped.
     async fn reconnect(&mut self) -> Result<ReconnectOutcome, SenderError> {
         // A stream that fails again right after every recovery is recovered
         // once per retry interval, not at network round-trip pace.
@@ -1067,6 +1318,7 @@ fn chain(error: &dyn StdError) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::path::Path;
 
     use super::*;
@@ -1217,5 +1469,117 @@ mod tests {
         let handle = handle(tokio::spawn(async {}));
         assert!(handle.log_stopped("without a close marker"));
         assert!(!handle.log_stopped("without a close marker"));
+    }
+
+    #[test]
+    fn stamps_strictly_increase() {
+        let mut stamps = Stamps::default();
+        // A clock that stands still.
+        assert_eq!(stamps.next(100), 100);
+        assert_eq!(stamps.next(100), 101);
+        assert_eq!(stamps.next(100), 102);
+        // A clock that steps back.
+        assert_eq!(stamps.next(50), 103);
+        // A clock that moves on.
+        assert_eq!(stamps.next(200), 200);
+        // A resume keeps the stamps of the collector: a line read again
+        // gets a new, later timestamp.
+        let before_resume = stamps.next(200);
+        assert_eq!(before_resume, 201);
+        assert!(stamps.next(150) > before_resume);
+    }
+
+    #[test]
+    fn a_stalled_reader_holds_up_nothing() -> anyhow::Result<()> {
+        use std::sync::mpsc as std_mpsc;
+
+        use follow::Step;
+
+        use crate::config::remote::{CollectorConfig, CollectorType, StartPosition};
+
+        let state = tempfile::tempdir()?;
+        let logs = tempfile::tempdir()?;
+        let stalled = logs.path().join("stalled.log");
+        std::fs::write(&stalled, b"s1\n")?;
+        let other = logs.path().join("other.log");
+        std::fs::write(&other, b"o1\n")?;
+        // Nothing answers there.
+        let silent = std::net::UdpSocket::bind("127.0.0.1:0")?;
+        let config = |kind: &str, path: &Path| RemoteConfig {
+            giganto_ingest_srv_addr: silent.local_addr().expect("bound"),
+            giganto_name: "localhost".to_string(),
+            collectors: vec![CollectorConfig {
+                collector_type: CollectorType::Log,
+                kind: kind.to_string(),
+                path: path.to_path_buf(),
+                start: StartPosition::Beginning,
+            }],
+        };
+
+        // The reader of `stalled` blocks in its first open until released.
+        let (release, released) = std_mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let (entered, entering) = std_mpsc::channel::<()>();
+        let entered = Mutex::new(entered);
+        let target = stalled.clone();
+        let hook = Hook {
+            before: Some(Arc::new(move |step, path: &Path| {
+                if step == Step::Open && path == target {
+                    let _ = entered.lock().expect("lock").send(());
+                    let _ = released.lock().expect("lock").recv();
+                }
+            })),
+        };
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
+        let files = TlsFiles {
+            cert: state.path().join("cert.pem"),
+            key: state.path().join("key.pem"),
+            ca_certs: Vec::new(),
+        };
+        let mut collectors = CollectorRuntime::new(files, ReloadSignal::new(), state.path().into())
+            .with_retry_interval(Duration::from_millis(200));
+        collectors.hook = hook;
+        runtime.block_on(async {
+            collectors.apply(config("kind_s", &stalled)).await;
+            tokio::task::spawn_blocking(move || entering.recv_timeout(Duration::from_secs(10)))
+                .await
+                .expect("joined")
+                .expect("the reader stalls in its open");
+
+            // Removing the stalled collector and starting another returns at
+            // once.
+            let started = Instant::now();
+            collectors.apply(config("kind_o", &other)).await;
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "{:?}",
+                started.elapsed()
+            );
+
+            let started = Instant::now();
+            collectors.shutdown().await;
+            assert!(
+                started.elapsed() < CHANNEL_CLOSE_TIMEOUT + Duration::from_secs(2),
+                "{:?}",
+                started.elapsed()
+            );
+        });
+        drop(collectors);
+        let started = std::time::Instant::now();
+        drop(runtime);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+
+        // The released open's late result saves nothing.
+        release.send(())?;
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(!checkpoints::log_file(state.path(), "kind_s").exists());
+        Ok(())
     }
 }

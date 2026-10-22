@@ -21,8 +21,8 @@ startup or transfer problem.
 
 ## Input Modes
 
-REproduce chooses the input mode from the top-level `input` value in the TOML
-configuration file.
+Started with a TOML configuration file, REproduce chooses the input mode from
+the file's top-level `input` value.
 
 - `input = "elastic"`: Elastic mode.
   Queries Elasticsearch and sends the retrieved Sysmon data.
@@ -30,6 +30,10 @@ configuration file.
   Processes files under the directory.
 - Any other path: File mode.
   Processes the value as a single input file.
+
+Started with certificate flags and a Central Manager address instead, REproduce
+runs in remote mode: it takes its configuration from the Central Manager and
+follows the log files it names. See [Remote Mode](remote-mode.md).
 
 ## Security Assumption
 
@@ -49,6 +53,8 @@ running REproduce.
   input mode, polling, checkpoints, logging, and reports.
 - [Operations](operations.md): Run REproduce, check lifecycle logs, understand
   polling behavior, and handle reload or shutdown.
+- [Remote Mode](remote-mode.md): Run REproduce with its configuration from the
+  Central Manager, following log files as they grow and rotate.
 - [Troubleshooting](troubleshooting.md): Diagnose startup, configuration,
   connection, and input problems.
 
@@ -65,3 +71,6 @@ reproduce /path/to/config.toml
 After startup, check the logs for `Data Broker started` and
 `Connected to data store ingest server at ...`. If startup or transfer fails,
 use [Troubleshooting](troubleshooting.md).
+
+To run REproduce in remote mode instead, without a configuration file, see
+[Remote Mode](remote-mode.md#start-command).

@@ -13,7 +13,7 @@ use giganto_client::{
     frame::{RecvError, SendError, send_raw},
     ingest::{receive_ack_timestamp, send_record_header},
 };
-use quinn::{Connection, RecvStream, SendStream, VarInt, WriteError};
+use quinn::{Connection, RecvStream, SendStream, StoppedError, VarInt, WriteError};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -367,6 +367,27 @@ impl GigantoStream {
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open.is_some()
+    }
+
+    /// Returns a future that resolves when the open stream fails while
+    /// nothing is written to it: the peer stops it, or its connection is
+    /// lost. It never resolves when no stream is open.
+    ///
+    /// The future does not borrow the stream, so a caller can wait on it
+    /// beside other work and write or recover once it resolves.
+    pub fn failed(&self) -> impl Future<Output = SendError> + Send + 'static {
+        let stopped = self.open.as_ref().map(|open| open.send.stopped());
+        async move {
+            let Some(stopped) = stopped else {
+                return std::future::pending().await;
+            };
+            SendError::WriteError(match stopped.await {
+                Ok(Some(code)) => WriteError::Stopped(code),
+                Ok(None) => WriteError::ClosedStream,
+                Err(StoppedError::ConnectionLost(error)) => WriteError::ConnectionLost(error),
+                Err(StoppedError::ZeroRttRejected) => WriteError::ZeroRttRejected,
+            })
+        }
     }
 
     fn live_stream(&mut self) -> Result<&mut OpenStream, SendError> {

@@ -19,6 +19,23 @@ reproduce <CONFIG_PATH>
 
 - `<CONFIG_PATH>`: Path to the TOML configuration file.
 
+To start REproduce in remote mode, which takes its configuration from the
+Central Manager and follows the log files it names, provide the TLS files, a
+state directory and the Central Manager:
+
+```sh
+reproduce --cert <CERT_PATH> --key <KEY_PATH> --ca-certs <CA_PATHS> \
+  --state-dir <DIR> <server_name>@<ip>:<port>
+```
+
+- `--ca-certs`: Comma-separated CA certificate files.
+- `--state-dir`: Directory for checkpoints, created when missing.
+- `<server_name>@<ip>:<port>`: The Central Manager's TLS server name and
+  address.
+
+See the [Remote Mode](docs/en/remote-mode.md) page of the manual for the
+remote configuration, how files are followed, and delivery.
+
 To support pcap parser for netflow v9, templates would be read from the
 environment variable `NETFLOW_TEMPLATES_PATH`.
 

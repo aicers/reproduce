@@ -5,8 +5,8 @@
 //! version requirement, verifies client certificates against an rcgen CA,
 //! and reads every stream's record header and batches. It sends a data ACK
 //! for every record and the close ACK for every close marker, unless told to
-//! withhold the data ACKs or the close ACK, and can stop a stream or close a
-//! connection.
+//! withhold the data ACKs or the close ACK, or to hold data ACKs back and send
+//! them later, and can stop a stream or close a connection.
 
 mod support;
 
@@ -72,6 +72,8 @@ struct StreamRecord {
     accepted_at: Instant,
     /// `(kind, line)` of every `Log` record received.
     records: Vec<(String, String)>,
+    /// The timestamp of every `Log` record received.
+    timestamps: Vec<i64>,
     close_marker: bool,
     /// How the stream ended, if it has.
     ended: Option<String>,
@@ -103,6 +105,18 @@ struct GigantoState {
     streams: Mutex<Vec<StreamRecord>>,
     /// How many new streams to stop as soon as their header arrives.
     stop_next: Mutex<usize>,
+    /// The data ACKs held back to be sent later.
+    hold: tokio::sync::Mutex<Hold>,
+    /// The send side of every stream, by its index, until it ends.
+    senders: Mutex<Vec<Option<Arc<tokio::sync::Mutex<SendStream>>>>>,
+}
+
+/// Data ACKs held back, sent later in order on their streams.
+#[derive(Default)]
+struct Hold {
+    kinds: HashSet<String>,
+    /// `(stream index, timestamp)`, oldest first.
+    acks: Vec<(usize, i64)>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -132,6 +146,8 @@ impl Giganto {
             connections: Mutex::new(Vec::new()),
             streams: Mutex::new(Vec::new()),
             stop_next: Mutex::new(0),
+            hold: tokio::sync::Mutex::new(Hold::default()),
+            senders: Mutex::new(Vec::new()),
         });
         let task = tokio::spawn(accept(endpoint.clone(), state.clone()));
         Ok(Self {
@@ -160,6 +176,25 @@ impl Giganto {
     /// Withholds the data ACKs of `kinds` from now on, and only theirs.
     fn withhold_acks(&self, kinds: &[&str]) {
         *lock(&self.state.withhold_acks) = kinds.iter().map(|kind| (*kind).to_string()).collect();
+    }
+
+    /// Holds back the data ACKs of `kinds` from now on, to be sent by
+    /// [`release_acks`](Self::release_acks).
+    async fn hold_acks(&self, kinds: &[&str]) {
+        self.state.hold.lock().await.kinds = kinds.iter().map(|kind| (*kind).to_string()).collect();
+    }
+
+    /// Sends every held data ACK, in order, on the stream it is for, and
+    /// holds nothing back any more.
+    async fn release_acks(&self) {
+        let mut hold = self.state.hold.lock().await;
+        hold.kinds.clear();
+        for (index, timestamp) in std::mem::take(&mut hold.acks) {
+            let send = lock(&self.state.senders)[index].clone();
+            if let Some(send) = send {
+                let _ = send.lock().await.write_all(&timestamp.to_be_bytes()).await;
+            }
+        }
     }
 
     fn stop_next_streams(&self, count: usize) {
@@ -258,7 +293,7 @@ async fn serve(incoming: quinn::Incoming, state: Arc<GigantoState>) {
 async fn read_stream(
     state: Arc<GigantoState>,
     connection: usize,
-    mut send: SendStream,
+    send: SendStream,
     mut recv: RecvStream,
 ) {
     let mut header = [0_u8; 4];
@@ -266,17 +301,21 @@ async fn read_stream(
         return;
     }
     let stop = CancellationToken::new();
+    let send = Arc::new(tokio::sync::Mutex::new(send));
     let index = {
         let mut streams = lock(&state.streams);
+        let mut senders = lock(&state.senders);
         streams.push(StreamRecord {
             connection,
             header: u32::from_le_bytes(header),
             accepted_at: Instant::now(),
             records: Vec::new(),
+            timestamps: Vec::new(),
             close_marker: false,
             ended: None,
             stop: stop.clone(),
         });
+        senders.push(Some(send.clone()));
         streams.len() - 1
     };
     {
@@ -315,17 +354,33 @@ async fn read_stream(
                     .await;
             } else if let Ok(log) = bincode::deserialize::<Log>(&data) {
                 let withheld = lock(&state.withhold_acks).contains(&log.kind);
-                lock(&state.streams)[index]
-                    .records
-                    .push((log.kind, String::from_utf8_lossy(&log.log).into_owned()));
+                {
+                    let mut streams = lock(&state.streams);
+                    streams[index].timestamps.push(timestamp);
+                    streams[index].records.push((
+                        log.kind.clone(),
+                        String::from_utf8_lossy(&log.log).into_owned(),
+                    ));
+                }
                 if withheld {
                     continue;
                 }
+                // Held under the lock, so a release sends every older ACK
+                // first.
+                let mut hold = state.hold.lock().await;
+                if hold.kinds.contains(&log.kind) {
+                    hold.acks.push((index, timestamp));
+                    continue;
+                }
+                let _ = send.lock().await.write_all(&timestamp.to_be_bytes()).await;
+                continue;
             }
-            let _ = send.write_all(&timestamp.to_be_bytes()).await;
+            let _ = send.lock().await.write_all(&timestamp.to_be_bytes()).await;
         }
     };
     lock(&state.streams)[index].ended = Some(end);
+    // Dropping the send side finishes the stream.
+    lock(&state.senders)[index] = None;
 }
 
 /// The log files of a test.
@@ -373,6 +428,14 @@ fn append(path: &Path, line: &str) -> Result<()> {
 }
 
 fn config(addr: SocketAddr, collectors: &[(&str, &Path)]) -> RemoteConfig {
+    config_start(addr, collectors, StartPosition::Beginning)
+}
+
+fn config_start(
+    addr: SocketAddr,
+    collectors: &[(&str, &Path)],
+    start: StartPosition,
+) -> RemoteConfig {
     RemoteConfig {
         giganto_ingest_srv_addr: addr,
         giganto_name: SERVER_NAME.to_string(),
@@ -382,7 +445,7 @@ fn config(addr: SocketAddr, collectors: &[(&str, &Path)]) -> RemoteConfig {
                 collector_type: CollectorType::Log,
                 kind: (*kind).to_string(),
                 path: path.to_path_buf(),
-                start: StartPosition::End,
+                start,
             })
             .collect(),
     }
@@ -1307,6 +1370,9 @@ async fn a_replaced_stream_keeps_the_acknowledged_position() -> Result<()> {
             .is_some_and(|stream| stream.lines().contains(&"a3".to_string()))
     })
     .await;
+    // The unacknowledged a2 is sent again on the new stream, from the
+    // acknowledged position.
+    assert_eq!(giganto.streams_of("kind_a")[1].lines(), ["a2", "a3"]);
 
     // The position stays put while the reader idles.
     sleep(SETTLE).await;
@@ -1389,8 +1455,11 @@ async fn a_corrupt_checkpoint_is_replaced_by_the_starting_position() -> Result<(
     let mut runtime = runtime(&files.files, &reload, &state);
 
     runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
-    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
-    assert_eq!(checkpoint(&state, "kind_a"), Some(record("kind_a", &a, 0)));
+    // The starting position is the end of the file.
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    append(&a, "a2")?;
+    wait_for_lines(&giganto, "kind_a", &["a2"]).await;
+    assert_eq!(giganto.lines("kind_a"), ["a2"], "a1 is not sent");
     let text = logs_capture.text();
     let expected = format!(
         "Checkpoint {} is unusable: not valid JSON; using the end of {} instead",
@@ -1498,11 +1567,13 @@ giganto_name = "{SERVER_NAME}"
 type = "log"
 kind = "kind_a"
 path = "{}"
+start = "beginning"
 
 [[collectors]]
 type = "log"
 kind = "kind_b"
 path = "{}"
+start = "beginning"
 "#,
         giganto.addr,
         a.display(),
@@ -1577,5 +1648,589 @@ path = "{}"
             output()
         );
     }
+    Ok(())
+}
+
+/// Copies `path` aside and truncates it, as a copy-truncate rotation does,
+/// then writes `lines` to it.
+fn copy_truncate(path: &Path, lines: &[&str]) -> Result<()> {
+    let mut copy = path.as_os_str().to_owned();
+    copy.push(".1");
+    std::fs::copy(path, &copy)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_len(0)?;
+    for line in lines {
+        append(path, line)?;
+    }
+    Ok(())
+}
+
+/// The lines `kind` received on its streams from the `from`th on.
+fn lines_from(giganto: &Giganto, kind: &str, from: usize) -> Vec<String> {
+    giganto
+        .streams_of(kind)
+        .iter()
+        .skip(from)
+        .flat_map(StreamRecord::lines)
+        .collect()
+}
+
+/// Waits until the log holds `text`.
+async fn wait_for_log(logs: &Logs, text: &str) {
+    wait_for(&format!("the log holds {text:?}"), WAIT, || {
+        logs.text().contains(text)
+    })
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn start_end_skips_existing_lines_and_a_crash_sends_the_unacknowledged_ones_again()
+-> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1", "a2"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+
+    runtime
+        .apply(config_start(
+            giganto.addr,
+            &[("kind_a", &a)],
+            StartPosition::End,
+        ))
+        .await;
+    let start = record("kind_a", &a, length(&a));
+    wait_for_checkpoint(&state, "kind_a", &start, WAIT).await;
+    giganto.withhold_acks(&["kind_a"]);
+    append(&a, "a3")?;
+    append(&a, "a4")?;
+    wait_for_lines(&giganto, "kind_a", &["a3", "a4"]).await;
+    assert_eq!(giganto.lines("kind_a"), ["a3", "a4"]);
+    // A crash: the runtime is dropped without a shutdown.
+    drop(runtime);
+    sleep(SETTLE).await;
+    assert_eq!(checkpoint(&state, "kind_a"), Some(start));
+
+    giganto.withhold_acks(&[]);
+    let streams = giganto.streams_of("kind_a").len();
+    let mut runtime = self::runtime(&files.files, &reload, &state);
+    runtime
+        .apply(config_start(
+            giganto.addr,
+            &[("kind_a", &a)],
+            StartPosition::End,
+        ))
+        .await;
+    wait_for("the new stream receives a3 and a4", WAIT, || {
+        lines_from(&giganto, "kind_a", streams) == ["a3", "a4"]
+    })
+    .await;
+    sleep(SETTLE).await;
+    assert_eq!(lines_from(&giganto, "kind_a", streams), ["a3", "a4"]);
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_restart_after_a_clean_stop_sends_exactly_the_new_lines() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1", "a2"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1", "a2"]).await;
+    runtime.shutdown().await;
+    assert_eq!(
+        checkpoint(&state, "kind_a"),
+        Some(record("kind_a", &a, length(&a)))
+    );
+
+    append(&a, "a3")?;
+    append(&a, "a4")?;
+    let streams = giganto.streams_of("kind_a").len();
+    let mut runtime = self::runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a3", "a4"]).await;
+    sleep(SETTLE).await;
+    assert_eq!(lines_from(&giganto, "kind_a", streams), ["a3", "a4"]);
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rename_and_copy_truncate_rotations_send_each_line_once() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+
+    // A rename rotation, with a late write to the renamed file.
+    let renamed = logs.path("a.log.1");
+    std::fs::rename(&a, &renamed)?;
+    std::fs::write(&a, "b1\nb2\nb3\n")?;
+    append(&renamed, "a2")?;
+    wait_for_lines(&giganto, "kind_a", &["a2", "b1", "b2", "b3"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    // A copy-truncate once the reader is at EOF.
+    copy_truncate(&a, &["c1"])?;
+    wait_for_lines(&giganto, "kind_a", &["c1"]).await;
+    wait_for_log(
+        &logs_capture,
+        &format!(
+            "{} for kind_a was truncated; reading it again from its beginning",
+            a.display()
+        ),
+    )
+    .await;
+    sleep(SETTLE).await;
+    assert_eq!(
+        giganto.lines("kind_a"),
+        ["a1", "a2", "b1", "b2", "b3", "c1"]
+    );
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_closed_connection_sends_the_unacknowledged_lines_again() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    giganto.withhold_acks(&["kind_a"]);
+    append(&a, "a2")?;
+    append(&a, "a3")?;
+    wait_for_lines(&giganto, "kind_a", &["a2", "a3"]).await;
+    giganto.close_connections();
+    append(&a, "a4")?;
+    wait_for("a new stream carries a4", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(1)
+            .is_some_and(|stream| stream.lines().contains(&"a4".to_string()))
+    })
+    .await;
+    // The new stream starts at the acknowledged position.
+    assert_eq!(giganto.streams_of("kind_a")[1].lines(), ["a2", "a3", "a4"]);
+
+    // A stream reopened while the file is unchanged replays only the suffix
+    // after the acknowledged position, and then follows new lines.
+    giganto.withhold_acks(&[]);
+    append(&a, "a5")?;
+    wait_for_lines(&giganto, "kind_a", &["a5"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    giganto.stop_stream_of("kind_a")?;
+    append(&a, "a6")?;
+    wait_for("a third stream carries a6", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(2)
+            .is_some_and(|stream| stream.lines().contains(&"a6".to_string()))
+    })
+    .await;
+    sleep(SETTLE).await;
+    assert_eq!(giganto.streams_of("kind_a")[2].lines(), ["a6"]);
+    assert_eq!(
+        giganto
+            .lines("kind_a")
+            .iter()
+            .filter(|line| *line == "a1")
+            .count(),
+        1
+    );
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_idle_collector_sends_the_unacknowledged_lines_again() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    // The file stays unchanged after each failure: no later write finds
+    // the failed stream.
+    giganto.withhold_acks(&["kind_a"]);
+    append(&a, "a2")?;
+    wait_for_lines(&giganto, "kind_a", &["a2"]).await;
+    giganto.stop_stream_of("kind_a")?;
+    wait_for("a second stream carries a2", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(1)
+            .is_some_and(|stream| stream.lines() == ["a2"])
+    })
+    .await;
+
+    giganto.close_connections();
+    wait_for("a third stream carries a2", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(2)
+            .is_some_and(|stream| stream.lines() == ["a2"])
+    })
+    .await;
+    assert_eq!(giganto.connections(), 2);
+
+    giganto.withhold_acks(&[]);
+    append(&a, "a3")?;
+    wait_for_lines(&giganto, "kind_a", &["a3"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_delayed_old_ack_does_not_move_a_truncated_files_checkpoint() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    // Old batches await their ACKs as the file is truncated.
+    giganto.hold_acks(&["kind_a"]).await;
+    append(&a, "a2 a longer line")?;
+    append(&a, "a3 a longer line")?;
+    wait_for_lines(
+        &giganto,
+        "kind_a",
+        &["a2 a longer line", "a3 a longer line"],
+    )
+    .await;
+    copy_truncate(&a, &[])?;
+    wait_for_log(&logs_capture, "was truncated").await;
+    let epoch = record("kind_a", &a, 0);
+    wait_for_checkpoint(&state, "kind_a", &epoch, WAIT).await;
+
+    // The old ACKs arrive after the transition: they acknowledge nothing.
+    giganto.release_acks().await;
+    sleep(SETTLE).await;
+    assert_eq!(checkpoint(&state, "kind_a"), Some(epoch));
+
+    // A new line acknowledged moves it.
+    append(&a, "b1")?;
+    wait_for_lines(&giganto, "kind_a", &["b1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_epoch_save_holds_back_the_new_content() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1 a longer line", "a2 a longer line"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a2 a longer line"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+
+    let obstacle = checkpoint_file(&state, "kind_a").with_extension("json.tmp");
+    std::fs::create_dir(&obstacle)?;
+    copy_truncate(&a, &["b1"])?;
+    wait_for_log(&logs_capture, "was truncated").await;
+    // More than two retries of every 3 s.
+    sleep(Duration::from_secs(7)).await;
+    assert!(!giganto.lines("kind_a").contains(&"b1".to_string()));
+
+    std::fs::remove_dir(&obstacle)?;
+    wait_for_lines(&giganto, "kind_a", &["b1"]).await;
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, length(&a)), WAIT).await;
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn new_content_after_a_truncation_survives_a_crash_before_its_first_ack() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    giganto.hold_acks(&["kind_a"]).await;
+    append(&a, "a2 a longer line")?;
+    append(&a, "a3 a longer line")?;
+    wait_for_lines(&giganto, "kind_a", &["a3 a longer line"]).await;
+    let old_offset = length(&a);
+
+    copy_truncate(&a, &["b1"])?;
+    wait_for_log(&logs_capture, "was truncated").await;
+    wait_for_lines(&giganto, "kind_a", &["b1"]).await;
+    // New batches await their first ACK: no save carries a position from
+    // before the truncation.
+    let epoch = record("kind_a", &a, 0);
+    let deadline = Instant::now() + SETTLE;
+    while Instant::now() < deadline {
+        assert_eq!(checkpoint(&state, "kind_a"), Some(epoch.clone()));
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    // The new content grows past the old offset, and the process crashes.
+    let mut count = 2;
+    while length(&a) <= old_offset {
+        append(&a, &format!("b{count}"))?;
+        count += 1;
+    }
+    let last = format!("b{}", count - 1);
+    wait_for_lines(&giganto, "kind_a", &[&last]).await;
+    drop(runtime);
+    sleep(SETTLE).await;
+    assert_eq!(checkpoint(&state, "kind_a"), Some(epoch));
+
+    let streams = giganto.streams_of("kind_a").len();
+    giganto.release_acks().await;
+    let mut runtime = self::runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    let expected = (1..count)
+        .map(|index| format!("b{index}"))
+        .collect::<Vec<_>>();
+    wait_for("the restart sends the new content", WAIT, || {
+        lines_from(&giganto, "kind_a", streams) == expected
+    })
+    .await;
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_new_connection_after_a_truncation_carries_only_new_lines() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1 a longer line", "a2 a longer line"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a2 a longer line"]).await;
+    giganto.withhold_acks(&["kind_a"]);
+    append(&a, "a3 a longer line")?;
+    wait_for_lines(&giganto, "kind_a", &["a3 a longer line"]).await;
+
+    copy_truncate(&a, &["b1"])?;
+    wait_for_log(&logs_capture, "was truncated").await;
+    wait_for_lines(&giganto, "kind_a", &["b1"]).await;
+    giganto.close_connections();
+    append(&a, "b2")?;
+    wait_for("a new stream carries b2", WAIT, || {
+        giganto
+            .streams_of("kind_a")
+            .get(1)
+            .is_some_and(|stream| stream.lines().contains(&"b2".to_string()))
+    })
+    .await;
+    assert_eq!(giganto.streams_of("kind_a")[1].lines(), ["b1", "b2"]);
+    giganto.withhold_acks(&[]);
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_truncated_while_stopped_saves_its_epoch_before_sending() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1 a longer line", "a2 a longer line"])?;
+    let state = logs.state();
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_lines(&giganto, "kind_a", &["a2 a longer line"]).await;
+    runtime.shutdown().await;
+
+    copy_truncate(&a, &["b1"])?;
+    // The epoch's save fails at first: nothing is sent until it lands.
+    let obstacle = checkpoint_file(&state, "kind_a").with_extension("json.tmp");
+    std::fs::create_dir(&obstacle)?;
+    giganto.withhold_acks(&["kind_a"]);
+    let streams = giganto.streams_of("kind_a").len();
+    let opened = giganto.streams().len();
+    let mut runtime = self::runtime(&files.files, &reload, &state);
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for_log(&logs_capture, "was truncated").await;
+    sleep(Duration::from_secs(4)).await;
+    assert_eq!(giganto.streams().len(), opened, "no stream is opened");
+
+    std::fs::remove_dir(&obstacle)?;
+    wait_for_lines(&giganto, "kind_a", &["b1"]).await;
+    assert_eq!(checkpoint(&state, "kind_a"), Some(record("kind_a", &a, 0)));
+    assert_eq!(lines_from(&giganto, "kind_a", streams), ["b1"]);
+    giganto.withhold_acks(&[]);
+    runtime.shutdown().await;
+    Ok(())
+}
+
+/// With the first save of the starting position failing, nothing is sent
+/// until it lands; after a crash before the first data ACK, the lines
+/// appended since are sent.
+#[cfg(unix)]
+async fn initial_save_failure_then_crash(corrupt: bool) -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let state = logs.state();
+    let file = checkpoint_file(&state, "kind_a");
+    std::fs::create_dir_all(file.parent().context("a parent")?)?;
+    if corrupt {
+        std::fs::write(&file, b"{")?;
+    }
+    let obstacle = file.with_extension("json.tmp");
+    std::fs::create_dir(&obstacle)?;
+    giganto.withhold_acks(&["kind_a"]);
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &state);
+    runtime
+        .apply(config_start(
+            giganto.addr,
+            &[("kind_a", &a)],
+            StartPosition::End,
+        ))
+        .await;
+    // The starting position is chosen before its first save fails.
+    wait_for_log(&logs_capture, "Cannot save the checkpoint of kind_a").await;
+    append(&a, "a2")?;
+    sleep(Duration::from_secs(7)).await;
+    assert!(giganto.streams().is_empty(), "{:?}", giganto.streams());
+
+    std::fs::remove_dir(&obstacle)?;
+    // The starting position chosen before the save first failed.
+    wait_for_checkpoint(&state, "kind_a", &record("kind_a", &a, 3), WAIT).await;
+    wait_for_lines(&giganto, "kind_a", &["a2"]).await;
+    append(&a, "a3")?;
+    wait_for_lines(&giganto, "kind_a", &["a3"]).await;
+    drop(runtime);
+    sleep(SETTLE).await;
+
+    giganto.withhold_acks(&[]);
+    let streams = giganto.streams_of("kind_a").len();
+    let mut runtime = self::runtime(&files.files, &reload, &state);
+    runtime
+        .apply(config_start(
+            giganto.addr,
+            &[("kind_a", &a)],
+            StartPosition::End,
+        ))
+        .await;
+    wait_for("the restart sends a2 and a3", WAIT, || {
+        lines_from(&giganto, "kind_a", streams) == ["a2", "a3"]
+    })
+    .await;
+    assert!(!giganto.lines("kind_a").contains(&"a1".to_string()));
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_initial_save_holds_back_start_end() -> Result<()> {
+    initial_save_failure_then_crash(false).await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_initial_save_holds_back_a_corrupt_checkpoints_replacement() -> Result<()> {
+    initial_save_failure_then_crash(true).await
+}
+
+#[tokio::test]
+async fn timestamps_strictly_increase_within_a_batch() -> Result<()> {
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let lines = (0..500)
+        .map(|index| format!("l{index}"))
+        .collect::<Vec<_>>();
+    let a = logs.create(
+        "a.log",
+        &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
+    runtime.apply(config(giganto.addr, &[("kind_a", &a)])).await;
+    wait_for("every line arrives", WAIT, || {
+        giganto.lines("kind_a").len() == lines.len()
+    })
+    .await;
+    let timestamps = giganto
+        .streams_of("kind_a")
+        .iter()
+        .flat_map(|stream| stream.timestamps.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(timestamps.len(), lines.len());
+    assert!(timestamps.windows(2).all(|pair| pair[0] < pair[1]));
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_symlink_into_proc_is_refused() -> Result<()> {
+    let (logs_capture, _guard) = Logs::capture();
+    let (_pki, giganto, files) = setup()?;
+    let logs = LogFiles::new()?;
+    let a = logs.create("a.log", &["a1"])?;
+    let link = logs.path("status.log");
+    std::os::unix::fs::symlink("/proc/self/status", &link)?;
+    let reload = ReloadSignal::new();
+    let mut runtime = runtime(&files.files, &reload, &logs.state());
+    runtime
+        .apply(config(giganto.addr, &[("kind_a", &a), ("kind_p", &link)]))
+        .await;
+    wait_for_lines(&giganto, "kind_a", &["a1"]).await;
+    let expected = format!(
+        "Collector kind_p for {}: the file lies under the refused directory /proc",
+        link.display()
+    );
+    wait_for_log(&logs_capture, &expected).await;
+    sleep(SETTLE).await;
+    assert!(giganto.streams_of("kind_p").is_empty());
+    assert_eq!(giganto.lines("kind_p"), Vec::<String>::new());
+    runtime.shutdown().await;
     Ok(())
 }
