@@ -303,9 +303,11 @@ Not in scope:
     — and stop **without saving a checkpoint**; only then do new collectors
     start. Collectors present in both keep running untouched (a changed `start`
     has no effect on them). Then the checkpoint files and temporary files
-    (`<kind>.json`, `<kind>.json.tmp`) of kinds not in the configuration are
-    deleted. At startup, before any collector starts, every `*.json.tmp` file is
-    deleted.
+    (`<kind>.json`, `<kind>.json.tmp`) in `checkpoints/log/` of kinds not in the
+    configuration are deleted; nothing else under `checkpoints/` is. At startup,
+    before any collector starts, every `*.json.tmp` in the checkpoints directory
+    or its subdirectories is deleted (symbolic links are removed, never
+    followed).
   - A change to `giganto_ingest_srv_addr` or `giganto_name` cancels every
     in-flight connect and send at once, drops the old connection, and connects
     to the new address. Each collector then resumes from its last acknowledged
@@ -449,20 +451,30 @@ All rules in this section apply to remote-mode collectors only.
   before its WAL flush (giganto `src/storage.rs:633-636`, `:1530`;
   `src/comm/ingest.rs:1264`, `:1451`, `:1459`), and no Giganto change is in
   scope. Local mode keeps its existing policy (reproduce discussion #797).
-- **[DECISION] Location.** `<state-dir>/checkpoints/<kind>.json` (a kind is
-  unique within a configuration and filename-safe by its pattern). The file
-  holds `{"kind": …, "path": …, "dev": …, "ino": …, "offset": …}`. A file whose
-  `path` differs from the collector's is treated as no checkpoint and
-  overwritten.
+- **[DECISION] Location.** Each checkpoint is a record tagged with its collector
+  type. A log collector's is `<state-dir>/checkpoints/log/<kind>.json` (a kind
+  is unique within a configuration and filename-safe by its pattern), holding
+  `{"type": "log", "kind": …, "path": …, "dev": …, "ino": …, "offset": …}`. The
+  rest of `checkpoints/` is left to later collector types (for example a journal
+  cursor in `checkpoints/journal.json`), which so never collide with a log kind
+  of the same name. A record whose `type` is missing or does not match the
+  collector is treated as corrupt (below); otherwise a file whose `path` differs
+  from the collector's is treated as no checkpoint and overwritten.
+- **[DECISION] Opaque positions.** The acknowledged-position queue and the save
+  path never inspect a position; only a collector type's reader and checkpoint
+  record know its form (a log collector's is `(dev, ino, offset)`), so a later
+  collector type needs no change to the ACK machinery.
 - **[DECISION] Writing.** A collector saves its acknowledged position at most
   once per second and no later than one second after it last changed, and always
   on a clean stop (except a collector removed by an apply, §4.3) and when a
   collector with no checkpoint first opens its file (§4.5 Start). The file is
   written to `<kind>.json.tmp` in the same directory, `fsync`ed, renamed over
-  `<kind>.json`, and the directory is `fsync`ed.
+  `<kind>.json`, and the directory is `fsync`ed; a directory created when
+  missing has its parent `fsync`ed.
 - **[DECISION] A corrupt or unreadable checkpoint** is logged and treated as a
-  checkpoint at the current end of `path`, so a damaged file never causes a
-  whole file to be sent again.
+  checkpoint at the current end of the collector's `path`, saved as soon as the
+  collector opens the file, so a damaged file never causes a whole file to be
+  sent again.
 
 ### 4.7 Identity and certificates
 
@@ -1019,6 +1031,14 @@ them, and they are recorded here so this RFC matches them.
   blocks a save. The refused log kinds are a fixed list taken from
   giganto-client 0.28.0. Showing the format refusal is its own issue, covering
   the browser decoders, `DeployRefusalNotice` and the manual's refusal tables.
+- **Checkpoints are typed**
+  ([aicers/reproduce#982](https://github.com/aicers/reproduce/issues/982),
+  amended 2026-10-22). Checkpoint records carry their collector type; log
+  records live in `checkpoints/log/<kind>.json`, leaving the rest of
+  `checkpoints/` to later collector types, and the ACK machinery works over an
+  opaque per-collector position, so that a journal collector — planned for the
+  product's own operational logs in a later RFC — can be added without reworking
+  them or colliding with a log kind named `journal`.
 - **bootler**
   ([aicers/bootler#985](https://github.com/aicers/bootler/issues/985)). Before
   pinning, the issue confirms that the pinned REview admits the pinned
