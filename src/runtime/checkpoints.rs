@@ -161,14 +161,17 @@ fn step(what: &str, path: &Path) -> impl FnOnce(io::Error) -> io::Error {
 }
 
 /// Creates `dir` with mode 0700 if it is missing, and then syncs its
-/// parent.
-fn ensure_dir(dir: &Path) -> io::Result<()> {
+/// parent. An existing `dir` is taken as durable only if `durable`: it may
+/// have been created by a save whose sync of the parent failed or is still
+/// running, so its parent is synced again.
+fn ensure_dir(dir: &Path, durable: bool) -> io::Result<()> {
     let mut builder = DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     match builder.create(dir) {
         Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && durable => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(step("create", dir)(error)),
     }
     if let Some(parent) = dir.parent() {
@@ -183,11 +186,21 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
         .map_err(step("sync", dir))
 }
 
-/// Replaces `file` with `bytes` through `tmp`, durably.
-fn write_atomically(dirs: &[PathBuf], tmp: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Replaces `file` with `bytes` through `tmp`, durably. `dirs_durable`
+/// tells whether `dirs` were all confirmed durable before, and is set once
+/// they are.
+fn write_atomically(
+    dirs: &[PathBuf],
+    dirs_durable: &AtomicBool,
+    tmp: &Path,
+    file: &Path,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let durable = dirs_durable.load(Ordering::SeqCst);
     for dir in dirs {
-        ensure_dir(dir)?;
+        ensure_dir(dir, durable)?;
     }
+    dirs_durable.store(true, Ordering::SeqCst);
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -331,6 +344,9 @@ pub(super) enum Outcome {
     Landed,
     /// A save requested later has already landed.
     Superseded,
+    /// A save requested later has already been attempted but has not
+    /// landed: this one is obsolete, and nothing is saved.
+    Overtaken,
     /// The save state is retired: nothing lands any more.
     Retired,
     Failed(io::Error),
@@ -359,8 +375,13 @@ pub(super) struct Saves<P> {
     lock: Arc<Mutex<()>>,
     /// The sequence number of the last save requested.
     requested: AtomicU64,
+    /// The sequence number of the last save attempted; changed under
+    /// `lock`.
+    attempted: AtomicU64,
     /// The sequence number of the last save landed; changed under `lock`.
     landed: AtomicU64,
+    /// Whether this state has confirmed its directories durable.
+    dirs_durable: AtomicBool,
     retired: AtomicBool,
     /// Whether the last save failed, for logging.
     failing: AtomicBool,
@@ -385,7 +406,9 @@ impl Saves<LogPosition> {
             encode,
             lock,
             requested: AtomicU64::new(0),
+            attempted: AtomicU64::new(0),
             landed: AtomicU64::new(0),
+            dirs_durable: AtomicBool::new(false),
             retired: AtomicBool::new(false),
             failing: AtomicBool::new(false),
             writes: AtomicU64::new(0),
@@ -430,7 +453,7 @@ impl<P: Send + Sync + 'static> Saves<P> {
                     );
                 }
             }
-            Outcome::Superseded | Outcome::Retired => {}
+            Outcome::Superseded | Outcome::Overtaken | Outcome::Retired => {}
         }
         outcome
     }
@@ -457,7 +480,7 @@ impl<P: Send + Sync + 'static> Saves<P> {
                     self.kind
                 );
             }
-            Outcome::Superseded | Outcome::Retired => {}
+            Outcome::Superseded | Outcome::Overtaken | Outcome::Retired => {}
         }
     }
 
@@ -487,8 +510,8 @@ impl<P: Send + Sync + 'static> Saves<P> {
     }
 
     /// Writes `position` as the save numbered `sequence`, unless the state
-    /// is retired or a later save has landed; `last` retires the state
-    /// with this write, even one that is superseded or fails.
+    /// is retired or a later save has been attempted; `last` retires the
+    /// state with this write, even one that is superseded or fails.
     async fn write(self: &Arc<Self>, sequence: u64, position: &P, last: bool) -> Outcome {
         let bytes = (self.encode)(position);
         let this = Arc::clone(self);
@@ -509,7 +532,13 @@ impl<P: Send + Sync + 'static> Saves<P> {
         if self.landed.load(Ordering::SeqCst) > sequence {
             return Outcome::Superseded;
         }
-        match write_atomically(&self.dirs, &self.tmp, &self.file, bytes) {
+        // A later save that failed still supersedes this one, but does not
+        // make it saved.
+        if self.attempted.load(Ordering::SeqCst) > sequence {
+            return Outcome::Overtaken;
+        }
+        self.attempted.store(sequence, Ordering::SeqCst);
+        match write_atomically(&self.dirs, &self.dirs_durable, &self.tmp, &self.file, bytes) {
             Ok(()) => {
                 self.landed.store(sequence, Ordering::SeqCst);
                 self.writes.fetch_add(1, Ordering::SeqCst);
@@ -813,6 +842,74 @@ mod tests {
             fs::read(log_file(state.path(), KIND))?,
             encode_log(KIND, path, &position(3))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failing_later_save_supersedes_a_pending_one() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let path = Path::new("/a.log");
+        let saves = saves(&state, path);
+        assert!(saves.save(&position(1)).await.saved());
+        let pending = saves.request();
+        let later = saves.request();
+        let tmp = log_dir(state.path()).join("kind_a.json.tmp");
+        fs::create_dir(&tmp)?;
+        assert!(matches!(
+            saves.write(later, &position(3), false).await,
+            Outcome::Failed(_)
+        ));
+        fs::remove_dir(&tmp)?;
+
+        // The pending save is obsolete, and is not reported as saved.
+        let outcome = saves.write(pending, &position(2), false).await;
+        assert!(matches!(outcome, Outcome::Overtaken), "{outcome:?}");
+        assert!(!outcome.saved());
+        assert_eq!(
+            fs::read(log_file(state.path(), KIND))?,
+            encode_log(KIND, path, &position(1))
+        );
+        assert!(saves.save(&position(4)).await.saved());
+        assert_eq!(
+            fs::read(log_file(state.path(), KIND))?,
+            encode_log(KIND, path, &position(4))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_directory_counts_only_once_its_parent_is_synced() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let path = Path::new("/a.log");
+        // Without read permission, the state directory can gain entries but
+        // cannot be opened to be synced.
+        fs::set_permissions(state.path(), fs::Permissions::from_mode(0o300))?;
+        if File::open(state.path()).is_ok() {
+            // Permissions are not enforced (for example, as root).
+            fs::set_permissions(state.path(), fs::Permissions::from_mode(0o700))?;
+            return Ok(());
+        }
+        let saves = saves(&state, path);
+        let outcome = saves.save(&position(1)).await;
+        assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+        assert!(state.path().join(CHECKPOINTS).is_dir());
+
+        // The directory now exists, but its entry is still not durable: a
+        // retry, or another collector's save, syncs the parent again.
+        let outcome = saves.save(&position(2)).await;
+        assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+        let other = self::saves(&state, path);
+        let outcome = other.save(&position(2)).await;
+        assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+        assert!(!log_file(state.path(), KIND).exists());
+
+        fs::set_permissions(state.path(), fs::Permissions::from_mode(0o700))?;
+        assert!(saves.save(&position(3)).await.saved());
+        assert_eq!(
+            fs::read(log_file(state.path(), KIND))?,
+            encode_log(KIND, path, &position(3))
+        );
+        assert_eq!(saves.writes(), 1);
         Ok(())
     }
 
