@@ -1,3 +1,5 @@
+// The runners use most of the binary's imports.
+#[allow(clippy::wildcard_imports)]
 use super::*;
 
 // The kind-to-collector mapping is intentionally explicit so supported formats
