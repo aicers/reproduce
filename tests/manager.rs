@@ -5,39 +5,27 @@
 //! `update_config`, and records every handshake with the client certificate
 //! it was made with.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+mod support;
+
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use quinn::Endpoint;
-use rcgen::{
-    BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
-    KeyUsagePurpose,
-};
 use reproduce::config::remote::RemoteConfig;
 use reproduce::manager::{Client, ConfigRuntime, Manager, TlsError, TlsFiles, TlsMaterial};
 use reproduce::reload::ReloadSignal;
-use review_protocol::AgentInfo;
-use review_protocol::server;
 use review_protocol::types::{HostNetworkGroup, Status};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tempfile::TempDir;
+#[cfg(unix)]
+use support::send_signal;
+use support::{Files, Logs, Mock, Pki, SERVER_NAME, VERSION_REQ, WAIT, wait_until};
 use tokio::sync::watch;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
 
-const SERVER_NAME: &str = "localhost";
-
-/// The versions `REview` 0.61.0 accepts.
-const VERSION_REQ: &str = ">=0.48.0";
-const HIGHEST_PROTOCOL_VERSION: &str = "0.49.0";
-
 const RETRY_INTERVAL: Duration = Duration::from_millis(100);
-const WAIT: Duration = Duration::from_secs(10);
 /// How long a test waits to show that something does not happen.
 const SETTLE: Duration = Duration::from_millis(1500);
 
@@ -66,288 +54,6 @@ kind = "nginx_error"
 path = "/var/log/nginx/error.log"
 "#;
 
-/// A CA that signs the mock's certificate and every client certificate.
-struct Pki {
-    ca: String,
-    issuer: Issuer<'static, KeyPair>,
-    server: Identity,
-}
-
-/// A certificate and its private key, PEM-encoded.
-#[derive(Clone)]
-struct Identity {
-    cert: String,
-    key: String,
-}
-
-impl Identity {
-    fn der(&self) -> CertificateDer<'static> {
-        rustls_pemfile::certs(&mut self.cert.as_bytes())
-            .next()
-            .expect("a certificate")
-            .expect("a valid certificate")
-    }
-}
-
-impl Pki {
-    fn new() -> Result<Self> {
-        let mut params = CertificateParams::new(Vec::<String>::new())?;
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params
-            .distinguished_name
-            .push(rcgen::DnType::CommonName, "Manager Test CA");
-        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-        let key = KeyPair::generate()?;
-        let ca = params.self_signed(&key)?.pem();
-        let issuer = Issuer::new(params, key);
-        let server = issue(&issuer, SERVER_NAME, ExtendedKeyUsagePurpose::ServerAuth)?;
-        Ok(Self { ca, issuer, server })
-    }
-
-    fn client(&self) -> Result<Identity> {
-        issue(
-            &self.issuer,
-            "reproduce.test",
-            ExtendedKeyUsagePurpose::ClientAuth,
-        )
-    }
-}
-
-fn issue(
-    issuer: &Issuer<'static, KeyPair>,
-    name: &str,
-    usage: ExtendedKeyUsagePurpose,
-) -> Result<Identity> {
-    let mut params = CertificateParams::new(vec![name.to_string()])?;
-    params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, name);
-    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    params.extended_key_usages = vec![usage];
-    let key = KeyPair::generate()?;
-    let cert = params.signed_by(&key, issuer)?;
-    Ok(Identity {
-        cert: cert.pem(),
-        key: key.serialize_pem(),
-    })
-}
-
-fn server_config(pki: &Pki) -> Result<quinn::ServerConfig> {
-    let certs = rustls_pemfile::certs(&mut pki.server.cert.as_bytes())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let key: PrivateKeyDer<'static> =
-        rustls_pemfile::private_key(&mut pki.server.key.as_bytes())?.context("a key")?;
-    let mut roots = rustls::RootCertStore::empty();
-    for cert in rustls_pemfile::certs(&mut pki.ca.as_bytes()) {
-        roots.add(cert?)?;
-    }
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
-        Arc::new(roots),
-        provider.clone(),
-    )
-    .build()?;
-    let crypto = rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
-        .with_client_cert_verifier(verifier)
-        .with_single_cert(certs, key)?;
-    Ok(quinn::ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?,
-    )))
-}
-
-/// A handshake the mock accepted.
-struct Handshake {
-    info: AgentInfo,
-    cert: CertificateDer<'static>,
-}
-
-struct State {
-    /// The stored configuration; `None` answers "config unavailable".
-    config: Mutex<Option<String>>,
-    delay: Mutex<Duration>,
-    version_req: Mutex<String>,
-    /// Connections that completed TLS, whether or not their handshake was
-    /// accepted.
-    attempts: AtomicUsize,
-    handshakes: Mutex<Vec<Handshake>>,
-    get_configs: AtomicUsize,
-    /// The connection of the last accepted handshake.
-    connection: Mutex<Option<quinn::Connection>>,
-}
-
-/// A mock Central Manager.
-struct Mock {
-    addr: SocketAddr,
-    server_config: quinn::ServerConfig,
-    state: Arc<State>,
-    running: Option<(Endpoint, JoinHandle<()>)>,
-}
-
-impl Mock {
-    fn start(pki: &Pki) -> Result<Self> {
-        let server_config = server_config(pki)?;
-        let state = Arc::new(State {
-            config: Mutex::new(None),
-            delay: Mutex::new(Duration::ZERO),
-            version_req: Mutex::new(VERSION_REQ.to_string()),
-            attempts: AtomicUsize::new(0),
-            handshakes: Mutex::new(Vec::new()),
-            get_configs: AtomicUsize::new(0),
-            connection: Mutex::new(None),
-        });
-        let mut mock = Self {
-            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            server_config,
-            state,
-            running: None,
-        };
-        mock.restart()?;
-        Ok(mock)
-    }
-
-    /// Starts serving again on the same address after [`Mock::stop`].
-    fn restart(&mut self) -> Result<()> {
-        let endpoint = Endpoint::server(self.server_config.clone(), self.addr)?;
-        self.addr = endpoint.local_addr()?;
-        let task = tokio::spawn(accept(endpoint.clone(), self.state.clone()));
-        self.running = Some((endpoint, task));
-        Ok(())
-    }
-
-    /// Closes every connection and stops listening.
-    async fn stop(&mut self) {
-        if let Some((endpoint, task)) = self.running.take() {
-            task.abort();
-            let _ = task.await;
-            self.state.connection.lock().expect("lock").take();
-            endpoint.close(0u32.into(), b"stopped");
-            endpoint.wait_idle().await;
-        }
-    }
-
-    fn set_config(&self, config: Option<&str>) {
-        *self.state.config.lock().expect("lock") = config.map(str::to_string);
-    }
-
-    fn set_delay(&self, delay: Duration) {
-        *self.state.delay.lock().expect("lock") = delay;
-    }
-
-    fn set_version_req(&self, version_req: &str) {
-        *self.state.version_req.lock().expect("lock") = version_req.to_string();
-    }
-
-    fn attempts(&self) -> usize {
-        self.state.attempts.load(Ordering::SeqCst)
-    }
-
-    fn get_configs(&self) -> usize {
-        self.state.get_configs.load(Ordering::SeqCst)
-    }
-
-    fn handshakes(&self) -> usize {
-        self.state.handshakes.lock().expect("lock").len()
-    }
-
-    fn statuses(&self) -> Vec<Status> {
-        let handshakes = self.state.handshakes.lock().expect("lock");
-        handshakes.iter().map(|h| h.info.status).collect()
-    }
-
-    fn cert(&self, index: usize) -> CertificateDer<'static> {
-        self.state.handshakes.lock().expect("lock")[index]
-            .cert
-            .clone()
-    }
-
-    fn connection(&self) -> server::Connection {
-        let connection = self.state.connection.lock().expect("lock");
-        server::Connection::from_quinn(connection.clone().expect("a connection"))
-    }
-
-    fn quinn_connection(&self) -> quinn::Connection {
-        let connection = self.state.connection.lock().expect("lock");
-        connection.clone().expect("a connection")
-    }
-
-    /// Closes the current connection, so the client reconnects.
-    fn drop_connection(&self) {
-        if let Some(connection) = self.state.connection.lock().expect("lock").take() {
-            connection.close(0u32.into(), b"dropped");
-        }
-    }
-
-    async fn send_update(&self) -> Result<()> {
-        self.connection().send_config_update_cmd().await
-    }
-}
-
-async fn accept(endpoint: Endpoint, state: Arc<State>) {
-    let mut connections = JoinSet::new();
-    while let Some(incoming) = endpoint.accept().await {
-        connections.spawn(serve(incoming, state.clone()));
-    }
-}
-
-async fn serve(incoming: quinn::Incoming, state: Arc<State>) {
-    let Ok(connection) = incoming.await else {
-        return;
-    };
-    state.attempts.fetch_add(1, Ordering::SeqCst);
-    let version_req = state.version_req.lock().expect("lock").clone();
-    let Ok(info) = server::handshake(
-        &connection,
-        connection.remote_address(),
-        &version_req,
-        HIGHEST_PROTOCOL_VERSION,
-    )
-    .await
-    else {
-        return;
-    };
-    let cert = connection
-        .peer_identity()
-        .and_then(|identity| identity.downcast::<Vec<CertificateDer<'static>>>().ok())
-        .and_then(|certs| certs.first().cloned())
-        .expect("a client certificate");
-    state
-        .handshakes
-        .lock()
-        .expect("lock")
-        .push(Handshake { info, cert });
-    *state.connection.lock().expect("lock") = Some(connection.clone());
-
-    let mut requests = JoinSet::new();
-    while let Ok((mut send, mut recv)) = connection.accept_bi().await {
-        let mut handler = Handler {
-            state: state.clone(),
-        };
-        requests.spawn(async move {
-            let _ = server::handle(&mut handler, &mut send, &mut recv, "reproduce.test").await;
-        });
-    }
-}
-
-struct Handler {
-    state: Arc<State>,
-}
-
-#[async_trait]
-impl server::Handler for Handler {
-    async fn get_config(&self, _peer: &str) -> Result<String, String> {
-        self.state.get_configs.fetch_add(1, Ordering::SeqCst);
-        let delay = *self.state.delay.lock().expect("lock");
-        sleep(delay).await;
-        self.state
-            .config
-            .lock()
-            .expect("lock")
-            .clone()
-            .ok_or_else(|| "config unavailable".to_string())
-    }
-}
-
 /// Records every configuration handed off.
 struct Recording(Arc<Mutex<Vec<RemoteConfig>>>);
 
@@ -355,33 +61,6 @@ struct Recording(Arc<Mutex<Vec<RemoteConfig>>>);
 impl ConfigRuntime for Recording {
     async fn apply(&mut self, config: RemoteConfig) {
         self.0.lock().expect("lock").push(config);
-    }
-}
-
-/// The TLS files of a client.
-struct Files {
-    _dir: TempDir,
-    files: TlsFiles,
-}
-
-impl Files {
-    fn new(pki: &Pki, identity: &Identity) -> Result<Self> {
-        let dir = tempfile::tempdir()?;
-        let files = TlsFiles {
-            cert: dir.path().join("cert.pem"),
-            key: dir.path().join("key.pem"),
-            ca_certs: vec![dir.path().join("ca.pem")],
-        };
-        let this = Self { _dir: dir, files };
-        this.write_identity(identity)?;
-        std::fs::write(&this.files.ca_certs[0], &pki.ca)?;
-        Ok(this)
-    }
-
-    fn write_identity(&self, identity: &Identity) -> Result<()> {
-        std::fs::write(&self.files.cert, &identity.cert)?;
-        std::fs::write(&self.files.key, &identity.key)?;
-        Ok(())
     }
 }
 
@@ -427,15 +106,6 @@ impl Running {
             .await
             .expect("the client ends on shutdown")
             .expect("the client does not panic");
-    }
-}
-
-/// Waits until `condition` holds.
-async fn wait_until(what: &str, condition: impl Fn() -> bool) {
-    let deadline = Instant::now() + WAIT;
-    while !condition() {
-        assert!(Instant::now() < deadline, "timed out waiting until {what}");
-        sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -615,39 +285,6 @@ async fn other_requests_are_not_supported() -> Result<()> {
 
     client.stop().await;
     Ok(())
-}
-
-/// Captures what the client logs.
-#[derive(Clone, Default)]
-struct Logs(Arc<Mutex<Vec<u8>>>);
-
-impl std::io::Write for Logs {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("lock").extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Logs {
-    /// Captures the logs of the current thread, which runs every task of a
-    /// current-thread runtime.
-    fn capture() -> (Self, tracing::subscriber::DefaultGuard) {
-        let logs = Self::default();
-        let writer = logs.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        (logs, tracing::subscriber::set_default(subscriber))
-    }
-
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().expect("lock")).into_owned()
-    }
 }
 
 #[tokio::test]
@@ -981,15 +618,6 @@ fn tls_material_errors_name_the_file() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn send_signal(child: &std::process::Child, signal: libc::c_int) {
-    let pid = libc::pid_t::try_from(child.id()).expect("a valid pid");
-    // SAFETY: `kill` has no memory-safety preconditions.
-    unsafe {
-        libc::kill(pid, signal);
-    }
-}
-
 /// Runs the binary in remote mode against the mock: `SIGHUP` while idle
 /// fetches, `update_config` applies and reconnects with `Ready`, and
 /// `SIGTERM` exits 0.
@@ -1037,15 +665,16 @@ async fn binary_follows_the_manager() -> Result<()> {
 
     mock.set_config(Some(CONFIG));
     mock.send_update().await?;
-    wait_until(
-        "the configuration is handed off after the reconnect",
-        || {
-            output()
-                .matches("Handed off a configuration with 1 collectors")
-                .count()
-                == 2
-        },
-    )
+    wait_until("the configuration is applied", || {
+        output()
+            .matches("Applied a configuration with 1 collectors: 1 started, 0 stopped")
+            .count()
+            == 1
+    })
+    .await;
+    wait_until("the configuration is fetched after the reconnect", || {
+        mock.get_configs() == 4
+    })
     .await;
     assert_eq!(mock.statuses(), [Status::Idle, Status::Ready]);
     assert!(output().contains("with status Ready"), "{}", output());

@@ -43,10 +43,9 @@ use reproduce::collector::operation_log::OplogCollector;
 use reproduce::collector::security_log::SecurityLogCollector;
 use reproduce::collector::sysmon_csv::SysmonCollector;
 use reproduce::collector::zeek::ZeekCollector;
-use reproduce::config::remote::RemoteConfig;
 use reproduce::controller::{PipelineSender, run_pipeline_with_sender};
 use reproduce::logging::{Logging, init_tracing};
-use reproduce::manager::{self, ConfigRuntime, TlsFiles, TlsMaterial};
+use reproduce::manager::{self, TlsFiles, TlsMaterial};
 use reproduce::parser::giganto_import::TryFromGigantoRecord;
 use reproduce::parser::security_log::{
     Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
@@ -57,6 +56,7 @@ use reproduce::parser::sysmon_csv::{
 };
 use reproduce::parser::zeek::{TryFromZeekRecord, open_raw_event_log_file};
 use reproduce::reload::ReloadSignal;
+use reproduce::runtime::CollectorRuntime;
 use reproduce::sender::{GigantoSender, SenderError};
 use serde::Serialize;
 use tokio::sync::watch;
@@ -189,6 +189,7 @@ async fn run_remote(logging: Logging, args: &RemoteArgs) {
         Ok(material) => material,
         Err(error) => exit_on_startup_error(logging, &error.into()),
     };
+    let mut runtime = CollectorRuntime::new(files.clone(), reload.clone());
     if let Err(error) = install_signal_handlers(reload) {
         exit_on_startup_error(logging, &error);
     }
@@ -198,23 +199,9 @@ async fn run_remote(logging: Logging, args: &RemoteArgs) {
         addr: args.manager.addr,
     };
     let client = manager::Client::new(manager, files, material, tls_reload, wake);
-    let mut runtime = HandOffRuntime;
     client.run(&mut runtime, shutdown_receiver()).await;
+    runtime.shutdown().await;
     tracing::info!("Data Broker completed");
-}
-
-/// The collector runtime of remote mode, which only logs each hand-off until
-/// collectors run from the remote configuration.
-struct HandOffRuntime;
-
-#[async_trait]
-impl ConfigRuntime for HandOffRuntime {
-    async fn apply(&mut self, config: RemoteConfig) {
-        tracing::info!(
-            "Handed off a configuration with {} collectors",
-            config.collectors.len()
-        );
-    }
 }
 
 /// Parses the command line arguments.
