@@ -58,7 +58,10 @@ fn build_server_endpoint() -> Result<(Endpoint, SocketAddr)> {
     let cert_chain = load_cert_chain(&fixture_path("tests/cert.pem"))?;
     let private_key = load_private_key(&fixture_path("tests/key.pem"))?;
 
-    let server_crypto = rustls::ServerConfig::builder()
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .context("TLS protocol versions should be supported")?
         .with_no_client_auth()
         .with_single_cert(cert_chain, private_key)
         .context("test server TLS config")?;
@@ -359,7 +362,10 @@ fn build_rotating_server_config(pki: &ServerPki) -> Result<quinn::ServerConfig> 
     let private_key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut &*key_bytes)
         .context("server key PEM should parse")?
         .context("server key PEM contained no key")?;
-    let server_crypto = rustls::ServerConfig::builder()
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .context("TLS protocol versions should be supported")?
         .with_no_client_auth()
         .with_single_cert(cert_chain, private_key)
         .context("server TLS config should build")?;

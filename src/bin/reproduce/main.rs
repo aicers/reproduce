@@ -43,8 +43,10 @@ use reproduce::collector::operation_log::OplogCollector;
 use reproduce::collector::security_log::SecurityLogCollector;
 use reproduce::collector::sysmon_csv::SysmonCollector;
 use reproduce::collector::zeek::ZeekCollector;
+use reproduce::config::remote::RemoteConfig;
 use reproduce::controller::{PipelineSender, run_pipeline_with_sender};
 use reproduce::logging::{Logging, init_tracing};
+use reproduce::manager::{self, ConfigRuntime, TlsFiles, TlsMaterial};
 use reproduce::parser::giganto_import::TryFromGigantoRecord;
 use reproduce::parser::security_log::{
     Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
@@ -113,7 +115,10 @@ async fn main() -> anyhow::Result<()> {
             run_local(logging, &config_filename).await;
             Ok(())
         }
-        Ok(Invocation::Remote(args)) => run_remote(logging, &args),
+        Ok(Invocation::Remote(args)) => {
+            run_remote(logging, &args).await;
+            Ok(())
+        }
         Err(reason) => refuse(logging, &reason),
     }
 }
@@ -146,9 +151,10 @@ async fn run_local(mut logging: Logging, config_filename: &Path) {
 
 /// Runs remote mode, which takes its configuration from the Central Manager.
 ///
-/// The manager client does not exist yet, so after preparing the state
-/// directory this logs that remote mode is not available and exits 1.
-fn run_remote(logging: Logging, args: &RemoteArgs) -> ! {
+/// Returns when a termination signal is received. Exits 1 if the state
+/// directory cannot be used, or if the TLS material cannot be read or is not
+/// valid; the error names the file.
+async fn run_remote(logging: Logging, args: &RemoteArgs) {
     tracing::info!("Initialized tracing logger");
     let state_dir = match prepare_state_dir(&args.state_dir) {
         Ok(state_dir) => state_dir,
@@ -168,9 +174,47 @@ fn run_remote(logging: Logging, args: &RemoteArgs) -> ! {
             .join(","),
         state_dir.display()
     );
-    tracing::error!("Remote mode is not available in this build");
-    drop(logging);
-    exit(1);
+
+    let reload = ReloadSignal::new();
+    // Subscribed before the TLS files are first read, so a `SIGHUP` from
+    // then on makes the next connect re-read them.
+    let tls_reload = reload.subscribe();
+    let wake = reload.subscribe();
+    let files = TlsFiles {
+        cert: args.cert.clone(),
+        key: args.key.clone(),
+        ca_certs: args.ca_certs.clone(),
+    };
+    let material = match TlsMaterial::read(&files) {
+        Ok(material) => material,
+        Err(error) => exit_on_startup_error(logging, &error.into()),
+    };
+    if let Err(error) = install_signal_handlers(reload) {
+        exit_on_startup_error(logging, &error);
+    }
+
+    let manager = manager::Manager {
+        server_name: args.manager.server_name.clone(),
+        addr: args.manager.addr,
+    };
+    let client = manager::Client::new(manager, files, material, tls_reload, wake);
+    let mut runtime = HandOffRuntime;
+    client.run(&mut runtime, shutdown_receiver()).await;
+    tracing::info!("Data Broker completed");
+}
+
+/// The collector runtime of remote mode, which only logs each hand-off until
+/// collectors run from the remote configuration.
+struct HandOffRuntime;
+
+#[async_trait]
+impl ConfigRuntime for HandOffRuntime {
+    async fn apply(&mut self, config: RemoteConfig) {
+        tracing::info!(
+            "Handed off a configuration with {} collectors",
+            config.collectors.len()
+        );
+    }
 }
 
 /// Parses the command line arguments.

@@ -154,41 +154,152 @@ fn local_path_starting_with_dash_is_a_flag() {
     assert_refused(&["-name.toml"], "unknown flag -name.toml");
 }
 
-/// Tests that the remote form runs until the not-available line, after
-/// creating the state directory.
+/// A remote-mode process whose standard output is read line by line.
+#[cfg(unix)]
+struct RemoteProcess {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+    stdout: String,
+}
+
+#[cfg(unix)]
+impl RemoteProcess {
+    fn spawn(args: &[&str]) -> Self {
+        use std::io::BufRead;
+
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_reproduce"))
+            .args(args)
+            .env_remove("RUST_LOG")
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("reproduce starts");
+        let stdout = child.stdout.take().expect("piped stdout");
+        let (sender, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            lines,
+            stdout: String::new(),
+        }
+    }
+
+    /// Waits until a line of standard output contains `text`.
+    fn wait_for(&mut self, text: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !self.stdout.contains(text) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let Ok(line) = self.lines.recv_timeout(remaining) else {
+                let _ = self.child.kill();
+                panic!("no line containing {text:?}; output:\n{}", self.stdout);
+            };
+            self.stdout.push_str(&line);
+            self.stdout.push('\n');
+        }
+    }
+
+    /// Sends `SIGTERM` and asserts that the process exits 0.
+    fn terminate(mut self) -> String {
+        let pid = libc::pid_t::try_from(self.child.id()).expect("a valid pid");
+        // SAFETY: `kill` has no memory-safety preconditions.
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = self.child.try_wait().expect("waitable child") {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = self.child.kill();
+                panic!("no exit after SIGTERM; output:\n{}", self.stdout);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        while let Ok(line) = self.lines.recv_timeout(std::time::Duration::from_secs(5)) {
+            self.stdout.push_str(&line);
+            self.stdout.push('\n');
+        }
+        assert_eq!(status.code(), Some(0), "output:\n{}", self.stdout);
+        self.stdout
+    }
+}
+
+/// Tests that the remote form keeps running against an unreachable manager,
+/// after creating the state directory, and exits 0 on `SIGTERM` while its
+/// first connect attempt is still in progress.
+#[cfg(unix)]
 #[test]
-fn remote_form_reports_not_available() {
+fn remote_form_runs_against_an_unreachable_manager() {
     let temp_dir = tempfile::tempdir().expect("temporary directory");
     let state_dir = temp_dir.path().join("state");
     let state_dir = state_dir.to_str().expect("UTF-8 path");
-    reproduce_cmd()
-        .args(remote_args(state_dir, "manager@127.0.0.1:38390"))
-        .env_remove("RUST_LOG")
-        .assert()
-        .failure()
-        .code(1)
-        .stdout(predicate::str::contains(
-            "Remote mode is not available in this build",
-        ));
+    let mut process = RemoteProcess::spawn(&remote_args(state_dir, "manager@127.0.0.1:38390"));
+    process.wait_for("Remote mode: manager manager@127.0.0.1:38390");
+    process.wait_for("Connecting to the Central Manager at 127.0.0.1:38390");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    assert!(
+        process.child.try_wait().expect("waitable child").is_none(),
+        "the process keeps running"
+    );
     assert!(std::path::Path::new(state_dir).is_dir());
+    let stdout = process.terminate();
+    // A connect to a silent port fails only at the idle timeout.
+    assert!(!stdout.contains("Cannot connect"), "{stdout}");
+    assert!(!stdout.contains("not available"), "{stdout}");
+}
+
+/// Tests that a refused connect is logged and retried, and that `SIGTERM`
+/// ends the process with status 0.
+#[cfg(unix)]
+#[test]
+fn remote_form_retries_a_refused_connect() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let state_dir = temp_dir.path().join("state");
+    let state_dir = state_dir.to_str().expect("UTF-8 path");
+    let mut process = RemoteProcess::spawn(&remote_args(state_dir, "manager@127.0.0.1:0"));
+    process.wait_for("Cannot connect to the Central Manager at 127.0.0.1:0");
+    assert!(process.stdout.contains("WARN"), "{}", process.stdout);
+    process.terminate();
 }
 
 /// Tests that the remote form accepts an IPv6 manager endpoint.
+#[cfg(unix)]
 #[test]
 fn remote_form_accepts_ipv6_manager() {
     let temp_dir = tempfile::tempdir().expect("temporary directory");
     let state_dir = temp_dir.path().join("state");
     let state_dir = state_dir.to_str().expect("UTF-8 path");
+    let mut process = RemoteProcess::spawn(&remote_args(state_dir, "manager@[::1]:38390"));
+    process.wait_for("Remote mode: manager manager@[::1]:38390");
+    process.wait_for("Connecting to the Central Manager at [::1]:38390");
+    process.terminate();
+}
+
+/// Tests that a missing certificate file stops startup with an error naming
+/// it.
+#[test]
+fn remote_form_refuses_a_missing_certificate() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let state_dir = temp_dir.path().join("state");
+    let state_dir = state_dir.to_str().expect("UTF-8 path");
+    let mut args = remote_args(state_dir, "manager@127.0.0.1:38390");
+    args[1] = "tests/missing-cert.pem";
     reproduce_cmd()
-        .args(remote_args(state_dir, "manager@[::1]:38390"))
-        .env_remove("RUST_LOG")
+        .args(args)
         .assert()
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("manager@[::1]:38390"))
-        .stdout(predicate::str::contains(
-            "Remote mode is not available in this build",
-        ));
+        .stderr(predicate::str::starts_with("Error: "))
+        .stderr(predicate::str::contains("tests/missing-cert.pem"));
 }
 
 /// Tests that a state directory under a regular file stops startup with an

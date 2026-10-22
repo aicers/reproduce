@@ -337,7 +337,10 @@ fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
 fn build_server_endpoint() -> Result<(Endpoint, SocketAddr)> {
     let cert_chain = load_cert_chain(Path::new(&fixture_path(TEST_CERT_PEM)))?;
     let private_key = load_private_key(Path::new(&fixture_path(TEST_KEY_PEM)))?;
-    let server_crypto = rustls::ServerConfig::builder()
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .context("TLS protocol versions should be supported")?
         .with_no_client_auth()
         .with_single_cert(cert_chain, private_key)
         .context("test server certificate configuration should be valid")?;
