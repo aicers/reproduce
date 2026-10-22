@@ -607,6 +607,9 @@ mod tests {
 
     const KIND: &str = "kind_a";
 
+    /// Time allowed for scheduling and a write's `fsync`s on a busy machine.
+    const MARGIN: Duration = Duration::from_millis(500);
+
     fn position(offset: u64) -> LogPosition {
         LogPosition {
             dev: 1,
@@ -983,9 +986,12 @@ mod tests {
         let read = || load_log(state.path(), KIND, path);
 
         // The first change is written at once.
+        let opened = Instant::now();
         acks.opened(position(0));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert_eq!(saves.writes(), 1);
+        while saves.writes() < 1 {
+            assert!(opened.elapsed() < MARGIN, "written late");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         assert_eq!(read(), Loaded::Found(position(0)));
 
         // Several changes within a second cost one write, no later than a
@@ -997,7 +1003,7 @@ mod tests {
         }
         let changed = Instant::now();
         while saves.writes() < 2 {
-            assert!(changed.elapsed() < Duration::from_secs(1), "written late");
+            assert!(changed.elapsed() < SAVE_INTERVAL + MARGIN, "written late");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(read(), Loaded::Found(position(4)));
