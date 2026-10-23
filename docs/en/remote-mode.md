@@ -1,9 +1,11 @@
 # Remote Mode
 
 In remote mode, REproduce takes its configuration from the Central Manager
-(REview) instead of a file. It runs 1 to 64 log collectors over one data store
-(Giganto) connection; each collector follows one log file and sends every line
-of it as a Giganto `Log` record of the collector's kind.
+(REview) instead of a file. It runs 1 to 64 collectors over one data store
+(Giganto) connection. Each log collector follows one log file and sends every
+line of it as a Giganto `Log` record of the collector's kind; a journal
+collector sends Clumit Security's own journal entries as `OpLog` records (see
+Journal Collector).
 
 Remote mode runs on Linux. It is normally installed and started by the Host
 Agent, which renders the command line below; you rarely start it by hand.
@@ -56,10 +58,10 @@ start = "end"
 | `giganto_ingest_srv_addr` | yes | `IP:PORT` of the Giganto ingest server |
 | `giganto_name` | yes | Non-empty; the Giganto TLS server name |
 | `collectors` | yes | Array of tables, 1 to 64 entries |
-| `collectors.type` | yes | `"log"`, the only value |
-| `collectors.kind` | yes | Matches `^[a-z0-9][a-z0-9_.-]{0,63}$`; not a named Giganto kind; unique within the configuration |
-| `collectors.path` | yes | Path rules below; unique within the configuration |
-| `collectors.start` | no | `"end"` (default) or `"beginning"` |
+| `collectors.type` | yes | `"log"` or `"journal"` (see Journal Collector) |
+| `collectors.kind` | `log` only | `log` collectors only, where it is required: matches `^[a-z0-9][a-z0-9_.-]{0,63}$`; not a named Giganto kind; unique within the configuration. Not allowed in a journal collector |
+| `collectors.path` | `log` only | `log` collectors only, where it is required: path rules below; unique within the configuration. Not allowed in a journal collector |
+| `collectors.start` | no | `log` collectors only: `"end"` (default) or `"beginning"`. Not allowed in a journal collector |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -104,7 +106,9 @@ start = "end"
 ## State Directory and Checkpoints
 
 Each log collector saves its checkpoint in
-`<state-dir>/checkpoints/log/<kind>.json`:
+`<state-dir>/checkpoints/log/<kind>.json`, and the journal collector its own in
+`<state-dir>/checkpoints/journal.json` (see Journal Collector). A log
+collector's checkpoint looks like this:
 
 ```json
 {"type":"log","kind":"nginx_access","path":"/var/log/nginx/access.log","dev":2049,"ino":131074,"offset":5120}
@@ -234,6 +238,178 @@ the byte just past the last line Giganto acknowledged.
   later.
 - **Duplicates.** A reconnect or crash sends up to one acknowledgement window
   per collector again.
+
+## Journal Collector
+
+A configuration can hold one journal collector, which reads the host's systemd
+journal and sends the entries of Clumit Security's own units and containers to
+Giganto as `OpLog` records:
+
+```toml
+[[collectors]]
+type = "journal"
+```
+
+- It takes no other key, a configuration holds at most one, and it counts
+  toward the 64 collectors. It runs on Linux only; elsewhere a configuration
+  with one is refused.
+- The Central Manager generates it for the host's operational-log instance; a
+  configuration you write for a Log Collector does not contain one.
+- A configuration that keeps it does not restart it. One that drops it stops it
+  with a close marker and leaves its checkpoint in place.
+
+### Access to the Journal
+
+- REproduce must be able to read the system journal: its unit runs in group
+  `adm`, as with `SupplementaryGroups=adm`, which the ACL of
+  `/var/log/journal` lets read every journal file.
+- Before it reads, the collector checks `/etc/machine-id`, lists
+  `/var/log/journal/<machine-id>/` and opens `system.journal` in it, or a
+  `system@*.journal` archive when that file is absent. Until this passes it
+  runs no journalctl, retries every 5 seconds, and logs at most every 10
+  minutes, at ERROR,
+  `Journal collector: cannot read the system journal; is the unit in group adm?
+  (<reason>); retrying every 5s`.
+
+### Reading
+
+- The collector runs `/usr/bin/journalctl` with JSON output. It first reads
+  every entry after its position, across every boot, until journalctl exits,
+  and then follows new entries after the last one it read.
+- journalctl runs only while the collector's stream to Giganto is open. When the
+  stream or the connection drops, it is stopped, and once the stream is back the
+  collector reads again from its acknowledged entry. If journalctl ends while
+  following, or writes a line that cannot be parsed, the collector logs a
+  warning and starts it again 5 seconds later, after the last entry it read.
+- Records are sent in batches of at most 1000 records or 4 MiB.
+
+### Selection
+
+An entry is kept when one of these rows holds, and dropped otherwise:
+
+<!-- markdownlint-disable MD013 -->
+
+| Source | Kept when | `service_name` |
+| --- | --- | --- |
+| `unit` | `_SYSTEMD_UNIT` matches `clumit-security-*.service`, or is `bootroot-registrar.service`, `roxyd-selfupdate-boot.service`, `roxyd-selfupdate-crash.service` or `roxyd-selfupdate-deadline.service` | `clumit-security/unit/<_SYSTEMD_UNIT>` |
+| `systemd` | `_PID` is `1` and `UNIT` meets the `unit` condition | `clumit-security/systemd/<UNIT>` |
+| `container` | `_SYSTEMD_UNIT` is `docker.service` and `CONTAINER_NAME` starts with `aice-web-next-` or `clumit-security-` | `clumit-security/container/<CONTAINER_NAME>` |
+
+<!-- markdownlint-enable MD013 -->
+
+- `service_name` is `clumit-security/<source>/<name>`. In
+  `clumit-security-*.service`, `*` stands for one or more characters from
+  `[a-z0-9@-]`; every other comparison is exact.
+- Fields starting with `_` are set by journald and cannot be written by a
+  client. `CONTAINER_NAME` can be written by any local user, which is why a
+  container entry must also come from `docker.service`.
+
+### Records
+
+<!-- markdownlint-disable MD013 -->
+
+| `OpLog` field | Value |
+| --- | --- |
+| `service_name` | As in the selection table |
+| `log_level` | `PRIORITY` 0 to 3: `Error`; 4: `Warn`; 5 to 7, missing or anything else: `Info` |
+| `contents` | `MESSAGE`, empty when missing |
+| `sensor` | Empty; Giganto sets it |
+| Event time | The entry's `__REALTIME_TIMESTAMP`, in nanoseconds |
+
+<!-- markdownlint-enable MD013 -->
+
+- A `MESSAGE` longer than 64 KiB is cut at a UTF-8 boundary and ends with
+  `…[truncated]`.
+- An entry whose journalctl output line is longer than 1 MiB is skipped: it is
+  neither parsed nor sent. The collector logs
+  `Journal collector: skipped <n> journal entries whose journalctl output line
+  is longer than 1 MiB` at WARN, at most once a minute.
+- Entries that share a microsecond are spread over its nanoseconds, so the
+  timestamps of one stream strictly increase. An entry without a usable
+  `__REALTIME_TIMESTAMP` is stamped just after the record before it, or with
+  the current time as the first record of a stream.
+
+### Start, Resume and Checkpoint
+
+- With no checkpoint, the collector starts at the oldest entry the journal
+  holds, so entries from before the installation arrive with their own times.
+- With a checkpoint, it resumes after the saved entry.
+- A corrupt or unreadable checkpoint is replaced by the journal's newest entry,
+  saved before anything is sent, and the collector follows the entries after
+  it. It logs a warning
+  `Checkpoint <file> is unusable: <reason>; starting after the newest journal
+  entry instead, so unsent earlier entries may be skipped`. With an empty
+  journal it starts at the oldest entry instead.
+- The checkpoint `<state-dir>/checkpoints/journal.json` holds the journal
+  cursor of the acknowledged entry, with that entry's sequence number ID,
+  sequence number and time:
+
+  ```json
+  {"type":"journal","cursor":"s=…;i=…;b=…;m=…;t=…;x=…","seqnum_id":"…","seqnum":4490,"realtime_us":1792719747021221}
+  ```
+
+  Once every record written is acknowledged, it moves past the entries dropped
+  after the last record. It is saved like a log collector's checkpoint: at most
+  once per second, at a clean stop, and through `journal.json.tmp`.
+
+### Clock Steps
+
+- When an entry's time is earlier than that of the kept entry before it, the
+  host clock stepped back. The collector closes its stream with the close
+  marker, waits for the close acknowledgement, and sends that entry and the
+  ones after it on a new stream, with their own times. It logs
+  `Journal collector: the host clock stepped back; continuing on a new stream`.
+  journalctl keeps running, and later entries wait in its pipe.
+- Nothing is dropped or sent twice. If the close acknowledgement does not
+  arrive within 15 seconds, the collector handles it as a dropped stream: it
+  stops journalctl and reads again from its acknowledged entry on a new stream,
+  which can send entries again.
+
+### Lost Entries
+
+- The collector compares every entry it reads, kept or dropped, with the entry
+  read before it, and the first entry after a start or a rewind with the entry
+  it starts after. Journal sequence numbers count every entry, so dropped
+  entries do not count as missing, and neither do skipped over-long ones. When
+  the sequence number jumps, or its ID changes, it logs at WARN:
+
+  <!-- markdownlint-disable MD013 -->
+
+  ```text
+  journal entries between <time> and <time> may be missing: removed before they were sent, or lost by journald
+  ```
+
+  <!-- markdownlint-enable MD013 -->
+
+  Each `<time>` is an entry's `__REALTIME_TIMESTAMP` in UTC with microseconds,
+  such as `2026-10-22T03:04:05.123456Z`, or `an unknown time`.
+- This happens when a journal rotation or vacuum, or the journal's size limit,
+  removes entries before they were sent: while Giganto is unreachable, while
+  REproduce is stopped, or while Giganto reads slowly. An unclean shutdown of
+  journald can also lose entries, which is why the warning says "may".
+- A reinstalled host or a wiped journal starts a new sequence number ID: the
+  collector warns once and continues where journalctl places its cursor. A
+  restored journal with the old sequence numbers is not detected.
+- The warning is not repeated when a rewind reads the same two entries again
+  before anything after them is acknowledged; a restart of REproduce that reads
+  them again warns again.
+- When an entry lacks sequence numbers, the comparison is skipped, and the
+  collector logs at INFO, once for each run of skipped comparisons,
+  `journal sequence numbers are unavailable; the lost-interval check is
+  skipped`.
+- REproduce's own lines, this warning included, are entries of its unit, so
+  they reach Giganto too.
+
+### Journal Delivery
+
+- Every kept entry is sent at least once. After a reconnect, a stream error or
+  a crash, the collector reads again from its acknowledged entry, so up to one
+  acknowledgement window can be sent again: Giganto's `ack_transmission`
+  records (1024 by default) plus what was in flight, or 60 seconds of records.
+- In remote mode, the `ACK: <timestamp>` line logged for each Giganto
+  acknowledgement is at DEBUG, since Giganto repeats its acknowledgement every
+  60 seconds and REproduce's own lines are collected; `Finish ACK` lines stay
+  at INFO.
 
 ## Log Lines
 

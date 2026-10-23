@@ -878,36 +878,44 @@ fn stamps_follow_entry_times_and_strictly_increase() {
     let mut stamps = Stamps::default();
     let now = || panic!("an entry with a time is stamped from it");
     // The first entry on a fresh stream.
-    assert_eq!(stamps.next(Some(10), now), 10_000);
+    assert_eq!(stamps.next(Some(10), now), Some(10_000));
     // Increasing times.
-    assert_eq!(stamps.next(Some(12), now), 12_000);
+    assert_eq!(stamps.next(Some(12), now), Some(12_000));
     // Equal times are spread by nanoseconds, however many there are.
-    let mut previous = stamps.next(Some(20), now);
+    let mut previous = stamps.next(Some(20), now).expect("stamped");
     assert_eq!(previous, 20_000);
     for _ in 0..1500 {
-        let stamp = stamps.next(Some(20), now);
+        let stamp = stamps.next(Some(20), now).expect("stamped");
         assert_eq!(stamp, previous + 1);
         previous = stamp;
     }
     assert_eq!(previous, 21_500);
     // The next microsecond, already passed by the spreading.
-    assert_eq!(stamps.next(Some(21), now), 21_501);
-    assert_eq!(stamps.next(Some(30), now), 30_000);
-    // A clock step back is stamped after the previous stamp until the
-    // clock passes it again.
-    assert_eq!(stamps.next(Some(5), now), 30_001);
-    assert_eq!(stamps.next(Some(6), now), 30_002);
-    assert_eq!(stamps.next(Some(31), now), 31_000);
-    // A missing or unusable time.
-    assert_eq!(stamps.next(None, now), 31_001);
-    assert_eq!(stamps.next(Some(u64::MAX), now), 31_002);
-    assert_eq!(stamps.next(Some(u64::MAX / 1000), now), 31_003);
+    assert_eq!(stamps.next(Some(21), now), Some(21_501));
+    assert_eq!(stamps.next(Some(30), now), Some(30_000));
+    // A clock step back is not stamped on this stream, and changes nothing.
+    assert_eq!(stamps.next(Some(5), now), None);
+    assert_eq!(stamps.next(Some(29), now), None);
+    assert_eq!(stamps.next(Some(30), now), Some(30_001));
+    // A missing or unusable time is stamped after the previous stamp and
+    // leaves the previous time as it is.
+    assert_eq!(stamps.next(None, now), Some(30_002));
+    assert_eq!(stamps.next(Some(u64::MAX), now), Some(30_003));
+    assert_eq!(stamps.next(Some(u64::MAX / 1000), now), Some(30_004));
+    assert_eq!(stamps.next(Some(29), now), None);
+    assert_eq!(stamps.next(Some(31), now), Some(31_000));
 
-    // The first entry of a fresh stream without a time gets the clock.
+    // The first entry of a fresh stream without a time gets the clock, and
+    // the next entry with a time has no previous time to compare with.
     let mut stamps = Stamps::default();
-    assert_eq!(stamps.next(None, || 77), 77);
-    assert_eq!(stamps.next(Some(0), || 0), 78);
-    assert_eq!(stamps.next(Some(1), || 0), 1000);
+    assert_eq!(stamps.next(None, || 77), Some(77));
+    assert_eq!(stamps.next(Some(0), || 0), Some(78));
+    assert_eq!(stamps.next(Some(1), || 0), Some(1000));
+    assert_eq!(stamps.next(Some(0), || 0), None);
+
+    // The entry held at a step back opens a fresh stream with its own time.
+    let mut stamps = Stamps::default();
+    assert_eq!(stamps.next(Some(5), now), Some(5000));
 }
 
 /// Positions as the controller applies them: a batch of records ending at
@@ -923,8 +931,8 @@ fn the_acknowledged_position_passes_dropped_entries_once_everything_is_acknowled
     // Records 1 and 3 with dropped entry 2 between them, and dropped
     // entries 4 and 5 after them.
     acks.returned(position(3));
-    let first = stamps.next(Some(time(1)), now_nanos);
-    let last = stamps.next(Some(time(3)), now_nanos);
+    let first = stamps.next(Some(time(1)), now_nanos).expect("stamped");
+    let last = stamps.next(Some(time(3)), now_nanos).expect("stamped");
     acks.queue(last).expect("queued");
     acks.sent();
     acks.consumed(position(5));
@@ -956,7 +964,7 @@ fn a_dropped_stream_keeps_the_last_acknowledged_batch() {
     let mut stamps = Stamps::default();
     acks.opened(position(0));
     acks.returned(position(2));
-    let stamp = stamps.next(Some(time(2)), now_nanos);
+    let stamp = stamps.next(Some(time(2)), now_nanos).expect("stamped");
     acks.queue(stamp).expect("queued");
     acks.sent();
     assert!(acks.apply(stamp, acks.generation(), receiver));
@@ -965,7 +973,7 @@ fn a_dropped_stream_keeps_the_last_acknowledged_batch() {
     // The next batch, ending at entry 4, fails to be written.
     acks.returned(position(4));
     let entry = acks
-        .queue(stamps.next(Some(time(4)), now_nanos))
+        .queue(stamps.next(Some(time(4)), now_nanos).expect("stamped"))
         .expect("queued");
     acks.failed(entry);
     // The recovery forgets the held batch and replaces the stream.

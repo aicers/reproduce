@@ -15,6 +15,10 @@
 //!
 //! The reader handles journalctl's own failures: it stops journalctl, waits
 //! the retry interval and starts it again after the last entry it read.
+//!
+//! The reader compares every entry it parses with the one before it, or
+//! with the position it started reading after, and warns when journal
+//! entries between them may be missing ([`Gaps`]).
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -29,6 +33,7 @@ use tokio::time::{Instant, sleep, sleep_until};
 use tracing::{error, info, warn};
 
 use super::entry::{self, Entry};
+use super::gap::Gaps;
 use super::limit::{ByCause, Counted, Every};
 use super::lines::{Line, LineReader};
 use super::{JournalPosition, Settings};
@@ -163,6 +168,7 @@ pub(super) fn spawn(settings: Settings, initial: Initial, resume: u64) -> Reader
         skips: Counted::new(SKIP_WARNING_INTERVAL),
         failures: ByCause::new(REPEAT_INTERVAL),
         stderr: Arc::new(Mutex::new(Every::new(STDERR_INTERVAL))),
+        gaps: Gaps::default(),
     };
     tokio::spawn(reader.run(initial));
     ReaderLink {
@@ -285,6 +291,9 @@ struct Session {
     start: Option<JournalPosition>,
     /// The last entry read since, kept or dropped.
     last_read: Option<JournalPosition>,
+    /// The lines skipped for their length since the last entry read in the
+    /// current journalctl run.
+    skipped: u64,
     /// The records not returned yet.
     records: Vec<Record>,
     /// The serialized bytes of `records`.
@@ -301,6 +310,7 @@ impl Session {
         Self {
             start,
             last_read: None,
+            skipped: 0,
             records: Vec::new(),
             bytes: 0,
             dropped: None,
@@ -316,10 +326,16 @@ impl Session {
             args.push("--follow".to_string());
             args.push("--lines=all".to_string());
         }
-        if let Some(position) = self.last_read.as_ref().or(self.start.as_ref()) {
+        if let Some(position) = self.predecessor() {
             args.push(format!("--after-cursor={}", position.cursor));
         }
         args
+    }
+
+    /// The entry the next entry read follows: the last one read, or the
+    /// start position when nothing was read.
+    fn predecessor(&self) -> Option<&JournalPosition> {
+        self.last_read.as_ref().or(self.start.as_ref())
     }
 
     fn schedule(&mut self) {
@@ -341,6 +357,8 @@ struct Reader {
     failures: ByCause<Cause>,
     /// Limits the lines of journalctl's standard error logged.
     stderr: Arc<Mutex<Every>>,
+    /// The lost-interval check.
+    gaps: Gaps,
 }
 
 impl Reader {
@@ -553,6 +571,8 @@ impl Reader {
 
     /// Runs journalctl once in `mode`, and stops it.
     async fn run_journalctl(&mut self, session: &mut Session, mode: Mode) -> Result<Ran, Closed> {
+        // The run reads again every line after the last entry read.
+        session.skipped = 0;
         let mut child = match self.spawn(&session.args(mode)) {
             Ok(child) => child,
             Err(error) => return Ok(Ran::Failed(Failure::Spawn(error))),
@@ -610,6 +630,7 @@ impl Reader {
                     };
                 }
                 Ok(Some(Line::Skipped)) => {
+                    session.skipped = session.skipped.saturating_add(1);
                     if let Some(count) = self.skips.count(std::time::Instant::now()) {
                         warn!(
                             "Journal collector: skipped {count} journal entries whose journalctl \
@@ -621,6 +642,10 @@ impl Reader {
                     let Some(entry) = entry::parse(&line) else {
                         return Ended::Failed(Failure::Unparsable(line.len()));
                     };
+                    if let Some(previous) = session.predecessor() {
+                        self.gaps.check(previous, &entry.position, session.skipped);
+                    }
+                    session.skipped = 0;
                     if let Err(arrived) = self.take(session, entry).await {
                         return Ended::Interrupted(arrived);
                     }

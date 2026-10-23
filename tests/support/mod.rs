@@ -1,5 +1,9 @@
 //! Helpers shared by the remote-mode tests: an rcgen PKI, a mock Central
-//! Manager serving review-protocol, client TLS files, and log capture.
+//! Manager serving review-protocol, client TLS files, log capture, and an
+//! in-process Giganto ([`giganto`]).
+
+#[allow(dead_code)]
+pub mod giganto;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -371,6 +375,7 @@ pub async fn wait_until(what: &str, condition: impl Fn() -> bool) {
 }
 
 /// Captures what the client logs.
+#[allow(dead_code)]
 #[derive(Clone, Default)]
 pub struct Logs(Arc<Mutex<Vec<u8>>>);
 
@@ -385,6 +390,7 @@ impl std::io::Write for Logs {
     }
 }
 
+#[allow(dead_code)]
 impl Logs {
     /// Captures the logs of the current thread, which runs every task of a
     /// current-thread runtime.
@@ -404,6 +410,7 @@ impl Logs {
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 pub fn send_signal(child: &std::process::Child, signal: libc::c_int) {
     let pid = libc::pid_t::try_from(child.id()).expect("a valid pid");
     // SAFETY: `kill` has no memory-safety preconditions.

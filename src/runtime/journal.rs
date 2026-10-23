@@ -11,10 +11,13 @@
 //! journalctl runs only while the collector's stream is open: when the
 //! stream fails, the controller has the reader stop journalctl before it
 //! recovers the stream, and resumes the reader from the acknowledged
-//! position once the stream is back. The one exception is the tail read of
-//! a corrupt checkpoint, which runs before the first stream opens.
+//! position once the stream is back. The exceptions are the tail read of a
+//! corrupt checkpoint, which runs before the first stream opens, and a host
+//! clock step back, after which the controller closes the stream and opens a
+//! new one while journalctl waits behind the reader's full channel.
 
 mod entry;
+mod gap;
 mod limit;
 mod lines;
 mod read;
@@ -35,6 +38,7 @@ use super::checkpoints::{self, Saves};
 use super::{Due, RemoteSender, Stopped, now_nanos, stop_outcome, stopped};
 use crate::collector::POLLING_INTERVAL;
 use crate::controller::log_reconnect_outcome;
+use crate::sender::CloseAck;
 
 /// The position of one journal entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,24 +141,41 @@ impl Control {
 /// from their entries' times.
 #[derive(Debug, Default)]
 struct Stamps {
+    /// The previous stamp, `p`.
     previous: Option<i64>,
+    /// The time of the previous kept entry with a usable time, `u'`, in
+    /// microseconds.
+    time: Option<u64>,
 }
 
 impl Stamps {
-    /// Returns `max(u × 1000, p + 1)` for an entry of time `u` in
-    /// microseconds, `p` being the previous stamp; `u × 1000` for the first
-    /// entry. An entry without a usable time is stamped `p + 1`, or `now()`
-    /// as the first entry.
-    fn next(&mut self, realtime_us: Option<u64>, now: impl FnOnce() -> i64) -> i64 {
-        let time = realtime_us.and_then(|us| i64::try_from(us).ok()?.checked_mul(1000));
-        let stamp = match (time, self.previous) {
-            (Some(time), Some(previous)) => time.max(previous.saturating_add(1)),
-            (Some(time), None) => time,
-            (None, Some(previous)) => previous.saturating_add(1),
-            (None, None) => now(),
+    /// Returns the stamp of an entry of time `u` in microseconds, `p` being
+    /// the previous stamp and `u'` the previous entry's time:
+    /// `max(u × 1000, p + 1)` if `u > u'` or there is no `u'`, `u × 1000`
+    /// for the first entry, and `p + 1` if `u = u'`. Returns `None`, keeping
+    /// both, if `u < u'`: the clock stepped back, and the entry belongs on a
+    /// new stream.
+    ///
+    /// An entry without a usable time is stamped `p + 1`, or `now()` as the
+    /// first entry, and leaves `u'` as it is.
+    fn next(&mut self, realtime_us: Option<u64>, now: impl FnOnce() -> i64) -> Option<i64> {
+        let usable =
+            realtime_us.and_then(|us| Some((us, i64::try_from(us).ok()?.checked_mul(1000)?)));
+        let stamp = match (usable, self.time, self.previous) {
+            (Some((us, _)), Some(previous_us), _) if us < previous_us => return None,
+            (Some((us, _)), Some(previous_us), Some(previous)) if us == previous_us => {
+                previous.saturating_add(1)
+            }
+            (Some((_, time)), _, Some(previous)) => time.max(previous.saturating_add(1)),
+            (Some((_, time)), _, None) => time,
+            (None, _, Some(previous)) => previous.saturating_add(1),
+            (None, _, None) => now(),
         };
+        if let Some((us, _)) = usable {
+            self.time = Some(us);
+        }
         self.previous = Some(stamp);
-        stamp
+        Some(stamp)
     }
 }
 
@@ -380,10 +401,15 @@ impl JournalTask {
 
     /// Writes a batch of records on the stream, and then applies the
     /// position of the entries dropped after them.
+    ///
+    /// A record whose time steps back from the previous one's is held with
+    /// the rest of the batch: the records before it are written, the stream
+    /// is closed and replaced by a new one, and the held records are written
+    /// there, the held one first.
     async fn write(
         &mut self,
         control: &mut Control,
-        records: Vec<Record>,
+        mut records: Vec<Record>,
         after: Option<JournalPosition>,
     ) -> Result<(), Stopped> {
         if *self.stop.borrow() {
@@ -394,28 +420,73 @@ impl JournalTask {
         if control.unsaved.is_some() || control.due.is_some() || !self.sender.is_open() {
             return Ok(());
         }
-        let Some(last) = records.last().map(|record| record.position.clone()) else {
-            if let Some(after) = after {
-                self.acks.consumed(after);
+        while !records.is_empty() {
+            let mut events = Vec::with_capacity(records.len());
+            let mut last = None;
+            let mut held = Vec::new();
+            let mut rest = records.into_iter();
+            while let Some(record) = rest.next() {
+                let Some(stamp) = control.stamps.next(record.position.realtime_us, now_nanos)
+                else {
+                    held.push(record);
+                    held.extend(rest);
+                    break;
+                };
+                last = Some(record.position);
+                events.push((stamp, record.data));
             }
-            return Ok(());
-        };
-        let events = records
-            .into_iter()
-            .map(|record| {
-                let stamp = control.stamps.next(record.position.realtime_us, now_nanos);
-                (stamp, record.data)
-            })
-            .collect::<Vec<_>>();
-        self.acks.returned(last);
-        if self.sender.write(&events).await.is_err() {
-            self.recover(control).await?;
-            return Ok(());
+            if let Some(last) = last {
+                self.acks.returned(last);
+                if self.sender.write(&events).await.is_err() {
+                    self.recover(control).await?;
+                    return Ok(());
+                }
+            }
+            if !held.is_empty() && !self.switch(control).await? {
+                return Ok(());
+            }
+            records = held;
         }
         if let Some(after) = after {
             self.acks.consumed(after);
         }
         Ok(())
+    }
+
+    /// Replaces the stream after the host clock stepped back: closes it with
+    /// its close marker, waits until its close ACK is applied, and opens a
+    /// new stream on the same connection, which starts the stamps afresh.
+    /// The reader goes on meanwhile, held back by its channel.
+    ///
+    /// Returns `false` if the stream was recovered as a dropped one instead,
+    /// because the close ACK did not arrive or the new stream failed.
+    async fn switch(&mut self, control: &mut Control) -> Result<bool, Stopped> {
+        info!("Journal collector: the host clock stepped back; continuing on a new stream");
+        let close = self.sender.close().await;
+        if !matches!(close, Ok(CloseAck::Received)) {
+            warn!(
+                "Journal collector: closed the stream before a clock step back {}; reading \
+                 again from the last acknowledged entry",
+                stop_outcome(&close)
+            );
+            self.recover(control).await?;
+            return Ok(false);
+        }
+        // The close ACK reaches the queue through the ACK task; opening the
+        // new stream before it is applied would discard it.
+        tokio::select! {
+            biased;
+            () = stopped(&mut self.stop) => return Err(Stopped),
+            () = self.acks.emptied() => {}
+        }
+        let outcome = self.sender.open().await.map_err(|_| Stopped)?;
+        log_reconnect_outcome(outcome);
+        control.stamps = Stamps::default();
+        if self.sender.send_header().await.is_err() {
+            self.recover(control).await?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 }
 
