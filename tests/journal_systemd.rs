@@ -281,18 +281,42 @@ start = "beginning"
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    /// The journalctl processes the unit runs.
-    async fn journalctls(&self) -> Result<Vec<String>> {
+    /// The journalctl processes the unit runs, each with whether it follows
+    /// the journal.
+    async fn journalctls(&self) -> Result<Vec<(String, bool)>> {
         let cgroup = self.property("ControlGroup").await?;
         let procs = std::fs::read_to_string(format!("/sys/fs/cgroup{cgroup}/cgroup.procs"))?;
         let mut pids = Vec::new();
         for pid in procs.split_whitespace() {
             let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
             if comm.trim() == "journalctl" {
-                pids.push(pid.to_string());
+                let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+                let follows = cmdline
+                    .split(|&byte| byte == 0)
+                    .any(|arg| arg == b"--follow");
+                pids.push((pid.to_string(), follows));
             }
         }
         Ok(pids)
+    }
+
+    /// Waits until the unit's only journalctl follows the journal, and
+    /// returns the unit's journalctl processes. A catch-up journalctl also
+    /// reads entries written while it runs, so a marker can arrive before
+    /// catch-up ends and following starts.
+    async fn follower(&self) -> Result<Vec<(String, bool)>> {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let journalctls = self.journalctls().await?;
+            if matches!(journalctls.as_slice(), [(_, true)]) {
+                return Ok(journalctls);
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "timed out waiting until journalctl follows: {journalctls:?}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// The unit's own entries of its current invocation.
@@ -759,8 +783,7 @@ async fn a_vacuum_behind_back_pressure_is_reported_when_reading_resumes() -> Res
     host.settle("started").await?;
     let streams = host.giganto.streams_of(JOURNAL).len();
     let main_pid = host.property("MainPID").await?;
-    let journalctls = host.journalctls().await?;
-    assert_eq!(journalctls.len(), 1, "journalctl follows");
+    let journalctls = host.follower().await?;
 
     let pause = format!("pause-{token}");
     host.giganto.pause_reading_after(JOURNAL, &pause);
