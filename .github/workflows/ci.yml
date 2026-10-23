@@ -89,6 +89,30 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  journal-systemd:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install libraries
+        run: sudo apt-get install libhyperscan-dev libpcap-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - name: Ensure a persistent journal
+        run: |
+          sudo mkdir -p /var/log/journal
+          sudo systemd-tmpfiles --create --prefix /var/log/journal
+          sudo journalctl --flush
+      - name: Create the unit's system user
+        run: |
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin \
+            clumit-security-reproduce-test
+      - name: Run the systemd integration test
+        env:
+          JOURNAL_TEST_USER: clumit-security-reproduce-test
+        run: cargo test --test journal_systemd -- --ignored --test-threads=1 --show-output
+
   coverage:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'

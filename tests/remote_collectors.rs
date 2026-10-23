@@ -1,41 +1,22 @@
 //! Tests of the remote-mode collector runtime against an in-process
-//! Giganto-like QUIC server.
-//!
-//! The server completes giganto-client's handshake with a configurable
-//! version requirement, verifies client certificates against an rcgen CA,
-//! and reads every stream's record header and batches, decoding `Log` and
-//! `OpLog` records by the stream's header. It sends a data ACK
-//! for every record and the close ACK for every close marker, unless told to
-//! withhold the data ACKs or the close ACK, or to hold data ACKs back and send
-//! them later, and can stop reading a kind's streams, stop a stream or close a
-//! connection.
+//! Giganto-like QUIC server ([`support::giganto`]).
 
 mod support;
 
 use std::collections::HashSet;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use giganto_client::{
-    RawEventKind,
-    connection::server_handshake,
-    frame::recv_raw,
-    ingest::log::{Log, OpLog},
-    ingest::receive_record_header,
-};
-use quinn::{Endpoint, RecvStream, SendStream, VarInt};
 use reproduce::config::remote::{CollectorConfig, LogCollectorConfig, RemoteConfig, StartPosition};
 use reproduce::manager::{ConfigRuntime, TlsFiles};
 use reproduce::reload::ReloadSignal;
 use reproduce::runtime::CollectorRuntime;
-use reproduce::sender::CHANNEL_CLOSE_TIMESTAMP;
-use support::{Files, Identity, Logs, Pki, SERVER_NAME, server_config_trusting};
+use support::giganto::{GIGANTO_VERSION_REQ, Giganto, StreamRecord, Withhold, log_header};
+use support::{Files, Logs, Pki, SERVER_NAME};
 use tempfile::TempDir;
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
@@ -47,418 +28,6 @@ const WAIT: Duration = Duration::from_secs(30);
 const SETTLE: Duration = Duration::from_millis(1500);
 /// The runtime's deadline for closing streams.
 const CLOSE_DEADLINE: Duration = Duration::from_secs(15);
-/// The version requirement Giganto 0.31.0 accepts.
-const GIGANTO_VERSION_REQ: &str = ">=0.28.0";
-/// What the server keys the journal collector's stream by, in place of a
-/// kind; no log kind can contain `@`.
-const JOURNAL: &str = "@journal";
-
-/// Whose close ACKs the server withholds.
-#[derive(Clone, Debug, Default)]
-enum Withhold {
-    #[default]
-    Nothing,
-    All,
-    Kinds(HashSet<String>),
-}
-
-impl Withhold {
-    fn holds(&self, kind: Option<&str>) -> bool {
-        match self {
-            Self::Nothing => false,
-            Self::All => true,
-            Self::Kinds(kinds) => kind.is_some_and(|kind| kinds.contains(kind)),
-        }
-    }
-}
-
-/// One stream the server accepted.
-#[derive(Clone, Debug)]
-struct StreamRecord {
-    connection: usize,
-    header: u32,
-    accepted_at: Instant,
-    /// `(kind, line)` of every `Log` record received, and
-    /// `(JOURNAL, contents)` of every `OpLog` record.
-    records: Vec<(String, String)>,
-    /// Every `OpLog` record received.
-    op_logs: Vec<OpLog>,
-    /// The timestamp of every record received.
-    timestamps: Vec<i64>,
-    close_marker: bool,
-    /// How the stream ended, if it has.
-    ended: Option<String>,
-    stop: CancellationToken,
-}
-
-impl StreamRecord {
-    /// The kind of a `Log` stream, once a record arrived, or [`JOURNAL`]
-    /// for an `OpLog` stream.
-    fn kind(&self) -> Option<&str> {
-        if self.header == op_log_header() {
-            return Some(JOURNAL);
-        }
-        self.records.first().map(|(kind, _)| kind.as_str())
-    }
-
-    fn lines(&self) -> Vec<String> {
-        self.records.iter().map(|(_, line)| line.clone()).collect()
-    }
-}
-
-struct GigantoState {
-    version_req: Mutex<String>,
-    withhold: watch::Sender<Withhold>,
-    /// The kinds whose data ACKs are withheld; their records are still
-    /// stored.
-    withhold_acks: Mutex<HashSet<String>>,
-    /// When a connection failed before its Giganto handshake, as a TLS
-    /// refusal does.
-    refused: Mutex<Vec<Instant>>,
-    /// When a Giganto handshake was refused.
-    version_refused: Mutex<Vec<Instant>>,
-    connections: Mutex<Vec<quinn::Connection>>,
-    streams: Mutex<Vec<StreamRecord>>,
-    /// How many new streams to stop as soon as their header arrives.
-    stop_next: Mutex<usize>,
-    /// The data ACKs held back to be sent later.
-    hold: tokio::sync::Mutex<Hold>,
-    /// The send side of every stream, by its index, until it ends.
-    senders: Mutex<Vec<Option<Arc<tokio::sync::Mutex<SendStream>>>>>,
-    /// `(kind, line)`: the record after which the kind's streams are read
-    /// no further.
-    pause_after: Mutex<Option<(String, String)>>,
-    /// The kinds whose streams are read no further; their ACKs can still be
-    /// sent.
-    paused: watch::Sender<HashSet<String>>,
-}
-
-/// Data ACKs held back, sent later in order on their streams.
-#[derive(Default)]
-struct Hold {
-    kinds: HashSet<String>,
-    /// `(stream index, timestamp)`, oldest first.
-    acks: Vec<(usize, i64)>,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().expect("lock")
-}
-
-/// An in-process Giganto ingest server.
-struct Giganto {
-    addr: SocketAddr,
-    endpoint: Endpoint,
-    state: Arc<GigantoState>,
-    task: JoinHandle<()>,
-}
-
-impl Giganto {
-    fn start(pki: &Pki) -> Result<Self> {
-        let config = server_config_trusting(&pki.server, &pki.ca)?;
-        let endpoint =
-            Endpoint::server(config, SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
-        let addr = endpoint.local_addr()?;
-        let state = Arc::new(GigantoState {
-            version_req: Mutex::new(GIGANTO_VERSION_REQ.to_string()),
-            withhold: watch::channel(Withhold::Nothing).0,
-            withhold_acks: Mutex::new(HashSet::new()),
-            refused: Mutex::new(Vec::new()),
-            version_refused: Mutex::new(Vec::new()),
-            connections: Mutex::new(Vec::new()),
-            streams: Mutex::new(Vec::new()),
-            stop_next: Mutex::new(0),
-            hold: tokio::sync::Mutex::new(Hold::default()),
-            senders: Mutex::new(Vec::new()),
-            pause_after: Mutex::new(None),
-            paused: watch::channel(HashSet::new()).0,
-        });
-        let task = tokio::spawn(accept(endpoint.clone(), state.clone()));
-        Ok(Self {
-            addr,
-            endpoint,
-            state,
-            task,
-        })
-    }
-
-    /// Verifies client certificates against `client_ca` from now on.
-    fn trust(&self, server: &Identity, client_ca: &str) -> Result<()> {
-        self.endpoint
-            .set_server_config(Some(server_config_trusting(server, client_ca)?));
-        Ok(())
-    }
-
-    fn set_version_req(&self, version_req: &str) {
-        *lock(&self.state.version_req) = version_req.to_string();
-    }
-
-    fn withhold(&self, withhold: Withhold) {
-        self.state.withhold.send_replace(withhold);
-    }
-
-    /// Withholds the data ACKs of `kinds` from now on, and only theirs.
-    fn withhold_acks(&self, kinds: &[&str]) {
-        *lock(&self.state.withhold_acks) = kinds.iter().map(|kind| (*kind).to_string()).collect();
-    }
-
-    /// Holds back the data ACKs of `kinds` from now on, to be sent by
-    /// [`release_acks`](Self::release_acks).
-    async fn hold_acks(&self, kinds: &[&str]) {
-        self.state.hold.lock().await.kinds = kinds.iter().map(|kind| (*kind).to_string()).collect();
-    }
-
-    /// Sends every held data ACK, in order, on the stream it is for, and
-    /// holds nothing back any more.
-    async fn release_acks(&self) {
-        let mut hold = self.state.hold.lock().await;
-        hold.kinds.clear();
-        for (index, timestamp) in std::mem::take(&mut hold.acks) {
-            let send = lock(&self.state.senders)[index].clone();
-            if let Some(send) = send {
-                let _ = send.lock().await.write_all(&timestamp.to_be_bytes()).await;
-            }
-        }
-    }
-
-    /// Reads no further frame of the streams of `kind` once a frame with
-    /// the record `line` of `kind` was read, until
-    /// [`resume_reading`](Self::resume_reading). Held ACKs can still be
-    /// released meanwhile.
-    fn pause_reading_after(&self, kind: &str, line: &str) {
-        *lock(&self.state.pause_after) = Some((kind.to_string(), line.to_string()));
-    }
-
-    /// Reads every stream again.
-    fn resume_reading(&self) {
-        *lock(&self.state.pause_after) = None;
-        self.state.paused.send_replace(HashSet::new());
-    }
-
-    fn stop_next_streams(&self, count: usize) {
-        *lock(&self.state.stop_next) = count;
-    }
-
-    fn connections(&self) -> usize {
-        lock(&self.state.connections).len()
-    }
-
-    fn connection(&self, index: usize) -> quinn::Connection {
-        lock(&self.state.connections)[index].clone()
-    }
-
-    fn close_connections(&self) {
-        for connection in lock(&self.state.connections).iter() {
-            connection.close(0u32.into(), b"server-gone");
-        }
-    }
-
-    fn refused(&self) -> Vec<Instant> {
-        lock(&self.state.refused).clone()
-    }
-
-    fn version_refused(&self) -> Vec<Instant> {
-        lock(&self.state.version_refused).clone()
-    }
-
-    fn streams(&self) -> Vec<StreamRecord> {
-        lock(&self.state.streams).clone()
-    }
-
-    /// The streams whose records carry `kind`.
-    fn streams_of(&self, kind: &str) -> Vec<StreamRecord> {
-        self.streams()
-            .into_iter()
-            .filter(|stream| stream.kind() == Some(kind))
-            .collect()
-    }
-
-    /// Every line received for `kind`, in stream order.
-    fn lines(&self, kind: &str) -> Vec<String> {
-        self.streams_of(kind)
-            .iter()
-            .flat_map(StreamRecord::lines)
-            .collect()
-    }
-
-    /// Stops the latest stream carrying `kind`.
-    fn stop_stream_of(&self, kind: &str) -> Result<()> {
-        self.streams_of(kind)
-            .last()
-            .context("a stream carries the kind")?
-            .stop
-            .cancel();
-        Ok(())
-    }
-}
-
-impl Drop for Giganto {
-    fn drop(&mut self) {
-        self.task.abort();
-        self.endpoint.close(0u32.into(), b"stopped");
-    }
-}
-
-async fn accept(endpoint: Endpoint, state: Arc<GigantoState>) {
-    while let Some(incoming) = endpoint.accept().await {
-        tokio::spawn(serve(incoming, state.clone()));
-    }
-}
-
-async fn serve(incoming: quinn::Incoming, state: Arc<GigantoState>) {
-    let Ok(connection) = incoming.await else {
-        lock(&state.refused).push(Instant::now());
-        return;
-    };
-    let version_req = lock(&state.version_req).clone();
-    let handshake = server_handshake(&connection, &version_req).await;
-    if handshake.is_err() {
-        lock(&state.version_refused).push(Instant::now());
-        // Lets the refusal reach the client before the connection closes.
-        sleep(Duration::from_millis(100)).await;
-        return;
-    }
-    let index = {
-        let mut connections = lock(&state.connections);
-        connections.push(connection.clone());
-        connections.len() - 1
-    };
-    while let Ok((send, recv)) = connection.accept_bi().await {
-        tokio::spawn(read_stream(state.clone(), index, send, recv));
-    }
-}
-
-async fn read_stream(
-    state: Arc<GigantoState>,
-    connection: usize,
-    send: SendStream,
-    mut recv: RecvStream,
-) {
-    let mut header = [0_u8; 4];
-    if receive_record_header(&mut recv, &mut header).await.is_err() {
-        return;
-    }
-    let stop = CancellationToken::new();
-    let send = Arc::new(tokio::sync::Mutex::new(send));
-    let index = {
-        let mut streams = lock(&state.streams);
-        let mut senders = lock(&state.senders);
-        streams.push(StreamRecord {
-            connection,
-            header: u32::from_le_bytes(header),
-            accepted_at: Instant::now(),
-            records: Vec::new(),
-            op_logs: Vec::new(),
-            timestamps: Vec::new(),
-            close_marker: false,
-            ended: None,
-            stop: stop.clone(),
-        });
-        senders.push(Some(send.clone()));
-        streams.len() - 1
-    };
-    {
-        let mut stop_next = lock(&state.stop_next);
-        if *stop_next > 0 {
-            *stop_next -= 1;
-            stop.cancel();
-        }
-    }
-
-    let end = loop {
-        let kind = lock(&state.streams)[index].kind().map(str::to_string);
-        let mut paused = state.paused.subscribe();
-        let mut buf = Vec::new();
-        let read = tokio::select! {
-            read = async {
-                let _ = paused
-                    .wait_for(|paused| !kind.as_ref().is_some_and(|kind| paused.contains(kind)))
-                    .await;
-                recv_raw(&mut recv, &mut buf).await
-            } => read,
-            () = stop.cancelled() => {
-                let _ = recv.stop(VarInt::from_u32(0));
-                break "stopped".to_string();
-            }
-        };
-        if let Err(error) = read {
-            break format!("{error:?}");
-        }
-        let Ok(batch) = bincode::deserialize::<Vec<(i64, Vec<u8>)>>(&buf) else {
-            break "malformed batch".to_string();
-        };
-        for (timestamp, data) in batch {
-            if timestamp == CHANNEL_CLOSE_TIMESTAMP {
-                let kind = {
-                    let mut streams = lock(&state.streams);
-                    streams[index].close_marker = true;
-                    streams[index].kind().map(str::to_string)
-                };
-                let mut withhold = state.withhold.subscribe();
-                let _ = withhold
-                    .wait_for(|withhold| !withhold.holds(kind.as_deref()))
-                    .await;
-            } else if let Some((kind, line, op_log)) = decode(header, &data) {
-                let withheld = lock(&state.withhold_acks).contains(&kind);
-                state.pause_if_after(&kind, &line);
-                {
-                    let mut streams = lock(&state.streams);
-                    streams[index].timestamps.push(timestamp);
-                    streams[index].records.push((kind.clone(), line));
-                    streams[index].op_logs.extend(op_log);
-                }
-                if withheld {
-                    continue;
-                }
-                // Held under the lock, so a release sends every older ACK
-                // first.
-                let mut hold = state.hold.lock().await;
-                if hold.kinds.contains(&kind) {
-                    hold.acks.push((index, timestamp));
-                    continue;
-                }
-                let _ = send.lock().await.write_all(&timestamp.to_be_bytes()).await;
-                continue;
-            }
-            let _ = send.lock().await.write_all(&timestamp.to_be_bytes()).await;
-        }
-    };
-    lock(&state.streams)[index].ended = Some(end);
-    // Dropping the send side finishes the stream.
-    lock(&state.senders)[index] = None;
-}
-
-impl GigantoState {
-    /// Pauses reading the streams of `kind` if `line` of `kind` is the
-    /// record set by [`Giganto::pause_reading_after`].
-    fn pause_if_after(&self, kind: &str, line: &str) {
-        let mut pause_after = lock(&self.pause_after);
-        if pause_after
-            .as_ref()
-            .is_some_and(|(paused, after)| paused == kind && after == line)
-        {
-            *pause_after = None;
-            self.paused.send_modify(|paused| {
-                paused.insert(kind.to_string());
-            });
-        }
-    }
-}
-
-/// Decodes a record of a stream with `header` into its kind and line, and,
-/// for an `OpLog`, the record.
-fn decode(header: [u8; 4], data: &[u8]) -> Option<(String, String, Option<OpLog>)> {
-    if u32::from_le_bytes(header) == op_log_header() {
-        let op_log = bincode::deserialize::<OpLog>(data).ok()?;
-        return Some((JOURNAL.to_string(), op_log.contents.clone(), Some(op_log)));
-    }
-    let log = bincode::deserialize::<Log>(data).ok()?;
-    Some((
-        log.kind,
-        String::from_utf8_lossy(&log.log).into_owned(),
-        None,
-    ))
-}
 
 /// The log files of a test.
 struct LogFiles {
@@ -549,14 +118,6 @@ async fn wait_for_lines(giganto: &Giganto, kind: &str, lines: &[&str]) {
         lines.iter().all(|line| received.iter().any(|r| r == line))
     })
     .await;
-}
-
-fn log_header() -> u32 {
-    u32::from(RawEventKind::Log)
-}
-
-fn op_log_header() -> u32 {
-    u32::from(RawEventKind::OpLog)
 }
 
 /// The checkpoint file of `kind` in `state_dir`.
@@ -2431,6 +1992,7 @@ mod journal {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::support::giganto::{JOURNAL, op_log_header};
 
     const MACHINE_ID: &str = "0123456789abcdef0123456789abcdef";
     const SEQNUM_ID: &str = "fedcba9876543210fedcba9876543210";
@@ -2515,6 +2077,19 @@ mod journal {
                 .append(true)
                 .open(self.path("entries"))?;
             file.write_all(text.as_bytes())?;
+            Ok(())
+        }
+
+        /// Replaces the journal by `entries`, as a vacuum removing entries
+        /// does; a running journalctl keeps reading the replaced one.
+        fn rewrite(&self, entries: &[Value]) -> Result<()> {
+            let text = entries.iter().fold(String::new(), |mut text, entry| {
+                let _ = writeln!(text, "{entry}");
+                text
+            });
+            let new = self.path("entries.new");
+            std::fs::write(&new, text)?;
+            std::fs::rename(new, self.path("entries"))?;
             Ok(())
         }
 
@@ -3118,6 +2693,848 @@ mod journal {
                 "realtime_us": time(3),
             })
         );
+        Ok(())
+    }
+
+    /// The `n`th test entry, of the kept unit, written at `realtime_us`.
+    fn timed(n: u64, realtime_us: u64) -> Value {
+        entry_with(
+            n,
+            &json!({ "_SYSTEMD_UNIT": KEPT, "__REALTIME_TIMESTAMP": realtime_us.to_string() }),
+        )
+    }
+
+    /// The `n`th test entry, of the kept unit, without `field`.
+    fn without(n: u64, field: &str) -> Value {
+        let mut entry = entry(n, KEPT);
+        entry
+            .as_object_mut()
+            .expect("an object")
+            .remove(field)
+            .expect("the field");
+        entry
+    }
+
+    /// The `n`th test entry, of the kept unit, whose line is longer than
+    /// 1 MiB.
+    fn long(n: u64) -> Value {
+        entry_with(
+            n,
+            &json!({ "_SYSTEMD_UNIT": KEPT, "MESSAGE": "x".repeat(1024 * 1024) }),
+        )
+    }
+
+    /// The stamp of an entry written at `realtime_us`.
+    fn stamp(realtime_us: u64) -> i64 {
+        i64::try_from(realtime_us * 1000).expect("fits")
+    }
+
+    /// Asserts that the stamps of every journal stream strictly increase.
+    fn assert_increasing_stamps(giganto: &Giganto) {
+        for stream in giganto.streams_of(JOURNAL) {
+            assert!(
+                stream.timestamps.windows(2).all(|pair| pair[0] < pair[1]),
+                "{:?}",
+                stream.timestamps
+            );
+        }
+    }
+
+    /// The bytes process `pid` has written.
+    fn written(pid: u32) -> Result<u64> {
+        let io = std::fs::read_to_string(format!("/proc/{pid}/io"))?;
+        io.lines()
+            .find_map(|line| line.strip_prefix("wchar: "))
+            .context("a wchar line")?
+            .parse()
+            .context("a byte count")
+    }
+
+    /// Waits until the journal streams carry `count` records.
+    async fn wait_for_count(giganto: &Giganto, count: usize) {
+        wait_for(&format!("{count} journal records arrive"), WAIT, || {
+            giganto.lines(JOURNAL).len() >= count
+        })
+        .await;
+    }
+
+    /// What the lost-interval warning says of the entries at `a` and `b`.
+    const GAP: &str = "may be missing: removed before they were sent, or lost by journald";
+    const UNAVAILABLE: &str =
+        "journal sequence numbers are unavailable; the lost-interval check is skipped";
+
+    /// The time of the `n`th test entry as the lost-interval warning names
+    /// it.
+    fn named(n: u64) -> String {
+        format!("2023-11-14T22:13:20.{n:06}Z")
+    }
+
+    fn gap(a: &str, b: &str) -> String {
+        format!("journal entries between {a} and {b} {GAP}")
+    }
+
+    /// Saves a journal checkpoint at the `n`th test entry, with `seqnum`.
+    fn save_checkpoint(state_dir: &Path, n: u64, seqnum: Option<u64>) -> Result<()> {
+        std::fs::create_dir_all(state_dir.join("checkpoints"))?;
+        let record = json!({
+            "type": "journal",
+            "cursor": cursor(n),
+            "seqnum_id": SEQNUM_ID,
+            "seqnum": seqnum,
+            "realtime_us": time(n),
+        });
+        std::fs::write(journal_file(state_dir), format!("{record}\n"))?;
+        Ok(())
+    }
+
+    /// A journal collector reading a fake journalctl, and what it logs.
+    struct Run {
+        capture: Logs,
+        _guard: tracing::subscriber::DefaultGuard,
+        _pki: Pki,
+        giganto: Giganto,
+        _files: Files,
+        fake: Fake,
+        logs: LogFiles,
+        runtime: CollectorRuntime,
+    }
+
+    impl Run {
+        /// Starts the collector over `entries`, from a checkpoint at the
+        /// `n`th test entry with sequence number `seqnum` if `saved` is
+        /// `Some((n, seqnum))`.
+        async fn start(saved: Option<(u64, Option<u64>)>, entries: &[Value]) -> Result<Self> {
+            let (capture, guard) = Logs::capture();
+            let (pki, giganto, files) = setup()?;
+            let fake = Fake::new()?;
+            fake.push(entries)?;
+            let logs = LogFiles::new()?;
+            if let Some((n, seqnum)) = saved {
+                save_checkpoint(&logs.state(), n, seqnum)?;
+            }
+            let reload = ReloadSignal::new();
+            let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+            runtime.apply(journal_config(giganto.addr, &[])).await;
+            Ok(Self {
+                capture,
+                _guard: guard,
+                _pki: pki,
+                giganto,
+                _files: files,
+                fake,
+                logs,
+                runtime,
+            })
+        }
+
+        /// Waits until journalctl follows after its `runs`th run.
+        async fn wait_for_follow(&self, runs: usize) {
+            wait_for("journalctl follows", WAIT, || {
+                self.fake.args().len() == runs
+            })
+            .await;
+        }
+
+        /// Every lost-interval warning logged.
+        fn warnings(&self) -> Vec<String> {
+            self.capture
+                .text()
+                .lines()
+                .filter(|line| line.contains(GAP))
+                .map(|line| {
+                    assert!(line.contains("WARN"), "{line}");
+                    let start = line.find("journal entries between").expect("the wording");
+                    line[start..].to_string()
+                })
+                .collect()
+        }
+
+        /// How often the line about unavailable sequence numbers was logged.
+        fn unavailable(&self) -> usize {
+            let text = self.capture.text();
+            for line in text.lines().filter(|line| line.contains(UNAVAILABLE)) {
+                assert!(line.contains("INFO"), "{line}");
+            }
+            text.matches(UNAVAILABLE).count()
+        }
+
+        async fn shutdown(mut self) {
+            self.runtime.shutdown().await;
+        }
+    }
+
+    /// Starts the collector over `entries`, from `saved` (as in
+    /// [`Run::start`]), and returns the lost-interval warnings and the
+    /// number of lines about unavailable sequence numbers once the entry
+    /// `last` is acknowledged.
+    async fn check(
+        saved: Option<(u64, Option<u64>)>,
+        entries: &[Value],
+        last: u64,
+    ) -> Result<(Vec<String>, usize)> {
+        let run = Run::start(saved, entries).await?;
+        wait_for_cursor(&run.logs.state(), last).await;
+        let checked = (run.warnings(), run.unavailable());
+        run.shutdown().await;
+        Ok(checked)
+    }
+
+    #[tokio::test]
+    async fn a_clock_step_back_moves_to_a_new_stream_after_the_close_ack() -> Result<()> {
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        // The clock stepped back before entry 3, in the batch of entries 1
+        // to 4.
+        fake.push(&[
+            entry(1, KEPT),
+            entry(2, KEPT),
+            timed(3, time(1) - 1000),
+            timed(4, time(1) - 999),
+        ])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+        giganto.withhold(Withhold::Kinds(HashSet::from([JOURNAL.to_string()])));
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for("the first stream is closed", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .first()
+                .is_some_and(|stream| stream.close_marker)
+        })
+        .await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() == 2).await;
+        let follow = fake.last_pid();
+        // More entries than the reader's channel and journalctl's pipe hold
+        // wait behind the held one.
+        let later = (5..=10_004)
+            .map(|n| timed(n, time(1) + n))
+            .collect::<Vec<_>>();
+        fake.push(&later)?;
+        sleep(SETTLE).await;
+        let blocked = written(follow)?;
+        sleep(SETTLE).await;
+        assert_eq!(written(follow)?, blocked, "journalctl is held back");
+        let total = length(&fake.path("entries"));
+        assert!(blocked < total, "{blocked} of {total} bytes written");
+        let streams = giganto.streams_of(JOURNAL);
+        assert_eq!(streams.len(), 1, "the new stream waits for the close ACK");
+        assert_eq!(streams[0].lines(), messages(1..=2));
+
+        giganto.withhold(Withhold::Nothing);
+        wait_for_count(&giganto, 10_004).await;
+        let streams = giganto.streams_of(JOURNAL);
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams[0].lines(), messages(1..=2));
+        assert_eq!(streams[0].timestamps, [stamp(time(1)), stamp(time(2))]);
+        // The held entry opens the new stream with its own time, and the
+        // entries behind it follow, each once.
+        assert_eq!(streams[1].lines(), messages(3..=10_004));
+        assert_eq!(
+            streams[1].timestamps[..3],
+            [
+                stamp(time(1) - 1000),
+                stamp(time(1) - 999),
+                stamp(time(1) + 5)
+            ]
+        );
+        assert!(streams[1].ended.is_none());
+        assert_increasing_stamps(&giganto);
+        assert_eq!(fake.args().len(), 2, "journalctl went on");
+        assert!(running(follow));
+        assert_eq!(
+            logs_capture
+                .text()
+                .matches("the host clock stepped back")
+                .count(),
+            1
+        );
+        wait_for_cursor(&logs.state(), 10_004).await;
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_drop_of_the_new_stream_sends_the_held_entry_again() -> Result<()> {
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT)])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, 1..=2).await;
+        wait_for_cursor(&logs.state(), 2).await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() == 2).await;
+        giganto.hold_acks(&[JOURNAL]).await;
+        // The step back is the first record of its batch.
+        fake.push(&[timed(3, time(1) - 1000), timed(4, time(1) - 999)])?;
+        wait_for("the new stream carries the held entry", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .get(1)
+                .is_some_and(|stream| stream.lines() == messages(3..=4))
+        })
+        .await;
+        assert!(giganto.streams_of(JOURNAL)[0].close_marker);
+
+        // The new stream drops before the held entry is acknowledged.
+        giganto.stop_stream_of(JOURNAL)?;
+        wait_for("a third stream carries the held entry again", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .get(2)
+                .is_some_and(|stream| stream.lines() == messages(3..=4))
+        })
+        .await;
+        assert_eq!(fake.args()[2], format!("--after-cursor={}", cursor(2)));
+        giganto.release_acks().await;
+        wait_for_cursor(&logs.state(), 4).await;
+        // No entry of the old stream is sent again.
+        assert_eq!(giganto.lines(JOURNAL), messages([1, 2, 3, 4, 3, 4]));
+        assert_eq!(
+            giganto.streams_of(JOURNAL)[2].timestamps,
+            [stamp(time(1) - 1000), stamp(time(1) - 999)]
+        );
+        assert_increasing_stamps(&giganto);
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_clock_steps_back_in_a_row_open_a_stream_each() -> Result<()> {
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        let t = time(1);
+        fake.push(&[
+            timed(1, t),
+            timed(2, t - 100),
+            timed(3, t - 200),
+            timed(4, t - 150),
+        ])?;
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, 1..=4).await;
+        wait_for_cursor(&logs.state(), 4).await;
+        let streams = giganto.streams_of(JOURNAL);
+        let carried = streams
+            .iter()
+            .map(|stream| {
+                (
+                    stream.lines(),
+                    stream.timestamps.clone(),
+                    stream.close_marker,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            carried,
+            [
+                (messages([1]), vec![stamp(t)], true),
+                (messages([2]), vec![stamp(t - 100)], true),
+                (
+                    messages([3, 4]),
+                    vec![stamp(t - 200), stamp(t - 150)],
+                    false
+                ),
+            ]
+        );
+        assert_eq!(fake.args().len(), 2, "journalctl went on");
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    /// A step back without a close ACK: the collector rewinds to the last
+    /// data acknowledgement, and compares the first entry the rewind reads
+    /// with it.
+    #[tokio::test]
+    async fn a_missing_close_ack_rewinds_to_the_last_data_acknowledgement() -> Result<()> {
+        let run = Run::start(None, &[entry(1, KEPT), entry(2, KEPT)]).await?;
+        let (giganto, fake) = (&run.giganto, &run.fake);
+        wait_for_messages(giganto, 1..=2).await;
+        wait_for_cursor(&run.logs.state(), 2).await;
+        run.wait_for_follow(2).await;
+        giganto.hold_acks(&[JOURNAL]).await;
+        giganto.withhold(Withhold::Kinds(HashSet::from([JOURNAL.to_string()])));
+        fake.push(&[entry(3, KEPT)])?;
+        wait_for_messages(giganto, [3]).await;
+        let follow = fake.last_pid();
+        fake.push(&[timed(4, time(1) - 1000), timed(5, time(1) - 999)])?;
+        wait_for("the stream is closed", WAIT, || {
+            giganto.streams_of(JOURNAL)[0].close_marker
+        })
+        .await;
+        let closed = Instant::now();
+        // Entry 3, never acknowledged, is removed meanwhile.
+        fake.rewrite(&[
+            entry(1, KEPT),
+            entry(2, KEPT),
+            timed(4, time(1) - 1000),
+            timed(5, time(1) - 999),
+        ])?;
+
+        wait_for("a new stream opens", CLOSE_DEADLINE + WAIT, || {
+            giganto.streams_of(JOURNAL).len() == 2
+        })
+        .await;
+        let waited = closed.elapsed();
+        assert!(
+            waited + Duration::from_millis(500) >= CLOSE_DEADLINE,
+            "{waited:?}"
+        );
+        giganto.withhold(Withhold::Nothing);
+        giganto.release_acks().await;
+        wait_for_messages(giganto, [4, 5]).await;
+        assert!(!running(follow), "journalctl was stopped");
+        assert_eq!(fake.args()[2], format!("--after-cursor={}", cursor(2)));
+        let streams = giganto.streams_of(JOURNAL);
+        assert_eq!(streams[0].lines(), messages(1..=3));
+        assert_eq!(streams[1].lines(), messages([4, 5]));
+        assert_eq!(
+            streams[1].timestamps,
+            [stamp(time(1) - 1000), stamp(time(1) - 999)]
+        );
+        assert_increasing_stamps(giganto);
+        assert_eq!(
+            run.warnings(),
+            [gap(&named(2), "2023-11-14T22:13:19.999001Z")]
+        );
+        wait_for_cursor(&run.logs.state(), 5).await;
+
+        run.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn entries_without_a_usable_time_neither_switch_nor_move_the_previous_time() -> Result<()>
+    {
+        let t = time(1);
+        let run = Run::start(
+            None,
+            &[
+                entry(1, KEPT),
+                without(2, "__REALTIME_TIMESTAMP"),
+                entry_with(
+                    3,
+                    &json!({ "_SYSTEMD_UNIT": KEPT, "__REALTIME_TIMESTAMP": "soon" }),
+                ),
+                // Its time in nanoseconds does not fit an i64.
+                timed(4, u64::MAX / 1000),
+                // The previous usable time is entry 1's.
+                timed(5, t),
+                timed(6, t + 1),
+                timed(7, t - 1),
+            ],
+        )
+        .await?;
+        wait_for_cursor(&run.logs.state(), 7).await;
+        let streams = run.giganto.streams_of(JOURNAL);
+        assert_eq!(streams.len(), 2, "only entry 7 steps back");
+        assert_eq!(streams[0].lines(), messages(1..=6));
+        let first = stamp(t);
+        assert_eq!(
+            streams[0].timestamps,
+            [
+                first,
+                first + 1,
+                first + 2,
+                first + 3,
+                first + 4,
+                stamp(t + 1)
+            ]
+        );
+        assert_eq!(streams[1].timestamps, [stamp(t - 1)]);
+
+        run.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_gap_after_the_saved_cursor_warns_once() -> Result<()> {
+        let (warnings, unavailable) = check(
+            Some((0, Some(0))),
+            &[entry(0, KEPT), entry(3, KEPT), entry(4, KEPT)],
+            4,
+        )
+        .await?;
+        assert_eq!(
+            warnings,
+            ["journal entries between 2023-11-14T22:13:20.000000Z and \
+              2023-11-14T22:13:20.000003Z may be missing: removed before they were sent, \
+              or lost by journald"]
+        );
+        assert_eq!(unavailable, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contiguous_and_filtered_entries_do_not_warn() -> Result<()> {
+        // Contiguous.
+        let checked = check(
+            Some((2, Some(2))),
+            &[
+                entry(1, KEPT),
+                entry(2, KEPT),
+                entry(3, KEPT),
+                entry(4, KEPT),
+            ],
+            4,
+        )
+        .await?;
+        assert_eq!(checked, (vec![], 0));
+        // The first entry read is dropped; the first one kept is later.
+        let checked = check(
+            Some((2, Some(2))),
+            &[
+                entry(1, KEPT),
+                entry(2, KEPT),
+                entry(3, DROPPED),
+                entry(4, KEPT),
+            ],
+            4,
+        )
+        .await?;
+        assert_eq!(checked, (vec![], 0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn over_long_lines_count_as_entries_read() -> Result<()> {
+        // One skipped right after the cursor.
+        let checked = check(
+            Some((2, Some(2))),
+            &[entry(1, KEPT), entry(2, KEPT), long(3), entry(4, KEPT)],
+            4,
+        )
+        .await?;
+        assert_eq!(checked, (vec![], 0));
+        // Two skipped, and a real gap after them.
+        let checked = check(
+            Some((2, Some(2))),
+            &[
+                entry(1, KEPT),
+                entry(2, KEPT),
+                long(3),
+                long(4),
+                entry(7, KEPT),
+            ],
+            7,
+        )
+        .await?;
+        assert_eq!(checked, (vec![gap(&named(2), &named(7))], 0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_new_sequence_number_id_warns_once() -> Result<()> {
+        let other = "00000000000000000000000000000001";
+        let checked = check(
+            Some((2, Some(2))),
+            &[
+                entry(1, KEPT),
+                entry(2, KEPT),
+                entry_with(3, &json!({ "_SYSTEMD_UNIT": KEPT, "__SEQNUM_ID": other })),
+                entry_with(4, &json!({ "_SYSTEMD_UNIT": KEPT, "__SEQNUM_ID": other })),
+            ],
+            4,
+        )
+        .await?;
+        assert_eq!(checked, (vec![gap(&named(2), &named(3))], 0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_sequence_numbers_skip_the_check_with_a_line_per_run() -> Result<()> {
+        // On the first entry.
+        let checked = check(
+            Some((2, Some(2))),
+            &[
+                entry(1, KEPT),
+                entry(2, KEPT),
+                without(3, "__SEQNUM"),
+                entry(9, KEPT),
+            ],
+            9,
+        )
+        .await?;
+        assert_eq!(checked, (vec![], 1));
+        // On the saved position.
+        let checked = check(
+            Some((2, None)),
+            &[entry(1, KEPT), entry(2, KEPT), entry(5, KEPT)],
+            5,
+        )
+        .await?;
+        assert_eq!(checked, (vec![], 1));
+        // Two runs of skipped comparisons, with a comparison made between.
+        let checked = check(
+            Some((2, Some(2))),
+            &[
+                entry(1, KEPT),
+                entry(2, KEPT),
+                without(3, "__SEQNUM"),
+                without(4, "__SEQNUM_ID"),
+                entry(5, KEPT),
+                entry(6, KEPT),
+                without(7, "__SEQNUM"),
+            ],
+            7,
+        )
+        .await?;
+        assert_eq!(checked, (vec![], 2));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_largest_sequence_number_does_not_overflow() -> Result<()> {
+        let checked = check(
+            Some((2, Some(u64::MAX))),
+            &[
+                entry(1, KEPT),
+                entry(2, KEPT),
+                entry_with(
+                    3,
+                    &json!({ "_SYSTEMD_UNIT": KEPT, "__SEQNUM": u64::MAX.to_string() }),
+                ),
+            ],
+            3,
+        )
+        .await?;
+        assert_eq!(checked, (vec![], 0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_first_entry_without_a_checkpoint_is_not_compared() -> Result<()> {
+        let checked = check(None, &[entry(5, KEPT), entry(6, KEPT)], 6).await?;
+        assert_eq!(checked, (vec![], 0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn times_unknown_to_the_warning_are_named_so() -> Result<()> {
+        let checked = check(
+            None,
+            &[
+                without(1, "__REALTIME_TIMESTAMP"),
+                // Past what the warning's times represent.
+                timed(3, 300_000_000_000_000_000),
+                entry(5, KEPT),
+            ],
+            5,
+        )
+        .await?;
+        assert_eq!(
+            checked,
+            (
+                vec![
+                    gap("an unknown time", "an unknown time"),
+                    gap("an unknown time", &named(5)),
+                ],
+                0
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_start_position_is_compared_with_the_first_follow_entry() -> Result<()> {
+        // Catch-up reads nothing after the saved cursor.
+        let run = Run::start(Some((2, Some(2))), &[entry(1, KEPT), entry(2, KEPT)]).await?;
+        run.wait_for_follow(2).await;
+        run.fake.push(&[entry(5, KEPT)])?;
+        wait_for_cursor(&run.logs.state(), 5).await;
+        assert_eq!(run.warnings(), [gap(&named(2), &named(5))]);
+        run.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_last_catch_up_entry_is_compared_with_the_first_follow_entry() -> Result<()> {
+        let run = Run::start(None, &[entry(1, KEPT), entry(2, KEPT)]).await?;
+        run.wait_for_follow(2).await;
+        wait_for_cursor(&run.logs.state(), 2).await;
+        run.fake.push(&[entry(4, KEPT)])?;
+        wait_for_cursor(&run.logs.state(), 4).await;
+        assert_eq!(run.warnings(), [gap(&named(2), &named(4))]);
+        run.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_checkpoints_tail_is_compared_with_the_first_follow_entry() -> Result<()> {
+        let (capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT), entry(3, KEPT)])?;
+        let logs = LogFiles::new()?;
+        std::fs::create_dir(logs.state().join("checkpoints"))?;
+        std::fs::write(journal_file(&logs.state()), b"garbage")?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() == 3).await;
+        fake.push(&[entry(5, KEPT)])?;
+        wait_for_messages(&giganto, [5]).await;
+        let text = capture.text();
+        assert_eq!(text.matches(GAP).count(), 1, "{text}");
+        assert!(text.contains(&gap(&named(3), &named(5))), "{text}");
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_gap_later_in_the_same_follow_process_warns_once() -> Result<()> {
+        let run = Run::start(
+            Some((2, Some(2))),
+            &[entry(1, KEPT), entry(2, KEPT), entry(3, KEPT)],
+        )
+        .await?;
+        run.wait_for_follow(2).await;
+        wait_for_cursor(&run.logs.state(), 3).await;
+        assert_eq!(run.warnings(), Vec::<String>::new());
+        let follow = run.fake.last_pid();
+        run.fake
+            .push(&[entry(4, KEPT), entry(6, KEPT), entry(7, KEPT)])?;
+        wait_for_cursor(&run.logs.state(), 7).await;
+        assert_eq!(run.warnings(), [gap(&named(4), &named(6))]);
+        assert_eq!(run.fake.args().len(), 2, "journalctl was not restarted");
+        assert!(running(follow));
+        run.shutdown().await;
+        Ok(())
+    }
+
+    /// After a journalctl restart, the first entry is compared with the last
+    /// one read before it, and an over-long line read again is counted once.
+    #[tokio::test]
+    async fn a_journalctl_restart_compares_with_the_last_entry_read() -> Result<()> {
+        let run = Run::start(None, &[entry(1, KEPT), entry(2, KEPT)]).await?;
+        run.wait_for_follow(2).await;
+        run.fake.push(&[long(3)])?;
+        wait_for("the over-long line is skipped", WAIT, || {
+            run.capture.text().contains("skipped 1 journal entries")
+        })
+        .await;
+        let status = std::process::Command::new("kill")
+            .args(["-KILL", &run.fake.last_pid().to_string()])
+            .status()?;
+        assert!(status.success());
+        wait_for("journalctl follows again", WAIT, || {
+            run.fake.args().len() == 4
+        })
+        .await;
+        assert_eq!(
+            run.fake.args()[2..4],
+            [
+                format!("--after-cursor={}", cursor(2)),
+                format!("--follow --lines=all --after-cursor={}", cursor(2)),
+            ]
+        );
+        // Entry 4 is missing.
+        run.fake.push(&[entry(5, KEPT)])?;
+        wait_for_cursor(&run.logs.state(), 5).await;
+        assert_eq!(run.warnings(), [gap(&named(2), &named(5))]);
+        run.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_predecessor_is_kept_across_a_clock_step_switch() -> Result<()> {
+        let run = Run::start(None, &[entry(1, KEPT), entry(2, KEPT)]).await?;
+        run.wait_for_follow(2).await;
+        wait_for_cursor(&run.logs.state(), 2).await;
+        // Entry 4 is missing after the step back.
+        run.fake
+            .push(&[timed(3, time(1) - 1000), timed(5, time(1) - 999)])?;
+        wait_for_cursor(&run.logs.state(), 5).await;
+        assert_eq!(run.giganto.streams_of(JOURNAL).len(), 2);
+        assert_eq!(
+            run.warnings(),
+            [gap(
+                "2023-11-14T22:13:19.999001Z",
+                "2023-11-14T22:13:19.999002Z"
+            )]
+        );
+        run.shutdown().await;
+        Ok(())
+    }
+
+    /// A gap at the rewind after a stream drop warns once, also when a
+    /// second drop before any ACK replays it.
+    #[tokio::test]
+    async fn a_rewind_after_a_stream_drop_compares_its_start_position() -> Result<()> {
+        let run = Run::start(None, &[entry(1, KEPT), entry(2, KEPT)]).await?;
+        let (giganto, fake) = (&run.giganto, &run.fake);
+        run.wait_for_follow(2).await;
+        wait_for_cursor(&run.logs.state(), 2).await;
+        giganto.hold_acks(&[JOURNAL]).await;
+        // Entries 3 and 4 are removed while journalctl follows.
+        fake.rewrite(&[entry(1, KEPT), entry(2, KEPT), entry(5, KEPT)])?;
+        assert_eq!(run.warnings(), Vec::<String>::new());
+
+        giganto.stop_stream_of(JOURNAL)?;
+        wait_for("a new stream carries entry 5", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .get(1)
+                .is_some_and(|stream| stream.lines() == messages([5]))
+        })
+        .await;
+        assert_eq!(fake.args()[2], format!("--after-cursor={}", cursor(2)));
+        assert_eq!(run.warnings(), [gap(&named(2), &named(5))]);
+
+        // A second drop before any ACK reads the gap again.
+        giganto.stop_stream_of(JOURNAL)?;
+        wait_for("a third stream carries entry 5", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .get(2)
+                .is_some_and(|stream| stream.lines() == messages([5]))
+        })
+        .await;
+        assert_eq!(fake.args()[4], format!("--after-cursor={}", cursor(2)));
+        giganto.release_acks().await;
+        wait_for_cursor(&run.logs.state(), 5).await;
+        assert_eq!(run.warnings(), [gap(&named(2), &named(5))]);
+        run.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_gap_replayed_after_a_rewind_warns_once() -> Result<()> {
+        let run = Run::start(None, &[entry(1, KEPT), entry(2, KEPT), entry(3, KEPT)]).await?;
+        let (giganto, fake) = (&run.giganto, &run.fake);
+        run.wait_for_follow(2).await;
+        wait_for_cursor(&run.logs.state(), 3).await;
+        giganto.hold_acks(&[JOURNAL]).await;
+        fake.push(&[entry(4, KEPT), entry(7, KEPT)])?;
+        wait_for_messages(giganto, [4, 7]).await;
+        assert_eq!(run.warnings(), [gap(&named(4), &named(7))]);
+
+        giganto.stop_stream_of(JOURNAL)?;
+        wait_for("a new stream carries the entries again", WAIT, || {
+            giganto
+                .streams_of(JOURNAL)
+                .get(1)
+                .is_some_and(|stream| stream.lines() == messages([4, 7]))
+        })
+        .await;
+        assert_eq!(fake.args()[2], format!("--after-cursor={}", cursor(3)));
+        giganto.release_acks().await;
+        wait_for_cursor(&run.logs.state(), 7).await;
+        assert_eq!(run.warnings(), [gap(&named(4), &named(7))]);
+        run.shutdown().await;
         Ok(())
     }
 }

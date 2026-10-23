@@ -24,6 +24,8 @@ pub(super) struct Acks<P> {
     changed: Notify,
     /// Notified at every stream replacement.
     replaced: Notify,
+    /// Notified when an ACK leaves no entry queued.
+    emptied: Notify,
 }
 
 struct State<P> {
@@ -72,6 +74,7 @@ impl<P: Clone + PartialEq> Acks<P> {
             }),
             changed: Notify::new(),
             replaced: Notify::new(),
+            emptied: Notify::new(),
         }
     }
 
@@ -106,6 +109,23 @@ impl<P: Clone + PartialEq> Acks<P> {
     /// while nobody waits is kept for the next wait.
     pub(super) async fn changed(&self) {
         self.changed.notified().await;
+    }
+
+    /// Resolves once no entry is queued: at once if none is, or else when
+    /// an ACK acknowledges the last one.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(super) async fn emptied(&self) {
+        loop {
+            let notified = self.emptied.notified();
+            tokio::pin!(notified);
+            // Registered before the check, so an ACK applied in between is
+            // not missed.
+            notified.as_mut().enable();
+            if self.lock().entries.is_empty() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Returns the reader's current position.
@@ -249,6 +269,9 @@ impl<P: Clone + PartialEq> Acks<P> {
         let Some(last) = state.entries.drain(..count).last() else {
             return false;
         };
+        if state.entries.is_empty() {
+            self.emptied.notify_waiters();
+        }
         state.suspended = false;
         // Rule (a).
         let position = match &state.current {
@@ -315,6 +338,32 @@ mod tests {
         write(&acks, 40, "d");
         assert!(ack(&acks, receiver, CHANNEL_CLOSE_TIMESTAMP));
         assert_eq!(acks.acknowledged(), Some("d"));
+    }
+
+    #[tokio::test]
+    async fn emptied_waits_until_an_ack_leaves_nothing_queued() {
+        let (acks, receiver) = acks();
+        acks.opened("0");
+        // Nothing queued: it resolves at once.
+        acks.emptied().await;
+
+        write(&acks, 10, "a");
+        write(&acks, 20, "b");
+        let acks = std::sync::Arc::new(acks);
+        let waiter = tokio::spawn({
+            let acks = acks.clone();
+            async move { acks.emptied().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(ack(&acks, receiver, 10));
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "an entry is still queued");
+        assert!(ack(&acks, receiver, CHANNEL_CLOSE_TIMESTAMP));
+        tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("resolved")
+            .expect("the waiter ran");
+        assert_eq!(acks.acknowledged(), Some("b"));
     }
 
     #[test]

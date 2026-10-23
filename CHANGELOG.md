@@ -13,7 +13,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   oldest entry at its first start and from its saved journal cursor afterwards,
   and sends the entries of Clumit Security's own units and containers, selected
   only by fields journald sets itself, to Giganto as operational logs. REproduce
-  needs read access to the system journal, through group `adm`.
+  needs read access to the system journal, through group `adm`. Entries keep
+  their own times when the host clock steps back, and the collector warns when
+  journal entries may have been lost before they were sent.
 
 ### Changed
 
