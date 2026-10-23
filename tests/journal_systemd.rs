@@ -19,7 +19,7 @@
 
 mod support;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Output;
@@ -48,6 +48,10 @@ const WAIT: Duration = Duration::from_secs(120);
 const SETTLE: Duration = Duration::from_secs(3);
 /// What ends the lost-interval warning.
 const GAP: &str = "may be missing: removed before they were sent, or lost by journald";
+/// What the binary logs when it starts journalctl again after a failure.
+const SUPERVISION: &str = "starting journalctl again";
+/// The failure of journalctl ending by itself.
+const JOURNALCTL_ENDED: &str = "journalctl ended with";
 /// What the binary logs when it cannot read the system journal.
 const ACCESS_ERROR: &str = "cannot read the system journal; is the unit in group adm?";
 
@@ -331,6 +335,18 @@ start = "beginning"
             .collect())
     }
 
+    /// The messages of the unit's own entries of its current invocation
+    /// that contain `part`.
+    async fn own_messages(&self, invocation: &str, part: &str) -> Result<Vec<String>> {
+        Ok(self
+            .own_entries(invocation)
+            .await?
+            .iter()
+            .filter_map(|entry| text(entry, "MESSAGE"))
+            .filter(|message| message.contains(part))
+            .collect())
+    }
+
     /// The name of the next test unit.
     fn next_unit(&self) -> String {
         let n = self.units.fetch_add(1, Ordering::SeqCst);
@@ -557,9 +573,8 @@ fn assert_own_priorities(own: &[Value]) -> Result<()> {
     Ok(())
 }
 
-/// Asserts the wording of a lost-interval warning: two RFC 3339 UTC times
-/// with microseconds.
-fn assert_wording(contents: &str) {
+/// The two times of a lost-interval warning, as written.
+fn warning_times(contents: &str) -> (&str, &str) {
     let start = contents
         .find("journal entries between ")
         .unwrap_or_else(|| panic!("the wording: {contents}"));
@@ -568,6 +583,54 @@ fn assert_wording(contents: &str) {
     let b = rest
         .strip_suffix(&format!(" {GAP}"))
         .unwrap_or_else(|| panic!("the wording: {contents}"));
+    (a, b)
+}
+
+/// The interval a lost-interval warning reports, in microseconds since the
+/// epoch, both ends included.
+fn interval(contents: &str) -> Result<(i64, i64)> {
+    let (a, b) = warning_times(contents);
+    let parse = |time: &str| {
+        time.parse::<jiff::Timestamp>()
+            .map(jiff::Timestamp::as_microsecond)
+            .with_context(|| format!("a time in {contents}"))
+    };
+    Ok((parse(a)?, parse(b)?))
+}
+
+/// Asserts that every line `missing` lies in an interval one of `warnings`
+/// reports, by the time `written_at` holds for it.
+fn assert_covered(
+    missing: &[&String],
+    written_at: &HashMap<String, i64>,
+    warnings: &[Received],
+) -> Result<()> {
+    let intervals = warnings
+        .iter()
+        .map(|warning| interval(&warning.op_log.contents))
+        .collect::<Result<Vec<_>>>()?;
+    let uncovered = missing
+        .iter()
+        .filter(|line| {
+            written_at
+                .get(**line)
+                .is_none_or(|at| !intervals.iter().any(|(from, to)| (from..=to).contains(&at)))
+        })
+        .map(|line| line.split(' ').next().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(
+        uncovered.is_empty(),
+        "{} entries missing outside the reported intervals {intervals:?}, such as {:?}",
+        uncovered.len(),
+        &uncovered[..uncovered.len().min(10)]
+    );
+    Ok(())
+}
+
+/// Asserts the wording of a lost-interval warning: two RFC 3339 UTC times
+/// with microseconds.
+fn assert_wording(contents: &str) {
+    let (a, b) = warning_times(contents);
     for time in [a, b] {
         let bytes = time.as_bytes();
         assert_eq!(bytes.len(), 27, "{time}");
@@ -736,6 +799,8 @@ async fn a_vacuum_past_the_saved_cursor_warns_once() -> Result<()> {
         .collect::<Vec<_>>();
     assert_eq!(gaps.len(), 1, "{gaps:?}");
     assert_eq!(text(gaps[0], "PRIORITY").as_deref(), Some("4"));
+    let message = field(gaps[0], "MESSAGE").context("a message")?;
+    assert!(!message.contains(&0x1b), "{}", gaps[0]);
 
     host.stop().await?;
     Ok(())
@@ -768,8 +833,10 @@ async fn a_vacuum_during_a_giganto_outage_warns_once_at_the_reconnect() -> Resul
 
 /// The server stops reading the journal stream, so that the collector and
 /// journalctl are held back, while a rotation and a vacuum remove entries
-/// journalctl has not read yet; then it reads again. The unit, journalctl
-/// and the stream stay alive throughout.
+/// journalctl has not read yet; then it reads again. The unit and the stream
+/// stay alive throughout. journalctl may end by itself meanwhile, and is
+/// then started again by the collector's supervision; every entry missing
+/// lies in an interval a lost-interval warning reports.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs systemd, sudo and a persistent journal; run by CI's journal-systemd job"]
 async fn a_vacuum_behind_back_pressure_is_reported_when_reading_resumes() -> Result<()> {
@@ -780,23 +847,32 @@ async fn a_vacuum_behind_back_pressure_is_reported_when_reading_resumes() -> Res
     let host = Host::new().await?;
     let token = host.token.clone();
     host.start(true).await?;
+    let invocation = host.property("InvocationID").await?;
     host.settle("started").await?;
     let streams = host.giganto.streams_of(JOURNAL).len();
     let main_pid = host.property("MainPID").await?;
-    let journalctls = host.follower().await?;
+    let journalctl = host.follower().await?.remove(0).0;
 
     let pause = format!("pause-{token}");
     host.giganto.pause_reading_after(JOURNAL, &pause);
     host.write(std::slice::from_ref(&pause)).await?;
     host.wait_for_lines(std::slice::from_ref(&pause)).await?;
     // More than the stream's flow-control window, the reader's channel and
-    // journalctl's pipe hold.
+    // journalctl's pipe hold. The time of each entry is taken while the
+    // journal still holds it.
     let first = format!("bulk-{token}-a");
     let second = format!("bulk-{token}-b");
-    host.write_many(&first, PER_UNIT).await?;
-    sudo(&["journalctl", "--rotate"]).await?;
-    host.write_many(&second, PER_UNIT).await?;
-    sudo(&["journalctl", "--rotate"]).await?;
+    let mut written_at = HashMap::new();
+    for prefix in [&first, &second] {
+        let unit = host.write_many(prefix, PER_UNIT).await?;
+        for entry in host.entries(&unit).await? {
+            let realtime = text(&entry, "__REALTIME_TIMESTAMP")
+                .context("a time")?
+                .parse::<i64>()?;
+            written_at.insert(text(&entry, "MESSAGE").context("a message")?, realtime);
+        }
+        sudo(&["journalctl", "--rotate"]).await?;
+    }
     sudo(&["journalctl", "--vacuum-files=1"]).await?;
     let bulk = format!("bulk-{token}-");
     let held = host
@@ -810,11 +886,11 @@ async fn a_vacuum_behind_back_pressure_is_reported_when_reading_resumes() -> Res
     // warning then follows; a second marker follows the warning.
     host.settle("settled").await?;
 
-    assert_eq!(host.property("MainPID").await?, main_pid, "the unit runs");
-    assert_eq!(host.journalctls().await?, journalctls, "journalctl runs");
-    let journal = host.giganto.streams_of(JOURNAL);
-    assert_eq!(journal.len(), streams, "the stream is kept");
-    assert!(journal.last().is_some_and(|stream| stream.ended.is_none()));
+    // What happened, printed before any check so that a failing run shows
+    // it too.
+    let now = host.journalctls().await?;
+    let replaced = !matches!(now.as_slice(), [(pid, true)] if *pid == journalctl);
+    let about_journalctl = host.own_messages(&invocation, "journalctl").await?;
     let received = host.received_lines().into_iter().collect::<HashSet<_>>();
     let pad = "x".repeat(1000);
     let written = [&first, &second]
@@ -827,16 +903,38 @@ async fn a_vacuum_behind_back_pressure_is_reported_when_reading_resumes() -> Res
     let missing = written
         .iter()
         .filter(|line| !received.contains(*line))
-        .count();
-    let warnings = host.warnings_after(&pause).len();
+        .collect::<Vec<_>>();
+    let warnings = host.warnings_after(&pause);
     eprintln!(
-        "back pressure: {held} test lines received while held back; {missing} of {} entries \
-         missing; {warnings} lost-interval warnings",
-        written.len()
+        "back pressure: {held} test lines received while held back; {} of {} entries \
+         missing; {} lost-interval warnings; journalctl replaced: {replaced} \
+         ({journalctl} before the pause, {now:?} now); the unit's entries about \
+         journalctl: {about_journalctl:?}",
+        missing.len(),
+        written.len(),
+        warnings.len()
     );
-    if missing > 0 {
-        assert!(warnings >= 1, "{missing} entries missing without a warning");
+
+    // What the binary controls: the unit and the stream.
+    assert_eq!(host.property("MainPID").await?, main_pid, "the unit runs");
+    let journal = host.giganto.streams_of(JOURNAL);
+    assert_eq!(journal.len(), streams, "the stream is kept");
+    assert!(journal.last().is_some_and(|stream| stream.ended.is_none()));
+    // journalctl follows again, and was replaced, if at all, only because
+    // it ended by itself.
+    let follower = host.follower().await?.remove(0).0;
+    let supervision = host.own_messages(&invocation, SUPERVISION).await?;
+    for line in &supervision {
+        assert!(
+            line.contains(JOURNALCTL_ENDED),
+            "journalctl started again for another reason: {line}"
+        );
     }
+    assert!(
+        follower == journalctl || !supervision.is_empty(),
+        "journalctl {journalctl} was replaced by {follower} without the supervision warning"
+    );
+    assert_covered(&missing, &written_at, &warnings)?;
 
     host.stop().await?;
     Ok(())
