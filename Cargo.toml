@@ -24,13 +24,19 @@ byteorder = "1"
 bytesize = "2"
 config = { version = "0.15", features = ["toml"], default-features = false }
 csv = "1"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.28.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "7c0baab56f8226e9cd43e110e028c12330be3d6d" }
 jiff = { version = "0.2", features = ["serde"] }
 libc = "0.2"
 num-traits = "0.2"
 num_enum = "0.7"
 pcap = { version = "2", optional = true }
-quinn = { version = "0.11", features = ["ring"] }
+quinn = { version = "0.11", default-features = false, features = [
+    "platform-verifier",
+    "runtime-tokio",
+    "rustls-aws-lc-rs",
+    "bloom",
+    "log",
+] }
 rayon = "1"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = [
@@ -41,7 +47,7 @@ review-protocol = { git = "https://github.com/aicers/review-protocol.git", tag =
     "client",
 ] }
 rustls = { version = "0.23", default-features = false, features = [
-    "ring",
+    "aws_lc_rs",
     "std",
 ] }
 rustls-pemfile = "2.0"
@@ -63,7 +69,11 @@ chrono = "0.4"
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
-rcgen = { version = "0.14", features = ["x509-parser"] }
+rcgen = { version = "0.14", default-features = false, features = [
+    "aws_lc_rs",
+    "pem",
+    "x509-parser",
+] }
 review-protocol = { git = "https://github.com/aicers/review-protocol.git", tag = "0.23.0", features = [
     "server",
 ] }

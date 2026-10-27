@@ -19,7 +19,7 @@
 //!
 //! On Linux, a configuration may also hold one journal collector, which reads
 //! the host's systemd journal and sends Clumit Security's own entries as
-//! Giganto `OpLog` records on a stream of its own (see [`journal`]).
+//! Giganto `OpLog` records on a stream of its own (see the `journal` module).
 
 mod acks;
 mod checkpoints;

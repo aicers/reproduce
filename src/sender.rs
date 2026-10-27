@@ -15,7 +15,11 @@ mod test_support;
 use std::{fs, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use anyhow::Error as AnyhowError;
-use giganto_client::{RawEventKind, connection::client_handshake, frame::SendError};
+use giganto_client::{
+    RawEventKind,
+    connection::{HandshakeError, client_handshake},
+    frame::SendError,
+};
 use quinn::{Connection, Endpoint, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use thiserror::Error;
@@ -113,7 +117,7 @@ pub enum SenderError {
     Connection(#[source] quinn::ConnectionError),
 
     #[error("Giganto handshake failed")]
-    Handshake(#[source] AnyhowError),
+    Handshake(#[source] HandshakeError),
 
     #[error("failed to read (cert, key) file. cert_path:{cert}, key_path:{key}")]
     ReadIdentity {
@@ -317,7 +321,7 @@ async fn connect_and_handshake(
         connect_with_retry(endpoint, server_addr, server_name, timeout_policy, token).await?;
     tokio::select! {
         result = client_handshake(&conn, REQUIRED_GIGANTO_VERSION) => {
-            result.map_err(|source| SenderError::Handshake(source.into()))?;
+            result.map_err(SenderError::Handshake)?;
         }
         () = token.cancelled() => return Err(SenderError::Cancelled),
     }
@@ -453,9 +457,8 @@ fn build_client_config(
     cert_chain: Vec<CertificateDer<'static>>,
     private_key: PrivateKeyDer<'static>,
 ) -> std::result::Result<quinn::ClientConfig, SenderError> {
-    // The provider is explicit because review-protocol compiles in the
-    // aws-lc-rs provider next to ring, which leaves no process-level default.
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    // Select the same provider as the Manager connection explicitly.
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let client_crypto = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(|source| SenderError::context("unsupported TLS protocol versions", source))?
@@ -1168,12 +1171,9 @@ mod tests {
 
         server_result.expect("server handshake task should complete");
         let err = sender_result.expect_err("incompatible handshake must fail sender creation");
-        let SenderError::Handshake(handshake_source) = &err else {
+        let SenderError::Handshake(handshake_err) = &err else {
             panic!("sender creation should fail with a handshake error, got {err:?}");
         };
-        let handshake_err = handshake_source
-            .downcast_ref::<HandshakeError>()
-            .expect("sender creation error should preserve the handshake error type");
         assert!(
             matches!(
                 handshake_err,
@@ -1229,12 +1229,9 @@ mod tests {
 
         server_result.expect("server reconnect task should complete");
         let err = reconnect_result.expect_err("incompatible reconnect handshake must fail");
-        let SenderError::Handshake(handshake_source) = err.root() else {
+        let SenderError::Handshake(handshake_err) = err.root() else {
             panic!("reconnect should fail with a handshake error, got {err:?}");
         };
-        let handshake_err = handshake_source
-            .downcast_ref::<HandshakeError>()
-            .expect("reconnect error should preserve the handshake error type");
         assert!(
             matches!(
                 handshake_err,
@@ -1533,7 +1530,7 @@ mod tests {
                 .context("should add CA cert to client verifier")?;
         }
 
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let client_verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(client_roots),
             provider.clone(),
@@ -1617,7 +1614,7 @@ mod tests {
             .context("leaf key PEM should parse")?
             .context("leaf key PEM should contain a key")?;
 
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .context("TLS protocol versions should be supported")?
@@ -1771,7 +1768,7 @@ mod tests {
             .context("fixture certificate chain should parse")?;
         let server_root =
             to_root_cert(&[root_path]).context("fixture root certificate should load")?;
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let client_crypto = rustls::ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .context("TLS protocol versions should be supported")?
