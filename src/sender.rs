@@ -15,11 +15,7 @@ mod test_support;
 use std::{fs, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use anyhow::Error as AnyhowError;
-use giganto_client::{
-    RawEventKind,
-    connection::{HandshakeError, client_handshake},
-    frame::SendError,
-};
+use giganto_client::{RawEventKind, connection::client_handshake, frame::SendError};
 use quinn::{Connection, Endpoint, TransportConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use thiserror::Error;
@@ -117,7 +113,7 @@ pub enum SenderError {
     Connection(#[source] quinn::ConnectionError),
 
     #[error("Giganto handshake failed")]
-    Handshake(#[source] HandshakeError),
+    Handshake(#[source] AnyhowError),
 
     #[error("failed to read (cert, key) file. cert_path:{cert}, key_path:{key}")]
     ReadIdentity {
@@ -321,7 +317,7 @@ async fn connect_and_handshake(
         connect_with_retry(endpoint, server_addr, server_name, timeout_policy, token).await?;
     tokio::select! {
         result = client_handshake(&conn, REQUIRED_GIGANTO_VERSION) => {
-            result.map_err(SenderError::Handshake)?;
+            result.map_err(|source| SenderError::Handshake(source.into()))?;
         }
         () = token.cancelled() => return Err(SenderError::Cancelled),
     }
@@ -457,7 +453,8 @@ fn build_client_config(
     cert_chain: Vec<CertificateDer<'static>>,
     private_key: PrivateKeyDer<'static>,
 ) -> std::result::Result<quinn::ClientConfig, SenderError> {
-    // Select the same provider as the Manager connection explicitly.
+    // Pin aws-lc-rs explicitly so this connection never depends on the
+    // process-level default provider.
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let client_crypto = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -1171,9 +1168,12 @@ mod tests {
 
         server_result.expect("server handshake task should complete");
         let err = sender_result.expect_err("incompatible handshake must fail sender creation");
-        let SenderError::Handshake(handshake_err) = &err else {
+        let SenderError::Handshake(handshake_source) = &err else {
             panic!("sender creation should fail with a handshake error, got {err:?}");
         };
+        let handshake_err = handshake_source
+            .downcast_ref::<HandshakeError>()
+            .expect("sender creation error should preserve the handshake error type");
         assert!(
             matches!(
                 handshake_err,
@@ -1229,9 +1229,12 @@ mod tests {
 
         server_result.expect("server reconnect task should complete");
         let err = reconnect_result.expect_err("incompatible reconnect handshake must fail");
-        let SenderError::Handshake(handshake_err) = err.root() else {
+        let SenderError::Handshake(handshake_source) = err.root() else {
             panic!("reconnect should fail with a handshake error, got {err:?}");
         };
+        let handshake_err = handshake_source
+            .downcast_ref::<HandshakeError>()
+            .expect("reconnect error should preserve the handshake error type");
         assert!(
             matches!(
                 handshake_err,
