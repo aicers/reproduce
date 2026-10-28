@@ -4,6 +4,16 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- REproduce now prefers the hybrid post-quantum key exchange X25519MLKEM768
+  on its connections to Giganto and the Central Manager, so they use it
+  instead of X25519. A peer that does not support it is still reached with
+  X25519, without an extra round trip. Connections to Elasticsearch are
+  unchanged.
+
 ## [0.27.0] - 2026-10-23
 
 ### Added
@@ -608,6 +618,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.27.0...main
 [0.27.0]: https://github.com/aicers/reproduce/compare/0.26.0...0.27.0
 [0.26.0]: https://github.com/aicers/reproduce/compare/0.25.1...0.26.0
 [0.25.1]: https://github.com/aicers/reproduce/compare/0.25.0...0.25.1
