@@ -107,7 +107,7 @@ pub fn server_config(pki: &Pki) -> Result<quinn::ServerConfig> {
 }
 
 /// Builds a server configuration presenting `server` and verifying client
-/// certificates against `client_ca`, with the ring provider.
+/// certificates against `client_ca`, with the aws-lc-rs provider.
 pub fn server_config_trusting(server: &Identity, client_ca: &str) -> Result<quinn::ServerConfig> {
     let certs = rustls_pemfile::certs(&mut server.cert.as_bytes())
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -117,7 +117,7 @@ pub fn server_config_trusting(server: &Identity, client_ca: &str) -> Result<quin
     for cert in rustls_pemfile::certs(&mut client_ca.as_bytes()) {
         roots.add(cert?)?;
     }
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
         Arc::new(roots),
         provider.clone(),

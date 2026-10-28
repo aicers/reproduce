@@ -453,9 +453,9 @@ fn build_client_config(
     cert_chain: Vec<CertificateDer<'static>>,
     private_key: PrivateKeyDer<'static>,
 ) -> std::result::Result<quinn::ClientConfig, SenderError> {
-    // The provider is explicit because review-protocol compiles in the
-    // aws-lc-rs provider next to ring, which leaves no process-level default.
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    // Pin aws-lc-rs explicitly so this connection never depends on the
+    // process-level default provider.
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let client_crypto = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(|source| SenderError::context("unsupported TLS protocol versions", source))?
@@ -1533,7 +1533,7 @@ mod tests {
                 .context("should add CA cert to client verifier")?;
         }
 
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let client_verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(client_roots),
             provider.clone(),
@@ -1617,7 +1617,7 @@ mod tests {
             .context("leaf key PEM should parse")?
             .context("leaf key PEM should contain a key")?;
 
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .context("TLS protocol versions should be supported")?
@@ -1771,7 +1771,7 @@ mod tests {
             .context("fixture certificate chain should parse")?;
         let server_root =
             to_root_cert(&[root_path]).context("fixture root certificate should load")?;
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let client_crypto = rustls::ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .context("TLS protocol versions should be supported")?

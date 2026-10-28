@@ -58,7 +58,7 @@ fn build_server_endpoint() -> Result<(Endpoint, SocketAddr)> {
     let cert_chain = load_cert_chain(&fixture_path("tests/cert.pem"))?;
     let private_key = load_private_key(&fixture_path("tests/key.pem"))?;
 
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .context("TLS protocol versions should be supported")?
@@ -243,7 +243,7 @@ fn spawn_reproduce(config_path: &Path) -> Result<(Child, ChildNotifications)> {
 }
 
 async fn run_signal_scenario(termination_signal: libc::c_int) -> Result<()> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let (server_endpoint, server_addr) = build_server_endpoint()?;
     let server_task = spawn_test_server(server_endpoint);
@@ -362,7 +362,7 @@ fn build_rotating_server_config(pki: &ServerPki) -> Result<quinn::ServerConfig> 
     let private_key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut &*key_bytes)
         .context("server key PEM should parse")?
         .context("server key PEM contained no key")?;
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let server_crypto = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .context("TLS protocol versions should be supported")?
@@ -469,7 +469,7 @@ fn rotate_file(target: &Path, new_contents: &str) -> Result<()> {
 ///    reconnect to the now-v2 server would fail certificate verification.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sighup_reload_uses_rotated_tls_on_next_reconnect() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let pki_v1 = generate_server_pki(TEST_SERVER_NAME).expect("PKI v1 should generate");
     let pki_v2 = generate_server_pki(TEST_SERVER_NAME).expect("PKI v2 should generate");
