@@ -619,6 +619,17 @@ mod tests {
         );
     }
 
+    /// `build_client_config`, and review-protocol's client for the Central
+    /// Manager, both build their TLS configuration from this provider.
+    #[test]
+    fn client_provider_offers_hybrid_post_quantum_key_exchange_first() {
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        assert_eq!(
+            provider.kx_groups.first().map(|group| group.name()),
+            Some(rustls::NamedGroup::X25519MLKEM768),
+        );
+    }
+
     #[test]
     fn create_endpoint_rejects_missing_certificate_files() {
         let err = create_endpoint("missing-cert.pem", "missing-key.pem", &[])
