@@ -17,6 +17,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # `docs` lists the inert files, the shared-instructions pin among them:
+      # it changes no build or test, and the ungated drift step checks it.
+      # `all` matches every path, so the decision below can tell whether
+      # every changed path is docs.
       - name: Filter Paths
         id: filter
         uses: dorny/paths-filter@v4
@@ -27,18 +31,33 @@ jobs:
               - "**/*.md"
               - "mkdocs.yml"
               - ".markdownlint*"
+              - ".agent-instructions.toml"
             code:
               - "src/**"
               - "tests/**"
               - "scripts/**"
               - "Cargo.toml"
               - "Cargo.lock"
+              - ".clippy.toml"
               - ".github/workflows/**"
+            all:
+              - "**"
 
+      # Docs-only requires every changed path to be on `docs` (the counts
+      # match) and none on `code`, so a `.md` under `src/` is code. A path on
+      # neither list counts as code: without the count check, a
+      # `.clippy.toml` edit next to a README edit skipped every Rust job. A
+      # failed filter leaves the outputs empty, which lands on false.
       - name: Decide Docs-Only
         id: decide
+        env:
+          DOCS: ${{ steps.filter.outputs.docs }}
+          CODE: ${{ steps.filter.outputs.code }}
+          DOCS_COUNT: ${{ steps.filter.outputs.docs_count }}
+          ALL_COUNT: ${{ steps.filter.outputs.all_count }}
         run: |
-          if [ "${{ steps.filter.outputs.docs }}" = "true" ] && [ "${{ steps.filter.outputs.code }}" != "true" ]; then
+          if [ "${DOCS}" = "true" ] && [ "${CODE}" != "true" ] \
+            && [ -n "${ALL_COUNT}" ] && [ "${DOCS_COUNT}" = "${ALL_COUNT}" ]; then
             echo "docs_only=true" >> "$GITHUB_OUTPUT"
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
@@ -90,9 +109,15 @@ jobs:
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         uses: aicers/agent-instructions/check-drift@main
 
+  # Fail closed, as in `test`, `journal-systemd` and `coverage`. A bare
+  # `docs_only != 'true'` lets a *failing* `changes` job skip its
+  # dependants, and GitHub counts a skipped required check as a pass -- so
+  # a broken filter would wave an untested change through. `!cancelled()`
+  # runs the job whenever the filter did not positively report docs-only,
+  # a failed filter included.
   check:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     steps:
       - name: Install libraries
@@ -111,7 +136,7 @@ jobs:
 
   test:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     steps:
       - name: Install libraries
@@ -128,7 +153,7 @@ jobs:
 
   journal-systemd:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-24.04
     steps:
       - name: Install libraries
@@ -152,7 +177,7 @@ jobs:
 
   coverage:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     steps:
       - name: Install libraries
