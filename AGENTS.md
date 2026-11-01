@@ -607,27 +607,83 @@ Where the crate handles key material or secrets:
   `markdownlint-cli2 "**/*.md"`), then the shared instruction-block drift
   check, which fails when the generated regions of this file stop matching
   the release `.agent-instructions.toml` pins.
-- Before committing, ensure those pass for the changed files.
-- Before pushing or opening a PR, run what the `test` job does:
-  `cargo build --verbose` and `cargo test --verbose`. CI runs it on
-  `ubuntu-latest` only.
+- The `test` job runs `cargo build --verbose` and `cargo test --verbose`
+  on `ubuntu-latest` only.
 - The `journal-systemd` job (`ubuntu-24.04`) runs the ignored tests in
   `tests/journal_systemd.rs` as a system user it creates and names in
   `JOURNAL_TEST_USER`:
   `cargo test --test journal_systemd -- --ignored --test-threads=1 --show-output`.
   They need systemd, a persistent journal and `sudo` without a password,
-  and the file compiles only on Linux, so they are not expected to be run
-  locally on macOS.
-- The `coverage` job runs
+  and the file compiles only on Linux.
+- The `Change Filter` job (`changes`) marks a change docs-only when every
+  changed path matches its `docs` filter (`docs/**`, `**/*.md`,
+  `mkdocs.yml`, `.markdownlint*`, `.agent-instructions.toml`) and none
+  matches its `code` filter (`src/**`, `tests/**`, `scripts/**`,
+  `Cargo.toml`, `Cargo.lock`, `.clippy.toml`, `.github/workflows/**`); a
+  path on neither list counts as code. A docs-only change skips `check`,
+  `test`, `journal-systemd` and `coverage`; if `changes` fails, they run.
+  `markdownlint` always runs.
+- The `Docs` workflow (`.github/workflows/docs.yml`, job `Build Docs`)
+  runs on every pull request to `main` and every push to `main`. It
+  installs `mkdocs-material` and `mkdocs-static-i18n` on Python 3.11, then
+  runs `scripts/fetch-theme.sh`, which uses `gh`, and
+  `mkdocs build --strict`.
+- Run local checks on the host's own operating system: macOS on a Mac,
+  Linux on a Linux host. Do not use a container, a virtual machine or
+  another operating system in its place. A CI job or matrix entry that
+  exists only to cover another operating system or platform is left to CI;
+  every other row applies on any host that can run its commands.
+- A change is documentation-only when every changed path matches the
+  `docs` filter of the `changes` job in `.github/workflows/ci.yml` and
+  none matches its `code` filter. For such a change run only the
+  `markdownlint` row, and the `Build Docs` rows as well when the change
+  touches `docs/` or `mkdocs.yml`, and build or test no code.
+- For any other change, run every row of the table below that applies to
+  the host before pushing. Run each test command as written, in full: do
+  not narrow it to the changed files or to selected test names.
+
+| CI job | Local command |
+| --- | --- |
+| `check` | `cargo fmt -- --check --config group_imports=StdExternalCrate` |
+| `check` | `cargo clippy --tests -- -D warnings` |
+| `check` | `git diff-index --quiet HEAD --` |
+| `test` | `cargo build --verbose` |
+| `test` | `cargo test --verbose` |
+| `journal-systemd` | the `sh` block below (Linux only) |
+| `markdownlint` | `markdownlint-cli2 "**/*.md"` |
+| `Build Docs` | `./scripts/fetch-theme.sh` |
+| `Build Docs` | `mkdocs build --strict` |
+
+- `check`, `test` and `Build Docs` run only on Linux in CI, but they do
+  not exist to cover Linux: their rows apply on a Mac as well. The
+  libraries `check` and `test` need are listed under `Build requirements`.
+  On macOS they compile code CI does not, and skip the Linux-only code CI
+  covers.
+- `git diff-index --quiet HEAD --` runs after the commit, on a clean
+  tree: it fails when the commands above it left a tracked file changed,
+  such as a `Cargo.lock` that `cargo clippy` updated. Commit that change
+  and rerun it.
+- `journal-systemd` applies on a Linux host only, and needs root through
+  `sudo` without a password, systemd, a persistent journal and a system
+  user that is not in group `adm`, named by `JOURNAL_TEST_USER` (by
+  default `clumit-security-reproduce-test`). CI's job prepares those on
+  its runner; a Linux host without them leaves this row to CI rather than
+  being set up for it. On macOS it is left to CI. The command:
+
+  ```sh
+  cargo test --test journal_systemd -- --ignored --test-threads=1 \
+    --show-output
+  ```
+
+- `Build Docs` needs `mkdocs-material` and `mkdocs-static-i18n` installed
+  (Python 3.11 in CI), and `gh` for `scripts/fetch-theme.sh`.
+- Left to CI: `coverage`, which runs
   `cargo llvm-cov --workspace --lcov --output-path lcov.info` and uploads
-  to Codecov. It is not expected to be run locally.
-- The `Change Filter` job (`changes`) marks a change docs-only when it
-  touches `docs/**`, `**/*.md`, `mkdocs.yml` or `.markdownlint*` and none
-  of `src/**`, `tests/**`, `scripts/**`, `Cargo.toml`, `Cargo.lock` or
-  `.github/workflows/**`. A docs-only change skips `check`, `test`,
-  `journal-systemd` and `coverage`; `markdownlint` always runs.
-- The `Docs` workflow (`.github/workflows/docs.yml`) runs on every pull
-  request to `main` and every push to `main`. It installs `mkdocs-material`
-  and `mkdocs-static-i18n` on Python 3.11, then runs
-  `scripts/fetch-theme.sh`, which uses `gh`, and `mkdocs build --strict`.
-  Run those two locally after changing `docs/` or `mkdocs.yml`.
+  the report to Codecov with the repository's token, and `Change Filter`,
+  which classifies the run rather than checking the code. The shared
+  instruction-block drift check runs in `markdownlint`; the generated
+  regions of this file are never edited here.
+- When a CI job fails, rerun that job's command locally; for a test job,
+  rerun the failing tests by name rather than the whole suite.
+- Before requesting review, ensure every CI job passes on the pushed
+  branch.
