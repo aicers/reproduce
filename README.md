@@ -92,7 +92,7 @@ Each file listed in `ca_certs` may contain one or more PEM-encoded certificates
 
 <!-- markdownlint-enable MD013 -->
 
-### Elastic input (disabled)
+### Elastic Input (Disabled)
 
 - The Elasticsearch input is disabled because its client did not verify the
   server's certificate or host name. REproduce refuses to start with
