@@ -19,7 +19,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `elastic_auth` credentials, and the documented examples used an `http://`
   URL, which sent them in clear text. If you used this input, change the
   Elasticsearch credentials it used and remove the `[elastic]` section from
-  your configuration.
+  your configuration. The Sysmon events it sent to Giganto may have been forged
+  or altered by anyone able to intercept that connection. CSV files that an
+  interrupted run left under its `dump_dir` hold retrieved events and can be
+  deleted.
 
 ## [0.27.1] - 2026-10-31
 

@@ -112,17 +112,19 @@ impl Config {
             .add_source(config::File::from(path))
             .build()
             .context("cannot build the config")?;
-        let config: Self = config.try_deserialize()?;
-
-        if config.kind.trim().is_empty() {
-            bail!("kind cannot be empty");
-        }
-
-        if config.input == "elastic" {
+        // Before deserializing, so no unrelated field error hides this one.
+        if let Ok(input) = config.get_string("input")
+            && input == "elastic"
+        {
             bail!(
                 "input = \"elastic\" is not supported: the Elasticsearch input is disabled \
                  until it verifies the server's TLS certificate"
             );
+        }
+        let config: Self = config.try_deserialize()?;
+
+        if config.kind.trim().is_empty() {
+            bail!("kind cannot be empty");
         }
 
         if config.report && config.report_dir.is_none() {
@@ -477,7 +479,17 @@ input = "elastic"
             "{base}\n[elastic]\nurl = \"https://127.0.0.1:9200\"\nelastic_auth = \"admin:admin\"\n"
         );
 
-        for config_content in [base, with_section.as_str()] {
+        let without_kind = base.replace("kind = \"process_create\"\n", "");
+        let empty_kind = base.replace("kind = \"process_create\"", "kind = \"\"");
+        assert_ne!(without_kind, base);
+        assert_ne!(empty_kind, base);
+
+        for config_content in [
+            base,
+            with_section.as_str(),
+            without_kind.as_str(),
+            empty_kind.as_str(),
+        ] {
             let (_temp_dir, config_path) = create_temp_config(config_content);
             let err_msg = Config::new(config_path.as_ref())
                 .expect_err("the elastic input must be rejected")
