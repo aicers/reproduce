@@ -18,7 +18,6 @@ netflow = ["dep:pcap"]
 [dependencies]
 async-trait = "0.1"
 anyhow = "1"
-base64 = "0.23"
 bincode = "1"
 byteorder = "1"
 bytesize = "2"
@@ -39,10 +38,6 @@ quinn = { version = "0.11", default-features = false, features = [
 ] }
 rayon = "1"
 regex = "1"
-reqwest = { version = "0.13", default-features = false, features = [
-    "json",
-    "native-tls",
-] }
 review-protocol = { git = "https://github.com/aicers/review-protocol.git", tag = "0.23.0", features = [
     "client",
 ] }

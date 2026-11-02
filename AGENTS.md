@@ -537,8 +537,6 @@ Where the crate handles key material or secrets:
 
 - libpcap, for the default `netflow` feature (the `pcap` crate). A build
   with `--no-default-features` does not need it.
-- On Linux, the OpenSSL development headers (`libssl-dev` on Ubuntu), for
-  the `native-tls` backend of `reqwest` (`openssl-sys`).
 - CI also installs `libhyperscan-dev`, which nothing uses.
 
 ## Certificate verification modules
@@ -559,14 +557,16 @@ Where the crate handles key material or secrets:
     (`TlsMaterial::read`) and passes to it (`TlsMaterial::builder`). The
     certificate is verified against `Manager::server_name`, the
     `<server_name>` of the command line.
-- `build_elastic_client` in `src/parser/sysmon_csv.rs` builds the
-  `reqwest` client of the `elastic` input with
-  `danger_accept_invalid_certs(true)`, which turns certificate and host
-  name verification off for Elasticsearch. It is the kind of disabled
-  verification the shared rule forbids, not a module where verification
-  may live. Turning verification back on is a separate change: do not
-  touch it in unrelated work, do not copy it, and do not cite it as
-  precedent.
+- There is no Elasticsearch client. The `elastic` input was removed
+  because its `reqwest` client turned certificate and host name
+  verification off (`danger_accept_invalid_certs(true)`) while sending the
+  `elastic_auth` credentials as a Basic `Authorization` header, and
+  `Config::new` in `src/bin/reproduce/config.rs` now rejects
+  `input = "elastic"`. Bringing the input back adds a TLS client, so the
+  "Do not verify anywhere else" bullet below applies: its pull request
+  records the design decision, including which trust anchors it uses,
+  and the client verifies the server's certificate chain and host name
+  and is named here. Do not restore the removed client as it was.
 - The test servers in `src/sender.rs`, `src/sender/test_support.rs`,
   `src/bin/reproduce/tests.rs` and `tests/`, and the short-idle test
   client `build_short_idle_client_endpoint` in `src/sender.rs`, use

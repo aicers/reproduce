@@ -46,11 +46,6 @@ reproduce /path/to/config.toml
 예약되며 디렉터리 스캔에서 무시됩니다. 실제 입력 파일명과 겹치지 않는
 접미사를 선택하세요.
 
-## Elastic 모드 실행
-
-`input = "elastic"`로 지정하고 `[elastic]` 섹션을 작성한 설정 파일로 실행하면
-Elasticsearch 서버에 질의해 데이터를 가져옵니다.
-
 ## 폴링 모드
 
 `[file]` 또는 `[directory]` 섹션에서 `polling_mode = true`로 지정하면 파일이나

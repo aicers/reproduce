@@ -10,7 +10,7 @@
 | `giganto_ingest_srv_addr` | Giganto ingest 서버 IP:포트 | - |
 | `giganto_name` | Giganto 서버 이름(TLS 서버 이름) | - |
 | `kind` | 처리할 데이터 종류 | - |
-| `input` | 입력 소스(파일/디렉터리/elastic) | - |
+| `input` | 입력 소스(파일/디렉터리) | - |
 | `report` | 전송 통계 리포트 활성화 여부 | `false` |
 | `report_dir` | 리포트 저장 디렉터리. `report = true`일 때 필요 | - |
 | `log_path` | 로그 파일 경로. 미지정 시 stdout으로 출력 | - |
@@ -111,20 +111,14 @@
 | `file_prefix` | 디렉터리 입력 시 대상 파일명 접두사 | - |
 | `polling_mode` | 디렉터리 폴링 모드 활성화 여부 | `false` |
 
-## Elastic 모드 추가 설정
+## Elastic 모드 (비활성화)
 
-Elasticsearch 서버에서 로그를 가져올 때 작성합니다. `input = "elastic"`일 때 모든 항목이 필수입니다.
+Elasticsearch에서 Sysmon 이벤트를 가져오던 Elastic 모드는 비활성화되어 있습니다.
+이 모드의 클라이언트는 Elasticsearch 서버의 인증서와 호스트 이름을 검증하지 않은 채
+그 연결로 `elastic_auth` 인증 정보를 보냈습니다.
 
-| 설정 항목 | 설명 |
-| --- | --- |
-| `url` | Elasticsearch 서버 IP:포트 |
-| `event_codes` | 대상 Sysmon 이벤트 코드 목록 |
-| `indices` | 질의할 Elasticsearch 인덱스 목록 |
-| `start_time` | 대상 이벤트 시작 시각 |
-| `end_time` | 대상 이벤트 종료 시각 |
-| `size` | 질의당 가져올 최대 레코드 수 |
-| `dump_dir` | CSV 파일을 저장할 디렉터리 경로 |
-| `elastic_auth` | Elasticsearch 인증 정보(`username:password`) |
+`input = "elastic"`이면 REproduce는 시작하지 않습니다. `[elastic]` 섹션은 무시되며,
+`elastic_auth` 인증 정보가 들어 있으므로 설정 파일에서 삭제하세요.
 
 ## 설정 예시
 
@@ -138,28 +132,6 @@ giganto_ingest_srv_addr = "127.0.0.1:38370"
 giganto_name = "data-store"
 kind = "dns"
 input = "/path/to/zeek_file"
-```
-
-### Elasticsearch에서 Sysmon 데이터 가져오는 예시
-
-```toml
-cert = "/opt/clumit/keys/reproduce_cert.pem"
-key = "/opt/clumit/keys/reproduce_key.pem"
-ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "data-store"
-kind = "process_create"
-input = "elastic"
-
-[elastic]
-url = "http://127.0.0.1:9200/"
-event_codes = ["1", "7", "11", "17", "25", "26"]
-indices = [".ds-winlogbeat-8.8.2-2023.11.29-000001"]
-start_time = "2023-08-06T15:00:00.000Z"
-end_time = "2023-09-07T02:00:00.000Z"
-size = 100000
-dump_dir = "/path/to/dump"
-elastic_auth = "admin:admin"
 ```
 
 ### 리포트 활성화하는 예시

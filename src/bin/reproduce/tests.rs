@@ -153,7 +153,6 @@ fn test_config(input: &Path, kind: &str) -> Config {
         log_path: None,
         file: Some(FileConfig::new(Some(false), false, None, None, None)),
         directory: None,
-        elastic: None,
     }
 }
 
@@ -444,13 +443,6 @@ fn decode_logs(capture: &ServerCapture) -> Vec<GigantoLog> {
 }
 
 #[test]
-fn input_type_elastic() {
-    // When input string is "elastic", it should return InputType::Elastic
-    let result = input_type("elastic");
-    assert_eq!(result, InputType::Elastic);
-}
-
-#[test]
 fn input_type_directory() {
     // Create a temporary directory
     let temp_dir = tempdir().expect("Failed to create temp dir");
@@ -579,30 +571,6 @@ fn valid_service_with_different_extensions() {
             "Expected valid service name regardless of extension: {filename}"
         );
     }
-}
-
-#[test]
-fn file_to_kind_maps_supported_sysmon_event_codes() {
-    let kind = file_to_kind(Path::new("event1_log.csv"))
-        .expect("known sysmon event file name should parse");
-    assert_eq!(kind, "process_create");
-
-    let kind = file_to_kind(Path::new("event26_log.csv"))
-        .expect("known sysmon event file name should parse");
-    assert_eq!(kind, "file_delete_detected");
-}
-
-#[test]
-fn file_to_kind_returns_empty_for_unknown_event_code() {
-    let kind = file_to_kind(Path::new("event999_log.csv"))
-        .expect("unknown sysmon event file name should still parse");
-    assert_eq!(kind, "");
-}
-
-#[test]
-fn file_to_kind_returns_empty_for_non_matching_file_name() {
-    let kind = file_to_kind(Path::new("conn.log")).expect("non-sysmon file name should not error");
-    assert_eq!(kind, "");
 }
 
 #[test]
@@ -1296,23 +1264,6 @@ async fn run_single_rejects_directory_input() {
 }
 
 #[tokio::test]
-async fn run_with_sender_rejects_elastic_input() {
-    let mut config = test_config(Path::new("elastic"), "process_create");
-    config.input = "elastic".to_string();
-    let controller = Controller::new(config, ReloadSignal::new());
-    let mut sender = MockSender::default();
-
-    let err = controller
-        .run_with_sender(&mut sender)
-        .await
-        .expect_err("elastic inputs require the elastic-specific path");
-    assert!(
-        err.to_string()
-            .contains("elastic input requires a concrete sender factory")
-    );
-}
-
-#[tokio::test]
 async fn run_split_requires_directory_configuration() {
     let temp_dir = tempdir().expect("temporary directory should be created");
     let controller = Controller::new(test_config(temp_dir.path(), "custom"), ReloadSignal::new());
@@ -1341,31 +1292,6 @@ async fn run_split_returns_ok_for_empty_directory_without_polling() {
 
     assert_eq!(sender.batch_sizes, [] as [usize; 0]);
     assert_eq!(sender.finish_calls, 0);
-}
-
-#[tokio::test]
-async fn run_requires_elastic_configuration_for_elastic_input() {
-    let mut config = test_config(Path::new("elastic"), "process_create");
-    config.input = "elastic".to_string();
-    let controller = Controller::new(config, ReloadSignal::new());
-
-    let err = controller
-        .run()
-        .await
-        .expect_err("elastic input without elastic config must fail");
-    assert!(err.to_string().contains("elastic parameters is required"));
-}
-
-#[tokio::test]
-async fn run_single_rejects_elastic_pseudo_input() {
-    let controller = controller_for_file(Path::new("elastic"), "custom", Some(false), None);
-    let mut sender = MockSender::default();
-
-    let err = controller
-        .run_single(Path::new("elastic"), &mut sender, "custom", false)
-        .await
-        .expect_err("elastic pseudo-input must be rejected by run_single");
-    assert!(err.to_string().contains("invalid input type: Elastic"));
 }
 
 #[tokio::test]
@@ -1591,22 +1517,6 @@ fn resolve_runtime_options_clears_file_polling_for_directory_input() {
         warn_count.load(std::sync::atomic::Ordering::Relaxed),
         1,
         "expected exactly one WARN for ignored file polling in directory mode"
-    );
-}
-
-#[test]
-fn resolve_runtime_options_clears_file_polling_for_elastic_input() {
-    let mut config = test_config(Path::new("elastic"), "process_create");
-    config.input = "elastic".to_string();
-    config.file = Some(FileConfig::new(Some(false), true, None, None, None));
-
-    let ((), warn_count) = warn_count::with_warn_count(|| config.resolve_runtime_options());
-
-    assert!(!config.file.expect("file section should exist").polling_mode);
-    assert_eq!(
-        warn_count.load(std::sync::atomic::Ordering::Relaxed),
-        1,
-        "expected exactly one WARN for ignored file polling in elastic mode"
     );
 }
 

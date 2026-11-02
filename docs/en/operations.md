@@ -47,12 +47,6 @@ Runtime behavior then depends on the configured input source:
 - Existing directory:
   Processes matching files in sorted order. If directory polling is enabled,
   rescans for new matching files every 10 seconds.
-- Elasticsearch:
-  Retrieves Sysmon event data, writes temporary CSV files under `dump_dir`,
-  and transfers them. After all files transfer successfully, REproduce removes
-  the temporary files and directory, then exits.
-  The process needs permission to manage those temporary files.
-  If processing does not complete, temporary files can remain under `dump_dir`.
 
 When a run finishes successfully, REproduce logs `Data Broker completed`.
 
@@ -113,12 +107,12 @@ Useful startup and progress log lines include:
 
 - `Initialized tracing logger`
 - `Data Broker started`
-- `File: ...` (directory and Elastic modes only)
+- `File: ...` (directory mode only)
 - `Data Broker completed`
 - `Terminated with error: ...`
 
-In directory and Elastic modes, `File: ...` identifies each file when
-REproduce starts processing it. Single-file mode does not emit this log line.
+In directory mode, `File: ...` identifies each file when REproduce starts
+processing it. Single-file mode does not emit this log line.
 
 ## Reports
 
@@ -152,7 +146,7 @@ Verify the following after running REproduce:
 
 - Logs show `Data Broker started`.
 - Logs show a successful data store connection.
-- In directory and Elastic modes, input files appear in `File: ...` log lines
-  when processing begins.
+- In directory mode, input files appear in `File: ...` log lines when
+  processing begins.
 - Long-running polling behavior matches the configured polling settings.
 - Reports are written under `report_dir` when reporting is enabled.

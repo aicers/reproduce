@@ -53,7 +53,7 @@ environment variable `NETFLOW_TEMPLATES_PATH`.
 | `giganto_ingest_srv_addr` | IP address and port of the Giganto ingest server                           | Yes         | -       |
 | `giganto_name`            | Name of Giganto server                                                     | Yes         | -       |
 | `kind`                    | Type of data being processed (See [Defined kind type](#defined-kind-type)) | Yes         | -       |
-| `input`                   | Specifies the input source: file, directory, or elastic                    | Yes         | -       |
+| `input`                   | Specifies the input source: file or directory                              | Yes         | -       |
 | `report`                  | Enables or disables reporting of transfer statistics                       | No          | false   |
 | `report_dir`              | Directory where report files are written (required when `report = true`)   | Conditional | -       |
 | `log_path`                | Path to the log file. If not specified, logs are sent to stdout.           | No          | -       |
@@ -92,24 +92,12 @@ Each file listed in `ca_certs` may contain one or more PEM-encoded certificates
 
 <!-- markdownlint-enable MD013 -->
 
-### [Elastic]
+### Elastic input (disabled)
 
-- This section is required only if you are fetching logs from an Elasticsearch server.
-
-<!-- markdownlint-disable MD013 -->
-
-| Field          | Description                                                  | Required | Default |
-| -------------- | ------------------------------------------------------------ | -------- | ------- |
-| `url`          | IP address and port of the Elasticsearch server              | Yes      | -       |
-| `event_codes`  | List of target event codes                                   | Yes      | -       |
-| `indices`      | List of Elasticsearch indices to query                       | Yes      | -       |
-| `start_time`   | The start time of target events                              | Yes      | -       |
-| `end_time`     | The end time of target events                                | Yes      | -       |
-| `size`         | Maximum number of records to fetch per query                 | Yes      | -       |
-| `dump_dir`     | Path to the directory where CSV files are saved              | Yes      | -       |
-| `elastic_auth` | Elasticsearch authentication credentials (username:password) | Yes      | -       |
-
-<!-- markdownlint-enable MD013 -->
+- The Elasticsearch input is disabled because its client did not verify the
+  server's certificate or host name. REproduce refuses to start with
+  `input = "elastic"` and ignores an `[elastic]` section; remove it, since it
+  holds the `elastic_auth` credentials.
 
 ### Report Configuration
 
@@ -191,30 +179,6 @@ report_dir = "/var/lib/reproduce/reports"
   giganto_name = "data-store"
   kind = "image_load"                         # Data kind (see `Sysmon Events` section).
   input = "/path/to/sysmon_file"
-  ```
-
-### Send Sysmon data from Elasticsearch to a Giganto server
-
-- Queries Sysmon event logs from an Elasticsearch server and sends them to the
-  Giganto server.
-
-  ```toml
-  cert = "/opt/clumit/keys/reproduce_cert.pem"
-  key = "/opt/clumit/keys/reproduce_key.pem"
-  ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
-  giganto_ingest_srv_addr = "127.0.0.1:38370"
-  giganto_name = "data-store"
-  input = "elastic"                          # Fixed input type.
-
-  [elastic]
-  url = "http://127.0.0.1:9200/"
-  event_codes = ["1","7","11","17","25","26",]
-  indices = [".ds-winlogbeat-8.8.2-2023.11.29-000001"]
-  start_time = "2023-08-06T15:00:00.000Z"
-  end_time = "2023-09-07T02:00:00.000Z"
-  size = 100000
-  dump_dir = "/path/to/dump"
-  elastic_auth = "admin:admin"
   ```
 
 ## Defined kind type

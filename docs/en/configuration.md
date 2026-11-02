@@ -1,8 +1,7 @@
 # Configuration (TOML)
 
 REproduce is configured with one TOML file. The file contains required
-top-level settings and optional sections for file, directory, and Elastic mode
-behavior.
+top-level settings and optional sections for file and directory mode behavior.
 
 ## Top-Level Settings
 
@@ -38,7 +37,7 @@ REproduce chooses the input mode from `input`.
 
 | `input` value | Selected mode |
 | --- | --- |
-| `"elastic"` | Elastic mode |
+| `"elastic"` | Rejected: Elastic mode is disabled |
 | Existing directory path | Directory mode |
 | Any other path | File mode |
 
@@ -209,28 +208,14 @@ In directory mode, use `[directory].polling_mode` for polling. If
 `[file].polling_mode = true` is also set, REproduce ignores it and logs a
 warning.
 
-## Elastic Mode Configuration
+## Elastic Mode (Disabled)
 
-Use Elastic mode by setting `input = "elastic"` and adding an `[elastic]`
-section.
+Elastic mode, which queried Sysmon events from Elasticsearch, is disabled. Its
+client did not verify the Elasticsearch server's certificate or host name, yet
+sent the `elastic_auth` credentials over that connection.
 
-All fields in `[elastic]` are required.
-
-| Configuration | Description |
-| --- | --- |
-| `url` | Elasticsearch server URL |
-| `event_codes` | Target Sysmon event code list |
-| `indices` | Elasticsearch index list to query |
-| `start_time` | Start time of target events |
-| `end_time` | End time of target events |
-| `size` | Maximum number of records per query |
-| `dump_dir` | Directory for temporary retrieved CSV files |
-| `elastic_auth` | Elasticsearch `username:password` auth |
-
-The top-level `kind` field must still contain a non-empty value. In Elastic
-mode, `event_codes` determines which Sysmon event types are retrieved from
-Elasticsearch and transferred. If reporting is enabled, `kind` is used in the
-report filename.
+REproduce refuses to start when `input = "elastic"`. An `[elastic]` section is
+ignored; remove it, since it holds the `elastic_auth` credentials.
 
 ## Configuration Examples
 
@@ -291,26 +276,4 @@ input = "/data/exports/http.log"
 
 [file]
 import_from_giganto = true
-```
-
-### Import Sysmon Data from Elasticsearch
-
-```toml
-cert = "/opt/clumit/keys/reproduce_cert.pem"
-key = "/opt/clumit/keys/reproduce_key.pem"
-ca_certs = ["/opt/clumit/keys/manager_cert.pem"]
-giganto_ingest_srv_addr = "127.0.0.1:38370"
-giganto_name = "data-store"
-kind = "elastic_sysmon"
-input = "elastic"
-
-[elastic]
-url = "http://127.0.0.1:9200/"
-event_codes = ["1", "7", "11", "17", "25", "26"]
-indices = [".ds-winlogbeat-8.8.2-2023.11.29-000001"]
-start_time = "2023-08-06T15:00:00.000Z"
-end_time = "2023-09-07T02:00:00.000Z"
-size = 100000
-dump_dir = "/var/lib/reproduce/elastic-dump"
-elastic_auth = "admin:admin"
 ```

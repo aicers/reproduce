@@ -13,19 +13,13 @@ const DEFAULT_IMPORT_FROM_GIGANTO: bool = false;
 pub(crate) enum InputType {
     Log,
     Dir,
-    Elastic,
 }
 
 pub(crate) fn input_type(input: &str) -> InputType {
-    if input == "elastic" {
-        InputType::Elastic
+    if Path::new(input).is_dir() {
+        InputType::Dir
     } else {
-        let path = Path::new(input);
-        if path.is_dir() {
-            InputType::Dir
-        } else {
-            InputType::Log
-        }
+        InputType::Log
     }
 }
 
@@ -38,7 +32,6 @@ fn ignored_file_polling_mode_label(
 
     match selected_input_type {
         InputType::Dir => Some("Directory"),
-        InputType::Elastic => Some("Elastic"),
         InputType::Log => {
             #[cfg(feature = "netflow")]
             if super::NetflowKind::parse(kind).is_some() {
@@ -87,18 +80,6 @@ pub(crate) struct Directory {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub(crate) struct ElasticSearch {
-    pub(crate) url: String,
-    pub(crate) event_codes: Vec<String>,
-    pub(crate) indices: Vec<String>,
-    pub(crate) start_time: String,
-    pub(crate) end_time: String,
-    pub(crate) size: usize,
-    pub(crate) dump_dir: String,
-    pub(crate) elastic_auth: String,
-}
-
-#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
     #[serde(flatten)]
     pub(crate) giganto: GigantoConfig,
@@ -110,7 +91,6 @@ pub(crate) struct Config {
     pub(crate) log_path: Option<PathBuf>,
     pub(crate) file: Option<File>,
     pub(crate) directory: Option<Directory>,
-    pub(crate) elastic: Option<ElasticSearch>,
 }
 
 impl Config {
@@ -136,6 +116,13 @@ impl Config {
 
         if config.kind.trim().is_empty() {
             bail!("kind cannot be empty");
+        }
+
+        if config.input == "elastic" {
+            bail!(
+                "input = \"elastic\" is not supported: the Elasticsearch input is disabled \
+                 until it verifies the server's TLS certificate"
+            );
         }
 
         if config.report && config.report_dir.is_none() {
@@ -476,8 +463,52 @@ input = "/path/to/input"
     }
 
     #[test]
-    fn input_type_elastic() {
-        assert_eq!(input_type("elastic"), InputType::Elastic);
+    fn config_new_rejects_disabled_elastic_input() {
+        let base = r#"
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+ca_certs = ["tests/root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "aicers"
+kind = "process_create"
+input = "elastic"
+"#;
+        let with_section = format!(
+            "{base}\n[elastic]\nurl = \"https://127.0.0.1:9200\"\nelastic_auth = \"admin:admin\"\n"
+        );
+
+        for config_content in [base, with_section.as_str()] {
+            let (_temp_dir, config_path) = create_temp_config(config_content);
+            let err_msg = Config::new(config_path.as_ref())
+                .expect_err("the elastic input must be rejected")
+                .to_string();
+            assert!(
+                err_msg.contains("the Elasticsearch input is disabled"),
+                "error message should say the elastic input is disabled: {err_msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_new_ignores_elastic_section_for_other_inputs() {
+        let config_content = r#"
+cert = "tests/cert.pem"
+key = "tests/key.pem"
+ca_certs = ["tests/root.pem"]
+giganto_ingest_srv_addr = "127.0.0.1:38370"
+giganto_name = "aicers"
+kind = "process_create"
+input = "/path/to/file"
+
+[elastic]
+url = "https://127.0.0.1:9200"
+elastic_auth = "admin:admin"
+"#;
+        let (_temp_dir, config_path) = create_temp_config(config_content);
+
+        let config =
+            Config::new(config_path.as_ref()).expect("an [elastic] section alone must not fail");
+        assert_eq!(config.input, "/path/to/file");
     }
 
     #[test]

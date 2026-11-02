@@ -2,8 +2,7 @@
 
 REproduce reads file-based input such as log files or Netflow v5/v9 pcap files,
 converts the input into events, and sends those events to a data store ingest
-server. When using Elasticsearch as the input source, REproduce retrieves
-Sysmon event data.
+server.
 
 Use this manual when you need to prepare the runtime environment, write a
 configuration file, run REproduce, understand runtime behavior, or diagnose a
@@ -12,7 +11,6 @@ startup or transfer problem.
 ## What REproduce Does
 
 - Reads file-based input from a single file or directory.
-- Retrieves Sysmon event data when Elasticsearch is used as the input source.
 - Converts supported input formats into events accepted by the data store.
 - Sends converted events to a data store ingest server over TLS.
 - Supports polling for appended data or newly added files.
@@ -24,8 +22,6 @@ startup or transfer problem.
 Started with a TOML configuration file, REproduce chooses the input mode from
 the file's top-level `input` value.
 
-- `input = "elastic"`: Elastic mode.
-  Queries Elasticsearch and sends the retrieved Sysmon data.
 - Existing directory path: Directory mode.
   Processes files under the directory.
 - Any other path: File mode.
@@ -47,8 +43,8 @@ running REproduce.
 
 ## Manual Map
 
-- [Prerequisites](prerequisites.md): Prepare certificates, input access,
-  Elasticsearch access, and Netflow templates.
+- [Prerequisites](prerequisites.md): Prepare certificates, input access, and
+  Netflow templates.
 - [Configuration](configuration.md): Write the TOML file and choose `kind`,
   input mode, polling, checkpoints, logging, and reports.
 - [Operations](operations.md): Run REproduce, check lifecycle logs, understand

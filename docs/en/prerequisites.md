@@ -30,22 +30,6 @@ at startup. REproduce recursively processes regular files below the directory,
 including files reached through symbolic links, and can optionally filter them
 by filename prefix.
 
-Elastic mode requirements are listed in the next section.
-
-## Elasticsearch Access
-
-Elastic mode requires:
-
-- Elasticsearch URL.
-- Authentication value in `username:password` format.
-- Target indices.
-- Target Sysmon event codes.
-- Start and end timestamps for the query range.
-- Writable dump directory for retrieved records.
-
-See [Elastic Mode Configuration](configuration.md#elastic-mode-configuration)
-for the required TOML fields.
-
 ## Netflow v9 Templates
 
 If a Netflow v9 pcap does not contain the templates required to interpret data
