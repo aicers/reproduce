@@ -1,10 +1,7 @@
 use anyhow::{Context, anyhow};
 use giganto_client::ingest::sysmon::ImageLoaded;
-use serde::Serialize;
 
-use super::{
-    EventToCsv, SysmonCsvResult, TryFromSysmonRecord, parse_sysmon_timestamp_ns, split_message_part,
-};
+use super::{SysmonCsvResult, TryFromSysmonRecord, parse_sysmon_timestamp_ns};
 
 impl TryFromSysmonRecord for ImageLoaded {
     #[allow(clippy::too_many_lines)]
@@ -125,99 +122,5 @@ impl TryFromSysmonRecord for ImageLoaded {
             },
             time,
         ))
-    }
-}
-
-#[derive(Serialize)]
-pub struct ElasticImageLoaded {
-    agent_name: Option<String>,
-    agent_id: Option<String>,
-    event_action: Option<String>,
-    utc_time: Option<String>,
-    process_guid: Option<String>,
-    process_id: Option<String>,
-    image: Option<String>,
-    image_loaded: Option<String>,
-    file_version: Option<String>,
-    description: Option<String>,
-    product: Option<String>,
-    company: Option<String>,
-    original_file_name: Option<String>,
-    hashes: Option<String>,
-    signed: Option<String>,
-    signature: Option<String>,
-    signature_status: Option<String>,
-    user: Option<String>,
-}
-
-impl EventToCsv for ElasticImageLoaded {
-    fn parse(data: &serde_json::Value) -> Vec<Self> {
-        let mut entries = Vec::new();
-
-        if let Some(hits) = data["hits"]["hits"].as_array() {
-            for hit in hits {
-                if let Some(message) = hit["_source"]["message"].as_str() {
-                    let mut entry = ElasticImageLoaded {
-                        agent_name: None,
-                        agent_id: None,
-                        event_action: Some("Image loaded".to_string()),
-                        utc_time: None,
-                        process_guid: None,
-                        process_id: None,
-                        image: None,
-                        image_loaded: None,
-                        file_version: None,
-                        description: None,
-                        product: None,
-                        company: None,
-                        original_file_name: None,
-                        hashes: None,
-                        signed: None,
-                        signature: None,
-                        signature_status: None,
-                        user: None,
-                    };
-
-                    if let Some(agent_name) = hit["_source"]["agent"]["name"].as_str() {
-                        entry.agent_name = Some(agent_name.to_string());
-                    }
-
-                    if let Some(agent_id) = hit["_source"]["agent"]["id"].as_str() {
-                        entry.agent_id = Some(agent_id.to_string());
-                    }
-
-                    for part in message.split('\n') {
-                        if let Some((key, value)) = split_message_part(part) {
-                            match key {
-                                "UtcTime" => entry.utc_time = Some(value.to_string()),
-                                "ProcessGuid" => entry.process_guid = Some(value.to_string()),
-                                "ProcessId" => entry.process_id = Some(value.to_string()),
-                                "Image" => entry.image = Some(value.to_string()),
-                                "ImageLoaded" => entry.image_loaded = Some(value.to_string()),
-                                "FileVersion" => entry.file_version = Some(value.to_string()),
-                                "Description" => entry.description = Some(value.to_string()),
-                                "Product" => entry.product = Some(value.to_string()),
-                                "Company" => entry.company = Some(value.to_string()),
-                                "OriginalFileName" => {
-                                    entry.original_file_name = Some(value.to_string());
-                                }
-                                "Hashes" => entry.hashes = Some(value.to_string()),
-                                "Signed" => entry.signed = Some(value.to_string()),
-                                "Signature" => entry.signature = Some(value.to_string()),
-                                "SignatureStatus" => {
-                                    entry.signature_status = Some(value.to_string());
-                                }
-                                "User" => entry.user = Some(value.to_string()),
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    entries.push(entry);
-                }
-            }
-        }
-
-        entries
     }
 }

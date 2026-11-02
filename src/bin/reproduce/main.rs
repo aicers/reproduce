@@ -51,9 +51,7 @@ use reproduce::parser::security_log::{
     Aiwaf, Axgate, Fgt, Mf2, Nginx, ShadowWall, SniperIps, SonicWall, Srx, Tg, Ubuntu, Vforce,
     Wapples,
 };
-use reproduce::parser::sysmon_csv::{
-    ElasticDumpOptions, TryFromSysmonRecord, open_sysmon_csv_file,
-};
+use reproduce::parser::sysmon_csv::{TryFromSysmonRecord, open_sysmon_csv_file};
 use reproduce::parser::zeek::{TryFromZeekRecord, open_raw_event_log_file};
 use reproduce::reload::ReloadSignal;
 use reproduce::runtime::CollectorRuntime;
@@ -432,26 +430,6 @@ impl SysmonKind {
             "file_delete" => Self::FileDelete,
             "process_tamper" => Self::ProcessTamper,
             "file_delete_detected" => Self::FileDeleteDetected,
-            _ => return None,
-        })
-    }
-
-    fn from_event_code(code: &str) -> Option<Self> {
-        Some(match code {
-            "1" => Self::ProcessCreate,
-            "2" => Self::FileCreateTime,
-            "3" => Self::NetworkConnect,
-            "5" => Self::ProcessTerminate,
-            "7" => Self::ImageLoad,
-            "11" => Self::FileCreate,
-            "13" => Self::RegistryValueSet,
-            "14" => Self::RegistryKeyRename,
-            "15" => Self::FileCreateStreamHash,
-            "17" => Self::PipeEvent,
-            "22" => Self::DnsQuery,
-            "23" => Self::FileDelete,
-            "25" => Self::ProcessTamper,
-            "26" => Self::FileDeleteDetected,
             _ => return None,
         })
     }
@@ -871,23 +849,13 @@ impl Controller {
     /// Returns an error if creating a converter fails.
     ///
     pub async fn run(&self) -> Result<()> {
-        let input_type = input_type(&self.config.input);
-
-        if input_type == InputType::Elastic {
-            let shutdown = shutdown_receiver();
-            self.run_elastic_with_shutdown(shutdown).await?;
-        } else {
-            let mut sender = match create_sender(&self.config, &self.reload, self.sender_token())
-                .await
-            {
-                Ok(sender) => sender,
-                Err(SenderError::Cancelled) if shutdown_requested(&self.shutdown) => return Ok(()),
-                Err(error) => return Err(error.into()),
-            };
-            self.run_with_sender(&mut sender).await?;
-        }
-
-        Ok(())
+        let mut sender = match create_sender(&self.config, &self.reload, self.sender_token()).await
+        {
+            Ok(sender) => sender,
+            Err(SenderError::Cancelled) if shutdown_requested(&self.shutdown) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        self.run_with_sender(&mut sender).await
     }
 
     async fn run_with_sender<S>(&self, sender: &mut S) -> Result<()>
@@ -901,7 +869,6 @@ impl Controller {
                 self.run_single(file_name.as_ref(), sender, &self.config.kind, false)
                     .await?;
             }
-            InputType::Elastic => bail!("elastic input requires a concrete sender factory"),
         }
 
         sender.finish().await.context("failed to finish stream")?;
@@ -969,52 +936,6 @@ impl Controller {
                 break;
             }
         }
-        Ok(())
-    }
-
-    async fn run_elastic_with_shutdown(&self, shutdown: watch::Receiver<bool>) -> Result<()> {
-        let Some(ref elastic) = self.config.elastic else {
-            bail!("elastic parameters is required");
-        };
-        let dir = reproduce::parser::sysmon_csv::fetch_elastic_search(ElasticDumpOptions {
-            url: &elastic.url,
-            event_codes: &elastic.event_codes,
-            indices: &elastic.indices,
-            start_time: &elastic.start_time,
-            end_time: &elastic.end_time,
-            size: elastic.size,
-            dump_dir: &elastic.dump_dir,
-            elastic_auth: &elastic.elastic_auth,
-        })
-        .await?;
-
-        let mut files = files_in_dir(&dir, None, None, &[]);
-        if files.is_empty() {
-            bail!("no data with elastic");
-        }
-
-        files.sort_unstable();
-        for file in files {
-            let mut sender =
-                match create_sender(&self.config, &self.reload, self.sender_token()).await {
-                    Ok(sender) => sender,
-                    Err(SenderError::Cancelled) if shutdown_requested(&shutdown) => return Ok(()),
-                    Err(error) => return Err(error.into()),
-                };
-            info!("File: {file:?}");
-            let kind = file_to_kind(&file)?;
-            self.run_single_with_shutdown(
-                file.as_path(),
-                &mut sender,
-                kind,
-                false,
-                shutdown.clone(),
-            )
-            .await?;
-            std::fs::remove_file(&file)?;
-            sender.finish().await.context("failed to finish stream")?;
-        }
-        std::fs::remove_dir(&dir)?;
         Ok(())
     }
 
@@ -1395,22 +1316,6 @@ fn operation_log_service_name(path: &Path) -> Result<&str> {
     } else {
         bail!("invalid service name `{file_name}`");
     }
-}
-
-fn file_to_kind(path: &Path) -> Result<&str> {
-    let re = regex::Regex::new(r"event(\d+)_log.csv")?;
-    let file_name = path
-        .file_name()
-        .with_context(|| format!("invalid file path: {}", path.display()))?
-        .to_str()
-        .with_context(|| format!("invalid unicode: {}", path.display()))?;
-    if let Some(cap) = re.captures(file_name) {
-        let Some(num) = cap.get(1).map(|m| m.as_str()) else {
-            return Ok("");
-        };
-        return Ok(SysmonKind::from_event_code(num).map_or("", SysmonKind::as_str));
-    }
-    Ok("")
 }
 
 async fn create_sender(

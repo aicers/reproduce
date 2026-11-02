@@ -1,10 +1,7 @@
 use anyhow::{Context, anyhow};
 use giganto_client::ingest::sysmon::FileDeleteDetected;
-use serde::Serialize;
 
-use super::{
-    EventToCsv, SysmonCsvResult, TryFromSysmonRecord, parse_sysmon_timestamp_ns, split_message_part,
-};
+use super::{SysmonCsvResult, TryFromSysmonRecord, parse_sysmon_timestamp_ns};
 
 impl TryFromSysmonRecord for FileDeleteDetected {
     fn try_from_sysmon_record(rec: &csv::StringRecord) -> SysmonCsvResult<(Self, i64)> {
@@ -82,75 +79,5 @@ impl TryFromSysmonRecord for FileDeleteDetected {
             },
             time,
         ))
-    }
-}
-
-#[allow(clippy::module_name_repetitions)] // Elastic mirror types intentionally keep Sysmon event names.
-#[derive(Serialize)]
-pub struct ElasticFileDeleteDetected {
-    agent_name: Option<String>,
-    agent_id: Option<String>,
-    event_action: Option<String>,
-    utc_time: Option<String>,
-    process_guid: Option<String>,
-    process_id: Option<String>,
-    user: Option<String>,
-    image: Option<String>,
-    target_filename: Option<String>,
-    hashes: Option<String>,
-    is_executable: Option<String>,
-}
-
-impl EventToCsv for ElasticFileDeleteDetected {
-    fn parse(data: &serde_json::Value) -> Vec<Self> {
-        let mut entries = Vec::new();
-
-        if let Some(hits) = data["hits"]["hits"].as_array() {
-            for hit in hits {
-                if let Some(message) = hit["_source"]["message"].as_str() {
-                    let mut entry = ElasticFileDeleteDetected {
-                        agent_name: None,
-                        agent_id: None,
-                        event_action: Some("File Delete logged,".to_string()),
-                        utc_time: None,
-                        process_guid: None,
-                        process_id: None,
-                        user: None,
-                        image: None,
-                        target_filename: None,
-                        hashes: None,
-                        is_executable: None,
-                    };
-
-                    if let Some(agent_name) = hit["_source"]["agent"]["name"].as_str() {
-                        entry.agent_name = Some(agent_name.to_string());
-                    }
-
-                    if let Some(agent_id) = hit["_source"]["agent"]["id"].as_str() {
-                        entry.agent_id = Some(agent_id.to_string());
-                    }
-
-                    for part in message.split('\n') {
-                        if let Some((key, value)) = split_message_part(part) {
-                            match key {
-                                "UtcTime" => entry.utc_time = Some(value.to_string()),
-                                "ProcessGuid" => entry.process_guid = Some(value.to_string()),
-                                "ProcessId" => entry.process_id = Some(value.to_string()),
-                                "User" => entry.user = Some(value.to_string()),
-                                "Image" => entry.image = Some(value.to_string()),
-                                "TargetFilename" => entry.target_filename = Some(value.to_string()),
-                                "Hashes" => entry.hashes = Some(value.to_string()),
-                                "IsExecutable" => entry.is_executable = Some(value.to_string()),
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    entries.push(entry);
-                }
-            }
-        }
-
-        entries
     }
 }

@@ -154,7 +154,7 @@ impl Report {
                 let processed_bytes = usize_to_u64(processed_bytes, "processed bytes")?;
                 ("Input(LOG)", processed_bytes)
             }
-            InputType::Dir | InputType::Elastic => ("", 0),
+            InputType::Dir => ("", 0),
         };
         report_file.write_fmt(format_args!(
             "{:width$}{} ({})\n",
@@ -241,7 +241,6 @@ mod tests {
             log_path: None,
             file: None,
             directory: None,
-            elastic: None,
         }
     }
 
@@ -512,25 +511,6 @@ mod tests {
         assert!(
             content.contains("--------------------------------------------------"),
             "Appended content should contain the report separator"
-        );
-    }
-
-    #[test]
-    fn report_handles_elastic_input_type() {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let report_dir = temp_dir.path().join("reports");
-
-        // "elastic" string -> InputType::Elastic
-        let report_file = run_report(&report_dir, "elastic", &[100]);
-        let content = std::fs::read_to_string(&report_file).expect("failed to read report file");
-
-        assert!(
-            !content.contains("Input(LOG)"),
-            "Elastic input should not show Input(LOG) header"
-        );
-        assert!(
-            content.contains("(0 B)"),
-            "Elastic input should show 0 bytes for processed_bytes"
         );
     }
 }

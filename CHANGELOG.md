@@ -4,6 +4,23 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- On Linux, REproduce no longer links OpenSSL, so neither building nor running
+  it needs OpenSSL any more.
+
+### Security
+
+- The Elasticsearch input is disabled: REproduce now refuses to start with
+  `input = "elastic"` and ignores an `[elastic]` section. Its client accepted
+  any certificate and host name from the Elasticsearch server while sending the
+  `elastic_auth` credentials, and the documented examples used an `http://`
+  URL, which sent them in clear text. If you used this input, change the
+  Elasticsearch credentials it used and remove the `[elastic]` section from
+  your configuration.
+
 ## [0.27.1] - 2026-10-31
 
 ### Changed
@@ -623,6 +640,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.27.1...main
 [0.27.1]: https://github.com/aicers/reproduce/compare/0.27.0...0.27.1
 [0.27.0]: https://github.com/aicers/reproduce/compare/0.26.0...0.27.0
 [0.26.0]: https://github.com/aicers/reproduce/compare/0.25.1...0.26.0

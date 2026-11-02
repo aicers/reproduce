@@ -35,9 +35,7 @@
 - 환경 변수 `NETFLOW_TEMPLATES_PATH`가 올바른 템플릿 경로를 가리키는지 확인합니다.
 - 빌드 시 `netflow` 기능이 활성화되어 있는지 확인합니다.
 
-## Elastic 모드에서 데이터를 가져오지 못할 때
+## `input = "elastic"`으로 시작하지 않을 때
 
-- `[elastic]` 섹션의 모든 필수 항목이 채워져 있는지 확인합니다.
-- `url`, `elastic_auth`(`username:password`)가 올바른지 확인합니다.
-- `indices`, `event_codes`, `start_time`/`end_time` 범위에 실제 데이터가 있는지 확인합니다.
-- `dump_dir` 경로와 쓰기 권한이 올바른지 확인합니다.
+Elastic 모드는 비활성화되어 있어 `input = "elastic"` 설정은 시작 시 거부됩니다.
+자세한 내용은 [설정](configuration.md)의 "Elastic 모드 (비활성화)"를 참고하세요.

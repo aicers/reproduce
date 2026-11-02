@@ -31,7 +31,8 @@ Also check:
 - Hostnames such as `localhost:38370` are not accepted for
   `giganto_ingest_srv_addr`.
 - If `report = true`, `report_dir` must be configured.
-- If `input = "elastic"`, all fields in `[elastic]` must be configured.
+- `input = "elastic"` is rejected: Elastic mode is disabled. See
+  [Elastic Mode (Disabled)](configuration.md#elastic-mode-disabled).
 
 See [Top-Level Settings](configuration.md#top-level-settings) for the required
 fields.
