@@ -25,7 +25,13 @@ const UNITS: [&str; 4] = [
     "roxyd-selfupdate-deadline.service",
 ];
 
-/// The prefixes of the container names kept.
+/// The container names kept exactly: `aice-web-next` is the name bootler
+/// pins for the Web's `next-app` container. Names starting with one of
+/// [`CONTAINERS`] are kept too.
+const CONTAINER_NAMES: [&str; 1] = ["aice-web-next"];
+
+/// The prefixes of the container names kept, besides the exact names in
+/// [`CONTAINER_NAMES`].
 const CONTAINERS: [&str; 2] = ["aice-web-next-", "clumit-security-"];
 
 /// One parsed journal entry.
@@ -128,8 +134,10 @@ fn select<'a>(
         return Some(("systemd", unit));
     }
     if systemd_unit == Some("docker.service")
-        && let Some(name) =
-            container_name.filter(|name| CONTAINERS.iter().any(|prefix| name.starts_with(prefix)))
+        && let Some(name) = container_name.filter(|name| {
+            CONTAINER_NAMES.contains(name)
+                || CONTAINERS.iter().any(|prefix| name.starts_with(prefix))
+        })
     {
         return Some(("container", name));
     }
@@ -273,6 +281,10 @@ mod tests {
             "aice-web-next-app",
             "clumit-security-db",
             "clumit-security-",
+            "aice-web-next",
+            "aice-web-next-postgres",
+            "aice-web-next-nginx-prod-1",
+            "clumit-security-http01",
         ] {
             assert_eq!(
                 kept(&json!({ "_SYSTEMD_UNIT": "docker.service", "CONTAINER_NAME": name })),
@@ -284,9 +296,13 @@ mod tests {
             // A forged `CONTAINER_NAME`.
             json!({ "_SYSTEMD_UNIT": "logger.service", "CONTAINER_NAME": "clumit-security-db" }),
             json!({ "CONTAINER_NAME": "clumit-security-db" }),
+            json!({ "_SYSTEMD_UNIT": "logger.service", "CONTAINER_NAME": "aice-web-next" }),
+            json!({ "_SYSTEMD_UNIT": "session-1.scope", "CONTAINER_NAME": "aice-web-next" }),
+            json!({ "CONTAINER_NAME": "aice-web-next" }),
             // Other containers.
             json!({ "_SYSTEMD_UNIT": "docker.service", "CONTAINER_NAME": "postgres" }),
-            json!({ "_SYSTEMD_UNIT": "docker.service", "CONTAINER_NAME": "aice-web-next" }),
+            json!({ "_SYSTEMD_UNIT": "docker.service", "CONTAINER_NAME": "aice-web-nextx" }),
+            json!({ "_SYSTEMD_UNIT": "docker.service", "CONTAINER_NAME": "Aice-web-next" }),
             json!({ "_SYSTEMD_UNIT": "docker.service", "CONTAINER_NAME": "Clumit-security-db" }),
             json!({ "_SYSTEMD_UNIT": "docker.service" }),
         ] {

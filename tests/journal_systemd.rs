@@ -532,24 +532,27 @@ fn epoch_seconds() -> u64 {
 }
 
 /// Writes entries outside any clumit-security unit, from this process: a
-/// `logger` line, and one with a forged container name.
+/// `logger` line, and two with a forged container name, one starting with
+/// `clumit-security-` and one exactly `aice-web-next`.
 async fn forge(token: &str) -> Result<()> {
     use tokio::io::AsyncWriteExt;
 
     run("logger", &[&format!("forged-{token}-logger")]).await?;
-    let mut logger = Command::new("logger")
-        .arg("--journald")
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
-    let mut stdin = logger.stdin.take().context("piped stdin")?;
-    stdin
-        .write_all(
-            format!("MESSAGE=forged-{token}-container\nCONTAINER_NAME=clumit-security-forged\n")
-                .as_bytes(),
-        )
-        .await?;
-    drop(stdin);
-    ensure!(logger.wait().await?.success(), "logger --journald");
+    // One `logger --journald` run per entry: a single run writes one entry,
+    // so appending would give one entry two `CONTAINER_NAME` values.
+    for payload in [
+        format!("MESSAGE=forged-{token}-container\nCONTAINER_NAME=clumit-security-forged\n"),
+        format!("MESSAGE=forged-{token}-web\nCONTAINER_NAME=aice-web-next\n"),
+    ] {
+        let mut logger = Command::new("logger")
+            .arg("--journald")
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+        let mut stdin = logger.stdin.take().context("piped stdin")?;
+        stdin.write_all(payload.as_bytes()).await?;
+        drop(stdin);
+        ensure!(logger.wait().await?.success(), "logger --journald");
+    }
     Ok(())
 }
 

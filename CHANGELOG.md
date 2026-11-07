@@ -4,6 +4,19 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The journal collector now also sends the lines of the container named
+  `aice-web-next`, the Clumit Security Web application itself, as
+  `clumit-security/container/aice-web-next`. Before, it kept only containers
+  whose names start with `aice-web-next-` or `clumit-security-`, so the Web
+  application's own lines were dropped. As for the other containers, an entry
+  is kept only when journald records it as coming from `docker.service`. Lines
+  that an existing collector had already passed before this update are not
+  sent.
+
 ## [0.28.0] - 2026-11-02
 
 ### Changed
@@ -643,6 +656,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Docker, you should bind the `/report` to see the report file from the host.
 - Dockerfile changed to use g++-8
 
+[Unreleased]: https://github.com/aicers/reproduce/compare/0.28.0...main
 [0.28.0]: https://github.com/aicers/reproduce/compare/0.27.1...0.28.0
 [0.27.1]: https://github.com/aicers/reproduce/compare/0.27.0...0.27.1
 [0.27.0]: https://github.com/aicers/reproduce/compare/0.26.0...0.27.0

@@ -293,7 +293,7 @@ An entry is kept when one of these rows holds, and dropped otherwise:
 | --- | --- | --- |
 | `unit` | `_SYSTEMD_UNIT` matches `clumit-security-*.service`, or is `bootroot-registrar.service`, `roxyd-selfupdate-boot.service`, `roxyd-selfupdate-crash.service` or `roxyd-selfupdate-deadline.service` | `clumit-security/unit/<_SYSTEMD_UNIT>` |
 | `systemd` | `_PID` is `1` and `UNIT` meets the `unit` condition | `clumit-security/systemd/<UNIT>` |
-| `container` | `_SYSTEMD_UNIT` is `docker.service` and `CONTAINER_NAME` starts with `aice-web-next-` or `clumit-security-` | `clumit-security/container/<CONTAINER_NAME>` |
+| `container` | `_SYSTEMD_UNIT` is `docker.service` and `CONTAINER_NAME` is `aice-web-next` or starts with `aice-web-next-` or `clumit-security-` | `clumit-security/container/<CONTAINER_NAME>` |
 
 <!-- markdownlint-enable MD013 -->
 

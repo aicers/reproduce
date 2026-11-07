@@ -271,7 +271,7 @@ type = "journal"
 | --- | --- | --- |
 | `unit` | `_SYSTEMD_UNIT`이 `clumit-security-*.service`에 맞거나, `bootroot-registrar.service`, `roxyd-selfupdate-boot.service`, `roxyd-selfupdate-crash.service`, `roxyd-selfupdate-deadline.service` 중 하나 | `clumit-security/unit/<_SYSTEMD_UNIT>` |
 | `systemd` | `_PID`가 `1`이고 `UNIT`이 `unit` 조건에 맞음 | `clumit-security/systemd/<UNIT>` |
-| `container` | `_SYSTEMD_UNIT`이 `docker.service`이고 `CONTAINER_NAME`이 `aice-web-next-` 또는 `clumit-security-`로 시작 | `clumit-security/container/<CONTAINER_NAME>` |
+| `container` | `_SYSTEMD_UNIT`이 `docker.service`이고 `CONTAINER_NAME`이 `aice-web-next`이거나 `aice-web-next-` 또는 `clumit-security-`로 시작 | `clumit-security/container/<CONTAINER_NAME>` |
 
 <!-- markdownlint-enable MD013 -->
 
