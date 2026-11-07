@@ -2172,6 +2172,9 @@ mod journal {
         wait_for_lines(giganto, JOURNAL, &lines).await;
     }
 
+    // One journal fed through one run: the entries and the records they are
+    // expected to become stay side by side, which splitting would separate.
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn the_journal_stream_shares_the_connection_with_log_collectors() -> Result<()> {
         let (logs_capture, _guard) = Logs::capture();
@@ -2201,6 +2204,16 @@ mod journal {
                 5,
                 &json!({ "_SYSTEMD_UNIT": "session-1.scope", "CONTAINER_NAME": "clumit-security-db" }),
             ),
+            // The Web application's container, named exactly.
+            entry_with(
+                6,
+                &json!({ "_SYSTEMD_UNIT": "docker.service", "CONTAINER_NAME": "aice-web-next" }),
+            ),
+            // The same name, forged.
+            entry_with(
+                7,
+                &json!({ "_SYSTEMD_UNIT": "session-1.scope", "CONTAINER_NAME": "aice-web-next" }),
+            ),
         ])?;
         let logs = LogFiles::new()?;
         let a = logs.create("a.log", &["a1"])?;
@@ -2210,7 +2223,7 @@ mod journal {
         runtime
             .apply(journal_config(giganto.addr, &[("kind_a", &a)]))
             .await;
-        wait_for_messages(&giganto, [1, 3, 4]).await;
+        wait_for_messages(&giganto, [1, 3, 4, 6]).await;
         wait_for_lines(&giganto, "kind_a", &["a1"]).await;
         assert!(
             logs_capture
@@ -2258,17 +2271,23 @@ mod journal {
                     OpLogLevel::Info,
                     "message 4"
                 ),
+                (
+                    "",
+                    "clumit-security/container/aice-web-next",
+                    OpLogLevel::Info,
+                    "message 6"
+                ),
             ]
         );
         // Stamped from the entries' times.
-        let stamps = [1, 3, 4]
+        let stamps = [1, 3, 4, 6]
             .map(|n| i64::try_from(time(n) * 1000).expect("fits"))
             .to_vec();
         assert_eq!(journal.timestamps, stamps);
 
         // Once everything written is acknowledged, the checkpoint moves past
         // the entry dropped after the last record.
-        wait_for_cursor(&logs.state(), 5).await;
+        wait_for_cursor(&logs.state(), 7).await;
 
         runtime.shutdown().await;
         assert!(giganto.streams().iter().all(|stream| stream.close_marker));
@@ -2278,7 +2297,7 @@ mod journal {
                 .contains("Stopped the journal collector with close ACK Received")
         );
         assert!(!running(fake.last_pid()), "journalctl is stopped");
-        wait_for_cursor(&logs.state(), 5).await;
+        wait_for_cursor(&logs.state(), 7).await;
         Ok(())
     }
 

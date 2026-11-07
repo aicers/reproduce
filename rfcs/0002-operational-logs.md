@@ -151,9 +151,14 @@ Security Web shows any of it.
   (`core/src/registrar.rs:315`); `roxyd-selfupdate-boot.service`,
   `roxyd-selfupdate-crash.service` (deploy-core `src/roxyd_selfupdate.rs:100`,
   `:103`).
-- Container names: compose project `aice-web-next`
-  (`core/src/webnext.rs:45`, `:51`), so `aice-web-next-<service>-<n>`;
-  bootroot's `container_name: ${BOOTROOT_INSTANCE:-bootroot}-<suffix>`
+- Container names (amended 2026-11-08): compose project `aice-web-next`
+  (`core/src/webnext.rs:45`, `:51`), so `aice-web-next-<service>-<n>`, except
+  two services whose `container_name` bootler pins: `next-app` as
+  `aice-web-next`, the target of the Web's certificate-reload restart (bootler
+  `7168f582` `core/src/product.rs:2536-2537`, `core/src/webnext.rs:1607`), and
+  `postgres` as `aice-web-next-postgres` (bootler `7168f582`
+  `core/src/product.rs:2782`, `core/src/webnext.rs:1598`); bootroot's
+  `container_name: ${BOOTROOT_INSTANCE:-bootroot}-<suffix>`
   (bootroot `docker-compose.deploy.yml:28`, `:68`, `:81`, `:124`) with
   bootler always passing `--instance-name <namespace>`, so
   `clumit-security-openbao`, `clumit-security-postgres`, `clumit-security-ca`,
@@ -275,14 +280,14 @@ Not in scope:
   acknowledged position (RFC 0001 §4.6) and starts again with catch-up from
   that cursor. If journalctl exits during follow, or its output cannot be
   parsed, the collector logs a warning, waits 5 s and does the same.
-- **[DECISION] Selection by trusted fields only.** An entry is kept when one of
-  these holds, and dropped otherwise:
+- **[DECISION] Selection by trusted fields only (amended 2026-11-08).** An
+  entry is kept when one of these holds, and dropped otherwise:
 
   | Source type | Condition | Name |
   | --- | --- | --- |
   | `unit` | `_SYSTEMD_UNIT` matches `clumit-security-*.service`, or equals `bootroot-registrar.service`, `roxyd-selfupdate-boot.service`, `roxyd-selfupdate-crash.service` or `roxyd-selfupdate-deadline.service` (deploy-core `src/roxyd_selfupdate.rs:100-105`) | `_SYSTEMD_UNIT` |
   | `systemd` | `_PID` is `1` and `UNIT` meets the `unit` condition | `UNIT` |
-  | `container` | `_SYSTEMD_UNIT` is `docker.service` and `CONTAINER_NAME` starts with `aice-web-next-` or `clumit-security-` | `CONTAINER_NAME` |
+  | `container` | `_SYSTEMD_UNIT` is `docker.service` and `CONTAINER_NAME` is `aice-web-next` or starts with `aice-web-next-` or `clumit-security-` | `CONTAINER_NAME` |
 
   Underscore fields are set by journald and cannot be written by a client;
   `CONTAINER_NAME` alone can (the journal socket is world-writable), which is
@@ -702,17 +707,19 @@ src/store/identifier.rs`, `src/admin/ingest.rs:23-35`); this RFC builds on it.
   stores' results are shown. The warning also names the hosts whose system
   instance's `dataStore` is that store. "Retry" queries every
   store again from the first page. A timeout suggests a narrower range.
-- **[DECISION] Display.** Columns: time (the user's time zone), host, source,
-  level, message. A source with a SAN is shown and linked by it — modules
+- **[DECISION] Display (amended 2026-11-08).** Columns: time (the user's time
+  zone), host, source, level, message. A source with a SAN is shown and linked
+  by it — modules
   `clumit-security-<package>-<NNN>.service` → `<NNN>.<package>.<host>.<domain>`;
   `clumit-security-review.service`, `clumit-security-roxyd.service` and the
-  `aice-web-next-next-app-<n>` container → that component's SAN — and links to
-  its node and agent when it is a node's module, or to its row in the core
-  components list when it is a core component. Other sources are shown as
-  "component / name" (e.g. "aice-web-next / nginx-prod", "bootroot / openbao"
-  for `clumit-security-openbao`, "roxyd / roxyd-activate"). `systemd` lines are
-  marked "systemd". The mapping is display-only; stored values are never
-  rewritten.
+  `aice-web-next` container (`aice-web-next-next-app-<n>` under Compose's
+  default naming) → that component's SAN — and links to its node and agent
+  when it is a node's module, or to its row in the core components list when
+  it is a core component. Other sources are shown as "component / name" (e.g.
+  "aice-web-next / nginx-prod", "aice-web-next / postgres" for
+  `aice-web-next-postgres`, "bootroot / openbao" for `clumit-security-openbao`,
+  "roxyd / roxyd-activate"). `systemd` lines are marked "systemd". The mapping
+  is display-only; stored values are never rewritten.
 - **[DECISION] Collectors view.** The System area gets "Operational log
   collectors", next to the core components list and gated like it (System
   Administrator): one row per `systemLogCollectorList` entry with host,
