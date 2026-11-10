@@ -627,6 +627,7 @@ async fn a_first_start_reads_from_the_installation_start() {
 
 #[tokio::test]
 async fn a_restart_after_reading_nothing_reads_from_the_installation_start() {
+    let (logs, _guard) = Logs::capture();
     let fake = Fake::new();
     fake.set("status", Some("1"));
     let mut settings = fake.settings();
@@ -634,7 +635,12 @@ async fn a_restart_after_reading_nothing_reads_from_the_installation_start() {
     settings.since = since(&settings.paths.installation, Ok(born()), SystemTime::now());
     let link = read::spawn(settings, Initial::Wait, 0);
     link.resume(1, None);
-    fake.wait_for_args(1).await;
+    // The fake reads `status` as it exits, after recording its arguments, so
+    // it is cleared only once the failed exit has been seen.
+    wait_until("the failed catch-up", || {
+        logs.count("journalctl ended with exit status: 1 while catching up") >= 1
+    })
+    .await;
     fake.set("status", None);
     assert_eq!(
         fake.wait_for_args(3).await[..3],
@@ -852,6 +858,11 @@ async fn a_failed_catch_up_keeps_its_batch_and_restarts_after_the_last_entry_rea
     assert_eq!(contents, messages([1]));
     assert_eq!(last, position(1));
     assert_eq!(after, Some(position(2)));
+    // The batch can arrive before the fake reads `status` as it exits.
+    wait_until("the failed catch-up", || {
+        logs.count("journalctl ended with exit status: 1 while catching up") >= 1
+    })
+    .await;
     fake.set("status", None);
     let args = fake.wait_for_args(3).await;
     assert_eq!(
