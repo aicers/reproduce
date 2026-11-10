@@ -2658,6 +2658,97 @@ mod journal {
         Ok(())
     }
 
+    /// Starts the collector over an empty journal and a corrupt checkpoint,
+    /// with the installation directory only if `installed`, and checks that
+    /// the warning and journalctl's arguments both follow the installation's
+    /// start when it is known and the oldest entry when it is not.
+    async fn corrupt_checkpoint_over_an_empty_journal(installed: bool) -> Result<()> {
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        let logs = LogFiles::new()?;
+        std::fs::create_dir(logs.state().join("checkpoints"))?;
+        std::fs::write(journal_file(&logs.state()), b"garbage")?;
+        // The collector reads the birth time as `created` does; a filesystem
+        // that records none leaves it without the installation's start.
+        let since = if installed {
+            let installation = fake.path("installation");
+            std::fs::create_dir(&installation)?;
+            std::fs::metadata(&installation)?
+                .created()
+                .ok()
+                .map(|birth| -> Result<u64> {
+                    Ok(birth
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_secs()
+                        .saturating_sub(60))
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let file = journal_file(&logs.state());
+        let (warning, position) = match since {
+            Some(since) => (
+                format!(
+                    "Checkpoint {} is unusable: not valid JSON; the journal is empty, so \
+                     reading starts at the installation's start, Unix second {since}",
+                    file.display()
+                ),
+                format!("--since=@{since}"),
+            ),
+            None => (
+                format!(
+                    "Checkpoint {} is unusable: not valid JSON; the journal is empty and the \
+                     installation's start is unknown, so reading starts at the journal's \
+                     oldest entry",
+                    file.display()
+                ),
+                String::new(),
+            ),
+        };
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() >= 3).await;
+        assert_eq!(
+            fake.args(),
+            [
+                "--lines=1".to_string(),
+                position.clone(),
+                format!("--follow --lines=all {position}")
+                    .trim_end()
+                    .to_string(),
+            ]
+        );
+        let text = logs_capture.text();
+        assert_eq!(text.matches(&warning).count(), 1, "{text}");
+        assert!(
+            !text.contains("unsent earlier entries may be skipped"),
+            "{text}"
+        );
+
+        fake.push(&[entry(1, KEPT)])?;
+        wait_for_messages(&giganto, [1]).await;
+        wait_for_cursor(&logs.state(), 1).await;
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_checkpoint_over_an_empty_journal_reads_from_the_installation_start()
+    -> Result<()> {
+        corrupt_checkpoint_over_an_empty_journal(true).await
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_checkpoint_over_an_empty_journal_without_a_start_reads_the_oldest_entry()
+    -> Result<()> {
+        corrupt_checkpoint_over_an_empty_journal(false).await
+    }
+
     #[tokio::test]
     async fn journalctl_waits_for_the_stream() -> Result<()> {
         let (_pki, giganto, files) = setup()?;

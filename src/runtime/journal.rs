@@ -374,12 +374,23 @@ impl JournalTask {
                 );
                 self.start_at(control, tail).await;
             }
+            // Nothing is saved, so the reader's runs have no predecessor and
+            // read from `Settings::since`, computed as the collector started.
             Start::Corrupt { reason, tail: None } => {
-                warn!(
-                    "Checkpoint {} is unusable: {reason}; the journal is empty, so reading \
-                     starts at its oldest entry",
-                    file.display()
-                );
+                if let Some(since) = self.settings.since {
+                    warn!(
+                        "Checkpoint {} is unusable: {reason}; the journal is empty, so reading \
+                         starts at the installation's start, Unix second {since}",
+                        file.display()
+                    );
+                } else {
+                    warn!(
+                        "Checkpoint {} is unusable: {reason}; the journal is empty and the \
+                         installation's start is unknown, so reading starts at the journal's \
+                         oldest entry",
+                        file.display()
+                    );
+                }
                 self.acks.load(None);
             }
         }

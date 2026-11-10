@@ -326,7 +326,15 @@ type = "journal"
   교체하고, 아무것도 보내기 전에 저장한 뒤 그 다음 항목부터 따라갑니다. 이때
   `Checkpoint <file> is unusable: <reason>; starting after the newest journal
   entry instead, so unsent earlier entries may be skipped` 경고를 기록합니다.
-  저널이 비어 있으면 대신 가장 오래된 항목부터 시작합니다.
+- 저널이 비어 있으면 저장할 가장 새로운 항목이 없으므로, 체크포인트가 없을
+  때와 같이 수집기가 시작될 때 계산해 둔 설치 시작 시점부터 읽고, 그때 생성
+  시각을 읽을 수 없었던 경우에만 저널에 있는 가장 오래된 항목부터 읽습니다.
+  설치 시작 시점이 있으면
+  `Checkpoint <file> is unusable: <reason>; the journal is empty, so reading
+  starts at the installation's start, Unix second <seconds>` 경고를, 없으면
+  `Checkpoint <file> is unusable: <reason>; the journal is empty and the
+  installation's start is unknown, so reading starts at the journal's oldest
+  entry` 경고를 기록합니다.
 - 체크포인트 `<state-dir>/checkpoints/journal.json`에는 확인된 항목의 저널
   커서와 그 항목의 시퀀스 번호 ID, 시퀀스 번호, 시각을 담습니다.
 
