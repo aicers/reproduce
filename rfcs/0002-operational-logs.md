@@ -237,15 +237,17 @@ Not in scope:
 - **[DECISION] Reader.** The collector runs `/usr/bin/journalctl` in two
   phases and reads one JSON object per line from its stdout:
   1. *Catch-up:* `journalctl --output=json --all --no-pager` with
-     `--after-cursor=<cursor>` when it has a checkpoint (from the oldest entry
-     when it has none), without `--follow`, until it exits. Without `--follow`
-     journalctl reads every boot; with `--follow` it reads only the current
-     boot (observed on systemd 259: `--follow --after-cursor` jumps to the
-     current boot's first entry), which would skip a previous boot's tail.
+     `--after-cursor=<cursor>` when it has a checkpoint (from the
+     installation's start when it has none, §4.3), without `--follow`, until
+     it exits. Without `--follow` journalctl reads every boot; with `--follow`
+     it reads only the current boot (observed on systemd 259: `--follow
+     --after-cursor` jumps to the current boot's first entry), which would skip
+     a previous boot's tail.
   2. *Follow:* `journalctl --output=json --all --no-pager --follow --lines=all
      --after-cursor=<cursor of the last entry read>`; that entry is in the
      current boot once catch-up has reached the end. With no entry read in
-     catch-up (empty journal) it runs `--follow --lines=all` alone.
+     catch-up and no start position, it runs `--follow --lines=all` with the
+     same `--since` as catch-up, or alone when there is none (§4.3).
 
   `--all` is required: without it the JSON output replaces any field longer than
   4096 bytes with `null`. `--output-fields` limits output to `MESSAGE`,
@@ -346,10 +348,39 @@ Not in scope:
 
 ### 4.3 Start, resume and loss
 
-- **[DECISION] First start.** With no checkpoint the collector starts at the
-  oldest entry the journal holds, so logs from before installation arrive with
-  their own times. This differs from `log` collectors' default `start = "end"`
-  because journal timestamps are event times.
+- **[DECISION] First start (amended 2026-11-11).** With no checkpoint the
+  collector starts at the current installation's start on the host, so the
+  installation's own logs from before the collector started arrive with their
+  own times, and the lines an earlier installation on the same host left in
+  the journal do not. This differs from `log` collectors' default
+  `start = "end"` because journal timestamps are event times.
+  - The installer creates `/etc/clumit-security` when the installation first
+    reaches a host, on installation hosts and on hosts that join later, and
+    every uninstall removes it, so its birth time (`statx`, through Rust's
+    `Metadata::created`) is when the current installation started there.
+  - Every journalctl run, catch-up or follow, that has no predecessor (no
+    checkpoint, no entry read yet and no start position, which includes a
+    resume without a position after an early stream failure) gets
+    `--since=@<seconds>`: the earlier of that birth time and the current time,
+    in whole Unix seconds (floor), minus 60, and not below 0. The collector
+    reads the birth time and computes this bound once each time it starts, not
+    each time its reader starts again. A run with a predecessor uses
+    `--after-cursor` (§4.2) and ignores the bound.
+  - The 60 s margin covers small clock offsets: on a joined host the directory
+    is created before chrony first syncs the clock, so a clock that was ahead
+    can stamp a birth time later than the first lines. Taking the earlier of
+    the birth time and now keeps a large offset, a birth time later than now,
+    from falling back to the whole old journal; at worst the installation's
+    first lines are lost.
+  - When the birth time is not usable, because the directory is missing or the
+    filesystem does not record birth times, the collector starts at the oldest
+    entry the journal holds, as before this amendment, and logs one warning
+    naming the directory and the reason.
+  - Accepted, close to the oldest-entry rule: an `/etc/clumit-security` that is
+    a mount point, whose birth time is the mount's, and a joined host whose
+    root was reused from an earlier join.
+  - The lost-interval checks below compare consecutive parsed entries only, so
+    the bound does not affect them.
 - **[DECISION] Resume.** With a checkpoint it starts after the saved cursor.
 - **[DECISION] Lost interval.** The checkpoint also stores the saved entry's
   `__SEQNUM_ID`, `__SEQNUM` and `__REALTIME_TIMESTAMP`. The collector compares
@@ -775,6 +806,11 @@ src/store/identifier.rs`, `src/admin/ingest.rs:23-35`); this RFC builds on it.
   `__SEQNUM_ID`; the collector warns once (§4.3) and continues from the oldest
   entry after the saved realtime it finds. (A restored journal with the old
   sequence numbers is not detected as a gap.)
+- **Reinstalled on the same host.** The journal still holds the earlier
+  installation's lines, but the purge removed `/etc/clumit-security` and the
+  new installation created it again, so the new instance, which has no
+  checkpoint, starts at the new installation's start (§4.3): the earlier
+  installation's lines are not sent as the new installation's.
 - **REproduce stopped.** Its own last lines stay in the journal and are sent
   when it starts again, from its checkpoint.
 - **Two REproduce instances on a host.** A host that also collects customer
@@ -784,9 +820,11 @@ src/store/identifier.rs`, `src/admin/ingest.rs:23-35`); this RFC builds on it.
   directories) and no kind (the journal collector has none).
 - **System instance tampered with by hand.** If its unit or data directory is
   removed outside REview, REview does not notice (§4.9 lifecycle limits). If
-  the data directory alone is lost, the instance starts at the oldest entry
-  again and Giganto stores the retained journal a second time (OpLog keys
-  never overwrite); accepted, the duplicates expire with `oplog_retention`.
+  the data directory alone is lost, the instance starts at the installation's
+  start again (§4.3), or at the oldest entry when the birth time of
+  `/etc/clumit-security` is not usable, and Giganto stores the retained
+  entries since then a second time (OpLog keys never overwrite); accepted, the
+  duplicates expire with `oplog_retention`.
 - **Long events.** A container line over Docker's 16 KiB partial-message limit,
   or a unit line over journald's `LineMax` (48 KiB default), is split into
   several entries; accepted.
@@ -811,8 +849,8 @@ src/store/identifier.rs`, `src/admin/ingest.rs:23-35`); this RFC builds on it.
 ## 6. Acceptance criteria
 
 1. On a host with no checkpoint, the journal collector sends every retained
-   entry of a selected source, oldest first, each as an `OpLog` whose time is
-   the entry's realtime stamp.
+   entry of a selected source since the current installation's start (§4.3),
+   oldest first, each as an `OpLog` whose time is the entry's realtime stamp.
 2. Only entries meeting §4.2's table are sent; a `logger`, a user-session
    process, an unlisted unit and a forged `CONTAINER_NAME` are not.
 3. Priorities 0–7 map as §4.2 says; Docker stdout is Info, stderr Error.
