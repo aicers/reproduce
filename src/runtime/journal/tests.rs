@@ -118,14 +118,24 @@ impl Fake {
                 journalctl: self.path("journalctl"),
                 machine_id: self.path("machine-id"),
                 journal_root: self.path("journal"),
+                installation: self.path("installation"),
             },
             state_dir: self.state.path().to_path_buf(),
             retry_interval: RETRY,
+            since: None,
         }
     }
 
     fn spawn(&self, initial: Initial) -> ReaderLink {
         read::spawn(self.settings(), initial, 0)
+    }
+
+    /// Spawns a reader whose runs without a predecessor read from the bound
+    /// [`since`] computes for an installation directory born at `birth`.
+    fn spawn_born(&self, initial: Initial, birth: SystemTime) -> ReaderLink {
+        let mut settings = self.settings();
+        settings.since = since(&settings.paths.installation, Ok(birth), SystemTime::now());
+        read::spawn(settings, initial, 0)
     }
 
     /// Spawns a reader that waits `retry_interval` after a failure.
@@ -570,6 +580,215 @@ async fn an_over_long_line_is_skipped_with_a_warning() {
     assert_eq!(
         fake.wait_for_args(2).await[1],
         format!("--follow --lines=all --after-cursor={}", cursor(3))
+    );
+}
+
+/// The birth time of the installation directory in the argument tests.
+const BIRTH: u64 = 1_700_000_100;
+
+/// The `--since` of a run without a predecessor, for an installation
+/// directory born at [`BIRTH`].
+fn since_arg() -> String {
+    format!("--since=@{}", BIRTH - 60)
+}
+
+fn born() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(BIRTH)
+}
+
+#[tokio::test]
+async fn a_first_start_reads_from_the_installation_start() {
+    let fake = Fake::new();
+    fake.push(&[entry(1, KEPT), entry(2, DROPPED)]);
+    let mut link = fake.spawn_born(Initial::Load, born());
+    let output = next(&mut link).await;
+    assert_eq!(output.event_start(), Some(&Start::Missing));
+    link.resume(1, None);
+    let (contents, _, _) = batch(next(&mut link).await);
+    assert_eq!(contents, messages([1]));
+    // Follow has a predecessor, the last entry read.
+    assert_eq!(
+        fake.wait_for_args(2).await,
+        [
+            since_arg(),
+            format!("--follow --lines=all --after-cursor={}", cursor(2)),
+        ]
+    );
+
+    // A catch-up that reads nothing leaves follow without a predecessor.
+    let fake = Fake::new();
+    let link = fake.spawn_born(Initial::Wait, born());
+    link.resume(1, None);
+    assert_eq!(
+        fake.wait_for_args(2).await,
+        [since_arg(), format!("--follow --lines=all {}", since_arg())]
+    );
+}
+
+#[tokio::test]
+async fn a_restart_after_reading_nothing_reads_from_the_installation_start() {
+    let fake = Fake::new();
+    fake.set("status", Some("1"));
+    let mut settings = fake.settings();
+    settings.retry_interval = Duration::from_secs(1);
+    settings.since = since(&settings.paths.installation, Ok(born()), SystemTime::now());
+    let link = read::spawn(settings, Initial::Wait, 0);
+    link.resume(1, None);
+    fake.wait_for_args(1).await;
+    fake.set("status", None);
+    assert_eq!(
+        fake.wait_for_args(3).await[..3],
+        [
+            since_arg(),
+            since_arg(),
+            format!("--follow --lines=all {}", since_arg()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_resume_without_a_position_reads_from_the_installation_start() {
+    let fake = Fake::new();
+    fake.push(&[entry(1, KEPT)]);
+    let mut link = fake.spawn_born(Initial::Load, born());
+    ready(&mut link).await;
+    link.resume(1, None);
+    batch(next(&mut link).await);
+    fake.wait_for_args(2).await;
+
+    // As after a stream fails before anything is acknowledged.
+    link.pause().await;
+    fake.push(&[entry(2, KEPT)]);
+    link.resume(2, None);
+    let (contents, _, _) = batch(next(&mut link).await);
+    assert_eq!(contents, messages([1, 2]));
+    fake.wait_for_args(4).await;
+    // A resume with a position reads after it.
+    link.pause().await;
+    link.resume(3, Some(position(1)));
+    let (contents, _, _) = batch(next(&mut link).await);
+    assert_eq!(contents, messages([2]));
+    assert_eq!(
+        fake.wait_for_args(6).await,
+        [
+            since_arg(),
+            format!("--follow --lines=all --after-cursor={}", cursor(1)),
+            since_arg(),
+            format!("--follow --lines=all --after-cursor={}", cursor(2)),
+            format!("--after-cursor={}", cursor(1)),
+            format!("--follow --lines=all --after-cursor={}", cursor(2)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_start_with_a_checkpoint_reads_after_it() {
+    let fake = Fake::new();
+    fake.push(&[entry(1, KEPT), entry(2, KEPT)]);
+    fs::create_dir(fake.state.path().join("checkpoints")).expect("directory");
+    fs::write(
+        journal_file(fake.state.path()),
+        crate::runtime::checkpoints::encode_journal(&position(1)),
+    )
+    .expect("checkpoint");
+    let mut link = fake.spawn_born(Initial::Load, born());
+    let output = next(&mut link).await;
+    assert_eq!(output.event_start(), Some(&Start::Found(position(1))));
+    link.resume(1, Some(position(1)));
+    let (contents, _, _) = batch(next(&mut link).await);
+    assert_eq!(contents, messages([2]));
+    let args = fake.wait_for_args(2).await;
+    assert_eq!(
+        args,
+        [
+            format!("--after-cursor={}", cursor(1)),
+            format!("--follow --lines=all --after-cursor={}", cursor(2)),
+        ]
+    );
+    assert!(args.iter().all(|args| !args.contains("--since")));
+}
+
+#[test]
+fn the_bound_is_a_minute_before_the_earlier_of_the_birth_and_now() {
+    let dir = Path::new("/etc/clumit-security");
+    let at = |seconds: u64, nanos: u32| UNIX_EPOCH + Duration::new(seconds, nanos);
+    let now = at(2_000_000_000, 0);
+    // Whole seconds, floored, less 60.
+    assert_eq!(
+        since(dir, Ok(at(1_700_000_100, 0)), now),
+        Some(1_700_000_040)
+    );
+    assert_eq!(
+        since(dir, Ok(at(1_700_000_100, 999_999_999)), now),
+        Some(1_700_000_040)
+    );
+    // A birth time later than now uses now.
+    assert_eq!(
+        since(dir, Ok(at(2_000_003_600, 0)), now),
+        Some(1_999_999_940)
+    );
+    assert_eq!(
+        since(
+            dir,
+            Ok(at(2_000_003_600, 0)),
+            at(2_000_000_000, 500_000_000)
+        ),
+        Some(1_999_999_940)
+    );
+    // Never below 0.
+    assert_eq!(since(dir, Ok(at(59, 0)), now), Some(0));
+    assert_eq!(since(dir, Ok(at(60, 0)), now), Some(0));
+    assert_eq!(since(dir, Ok(at(61, 0)), now), Some(1));
+    assert_eq!(
+        since(dir, Ok(UNIX_EPOCH - Duration::from_secs(10)), now),
+        Some(0)
+    );
+}
+
+#[test]
+fn an_unsupported_birth_time_reads_from_the_oldest_entry_with_one_warning() {
+    let (logs, _guard) = Logs::capture();
+    let dir = Path::new("/etc/clumit-security");
+    let unsupported = io::Error::new(
+        io::ErrorKind::Unsupported,
+        "creation time is not available for the filesystem",
+    );
+    assert_eq!(since(dir, Err(unsupported), SystemTime::now()), None);
+    let text = logs.text();
+    assert_eq!(text.matches("WARN").count(), 1, "{text}");
+    assert!(
+        text.contains(
+            "cannot read the birth time of /etc/clumit-security (creation time is not \
+             available for the filesystem)"
+        ),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_installation_directory_reads_from_the_oldest_entry_with_one_warning() {
+    let (logs, _guard) = Logs::capture();
+    let fake = Fake::new();
+    let dir = fake.path("installation");
+    assert_eq!(read_since(&dir).await, None);
+    let text = logs.text();
+    assert_eq!(text.matches("WARN").count(), 1, "{text}");
+    assert_eq!(
+        text.matches(&format!("cannot read the birth time of {}", dir.display()))
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(text.contains("No such file or directory"), "{text}");
+
+    // The reader then runs as before.
+    let mut settings = fake.settings();
+    settings.since = read_since(&dir).await;
+    let link = read::spawn(settings, Initial::Wait, 0);
+    link.resume(1, None);
+    assert_eq!(
+        fake.wait_for_args(2).await,
+        [String::new(), "--follow --lines=all".to_string()]
     );
 }
 

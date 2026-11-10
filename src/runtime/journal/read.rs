@@ -123,7 +123,8 @@ pub(super) struct Record {
 #[derive(Debug)]
 enum Command {
     /// Discards everything read and not returned, and reads after the
-    /// position, or from the oldest entry.
+    /// position, or from the installation's start or the oldest entry
+    /// ([`Settings::since`]).
     Resume {
         number: u64,
         position: Option<JournalPosition>,
@@ -141,7 +142,8 @@ pub(super) struct ReaderLink {
 
 impl ReaderLink {
     /// Has the reader discard what it read and not returned, and read after
-    /// `position`, or from the oldest entry if there is none.
+    /// `position`, or, if there is none, from the installation's start or
+    /// the oldest entry ([`Settings::since`]).
     pub(super) fn resume(&self, number: u64, position: Option<JournalPosition>) {
         let _ = self.commands.send(Command::Resume { number, position });
     }
@@ -319,15 +321,18 @@ impl Session {
     }
 
     /// The arguments of a run in `mode` besides [`COMMON_ARGS`]: after the
-    /// last entry read, or after the start position when nothing was read.
-    fn args(&self, mode: Mode) -> Vec<String> {
+    /// last entry read, or after the start position when nothing was read;
+    /// from the Unix second `since`, if there is one, when there is neither.
+    fn args(&self, mode: Mode, since: Option<u64>) -> Vec<String> {
         let mut args = Vec::new();
         if mode == Mode::Follow {
             args.push("--follow".to_string());
             args.push("--lines=all".to_string());
         }
-        if let Some(position) = self.predecessor() {
-            args.push(format!("--after-cursor={}", position.cursor));
+        match (self.predecessor(), since) {
+            (Some(position), _) => args.push(format!("--after-cursor={}", position.cursor)),
+            (None, Some(since)) => args.push(format!("--since=@{since}")),
+            (None, None) => {}
         }
         args
     }
@@ -547,9 +552,10 @@ impl Reader {
         })
     }
 
-    /// Reads after `start`, or from the oldest entry, until a command
-    /// interrupts: catch-up, then follow. A failed journalctl is started
-    /// again after the retry interval, after the last entry read.
+    /// Reads after `start`, or from [`Settings::since`] or the oldest entry,
+    /// until a command interrupts: catch-up, then follow. A failed
+    /// journalctl is started again after the retry interval, after the last
+    /// entry read.
     async fn read(&mut self, start: Option<JournalPosition>) -> Result<Next, Closed> {
         let mut session = Session::new(start);
         loop {
@@ -573,7 +579,7 @@ impl Reader {
     async fn run_journalctl(&mut self, session: &mut Session, mode: Mode) -> Result<Ran, Closed> {
         // The run reads again every line after the last entry read.
         session.skipped = 0;
-        let mut child = match self.spawn(&session.args(mode)) {
+        let mut child = match self.spawn(&session.args(mode, self.settings.since)) {
             Ok(child) => child,
             Err(error) => return Ok(Ran::Failed(Failure::Spawn(error))),
         };

@@ -266,9 +266,10 @@ impl CollectorRuntime {
     }
 
     /// Sets the `journalctl` the journal collector runs, the machine-ID file
-    /// and the journal root it checks access with, in place of
-    /// `/usr/bin/journalctl`, `/etc/machine-id` and `/var/log/journal`. For
-    /// tests only.
+    /// and the journal root it checks access with, and the installation
+    /// directory whose birth time it reads from without a position, in place
+    /// of `/usr/bin/journalctl`, `/etc/machine-id`, `/var/log/journal` and
+    /// `/etc/clumit-security`. For tests only.
     #[doc(hidden)]
     #[cfg(target_os = "linux")]
     #[must_use]
@@ -277,11 +278,13 @@ impl CollectorRuntime {
         journalctl: PathBuf,
         machine_id: PathBuf,
         journal_root: PathBuf,
+        installation: PathBuf,
     ) -> Self {
         self.journal_paths = journal::Paths {
             journalctl,
             machine_id,
             journal_root,
+            installation,
         };
         self
     }
@@ -600,6 +603,8 @@ impl CollectorRuntime {
                 paths: self.journal_paths.clone(),
                 state_dir: self.state_dir.clone(),
                 retry_interval: self.retry_interval,
+                // Read as the collector's task starts.
+                since: None,
             },
             acks: Arc::clone(&acks),
             saves: Arc::clone(&saves),

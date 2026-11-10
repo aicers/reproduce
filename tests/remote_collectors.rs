@@ -2126,10 +2126,13 @@ mod journal {
             reload: &ReloadSignal,
             state_dir: &Path,
         ) -> CollectorRuntime {
+            // A missing installation directory keeps journalctl's arguments
+            // independent of whether the filesystem records birth times.
             runtime(files, reload, state_dir).with_journal_paths(
                 self.path("journalctl"),
                 self.path("machine-id"),
                 self.path("journal"),
+                self.path("installation"),
             )
         }
     }

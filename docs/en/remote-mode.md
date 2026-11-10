@@ -331,8 +331,21 @@ An entry is kept when one of these rows holds, and dropped otherwise:
 
 ### Start, Resume and Checkpoint
 
-- With no checkpoint, the collector starts at the oldest entry the journal
-  holds, so entries from before the installation arrive with their own times.
+- With no checkpoint, the collector starts at the current installation's start
+  on the host: one minute before the birth time of `/etc/clumit-security`, the
+  directory the installer creates when the installation reaches the host and
+  every uninstall removes, or one minute before the current time if that is
+  earlier. The installation's own entries from before the collector started
+  arrive with their own times, and the entries an earlier installation on the
+  same host left in the journal are not sent. Every journalctl run that has
+  neither a saved or resumed position nor an entry read yet passes this time as
+  `--since=@<seconds>`; the collector reads the birth time once each time it
+  starts.
+- If the birth time cannot be read, because the directory is missing or the
+  filesystem does not record birth times, the collector starts at the oldest
+  entry the journal holds instead, and logs a warning
+  `Journal collector: cannot read the birth time of <directory> (<reason>);
+  reading without a position starts at the journal's oldest entry`.
 - With a checkpoint, it resumes after the saved entry.
 - A corrupt or unreadable checkpoint is replaced by the journal's newest entry,
   saved before anything is sent, and the collector follows the entries after

@@ -22,10 +22,11 @@ mod limit;
 mod lines;
 mod read;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{fs, io};
 
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -39,6 +40,12 @@ use super::{Due, RemoteSender, Stopped, now_nanos, stop_outcome, stopped};
 use crate::collector::POLLING_INTERVAL;
 use crate::controller::log_reconnect_outcome;
 use crate::sender::CloseAck;
+
+/// How many seconds before the installation's start a journalctl run
+/// without a predecessor starts reading, so that a clock running slightly
+/// ahead when the installation directory was created does not lose the
+/// installation's first entries.
+const SINCE_MARGIN: u64 = 60;
 
 /// The position of one journal entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,6 +69,10 @@ pub(super) struct Paths {
     pub(super) machine_id: PathBuf,
     /// The directory holding a journal directory per machine ID.
     pub(super) journal_root: PathBuf,
+    /// The directory the installer creates when the installation reaches
+    /// the host and every uninstall removes; its birth time is when the
+    /// current installation started on the host.
+    pub(super) installation: PathBuf,
 }
 
 impl Default for Paths {
@@ -70,6 +81,7 @@ impl Default for Paths {
             journalctl: PathBuf::from("/usr/bin/journalctl"),
             machine_id: PathBuf::from("/etc/machine-id"),
             journal_root: PathBuf::from("/var/log/journal"),
+            installation: PathBuf::from("/etc/clumit-security"),
         }
     }
 }
@@ -83,6 +95,49 @@ pub(super) struct Settings {
     /// How long the reader waits between access checks and between
     /// journalctl runs after a failure.
     pub(super) retry_interval: Duration,
+    /// The Unix second a journalctl run without a predecessor reads from,
+    /// or `None` to read from the journal's oldest entry; set once as the
+    /// collector starts ([`since`]).
+    pub(super) since: Option<u64>,
+}
+
+/// Returns the Unix second a journalctl run without a predecessor reads
+/// from, `birth` being the birth time of the installation directory `dir`:
+/// the earlier of `birth` and `now`, in whole seconds, less
+/// [`SINCE_MARGIN`], and not below 0.
+///
+/// Returns `None`, logging a warning, if the birth time could not be read;
+/// such a run then reads from the journal's oldest entry.
+fn since(dir: &Path, birth: io::Result<SystemTime>, now: SystemTime) -> Option<u64> {
+    match birth {
+        Ok(birth) => {
+            // A clock that was ahead when the directory was created can
+            // stamp a birth time later than now.
+            let seconds = birth
+                .min(now)
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs());
+            Some(seconds.saturating_sub(SINCE_MARGIN))
+        }
+        Err(error) => {
+            warn!(
+                "Journal collector: cannot read the birth time of {} ({error}); reading \
+                 without a position starts at the journal's oldest entry",
+                dir.display()
+            );
+            None
+        }
+    }
+}
+
+/// Reads the birth time of the installation directory `dir` and returns
+/// where a journalctl run without a predecessor reads from ([`since`]).
+async fn read_since(dir: &Path) -> Option<u64> {
+    let path = dir.to_path_buf();
+    let birth = tokio::task::spawn_blocking(move || fs::metadata(path)?.created())
+        .await
+        .unwrap_or_else(|error| Err(io::Error::other(error)));
+    since(dir, birth, SystemTime::now())
 }
 
 /// The task of the journal collector: the controller of its reader.
@@ -190,6 +245,8 @@ async fn next_result(reader: &mut Option<ReaderLink>) -> Option<Output> {
 
 impl JournalTask {
     pub(super) async fn run(mut self) {
+        // Read once per start of the collector, not per reader.
+        self.settings.since = read_since(&self.settings.paths.installation).await;
         let mut control = Control::default();
         let _ = self.control(&mut control).await;
         // journalctl is stopped before the stream is closed.
@@ -375,7 +432,7 @@ impl JournalTask {
 
     /// Sends the resume that is due, once the stream is ready and no
     /// starting position is unsaved. A resume without a position reads from
-    /// the oldest entry.
+    /// the installation's start, or the oldest entry ([`Settings::since`]).
     fn send_resume(&mut self, control: &mut Control) {
         if control.unsaved.is_some() || !self.sender.is_open() {
             return;
