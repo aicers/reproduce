@@ -688,6 +688,41 @@ async fn a_resume_without_a_position_reads_from_the_installation_start() {
 }
 
 #[tokio::test]
+async fn a_corrupt_checkpoint_over_an_empty_journal_reads_without_a_predecessor() {
+    // Nothing is saved, so the resume has no position and the runs read
+    // from the installation's start, or without a position when it is
+    // unknown.
+    for (birth, position) in [(Some(born()), since_arg()), (None, String::new())] {
+        let fake = Fake::new();
+        fs::create_dir(fake.state.path().join("checkpoints")).expect("directory");
+        fs::write(journal_file(fake.state.path()), "garbage").expect("checkpoint");
+        let mut link = match birth {
+            Some(birth) => fake.spawn_born(Initial::Load, birth),
+            None => fake.spawn(Initial::Load),
+        };
+        let output = next(&mut link).await;
+        assert_eq!(
+            output.event_start(),
+            Some(&Start::Corrupt {
+                reason: "not valid JSON".to_string(),
+                tail: None,
+            })
+        );
+        link.resume(1, None);
+        assert_eq!(
+            fake.wait_for_args(3).await,
+            [
+                "--lines=1".to_string(),
+                position.clone(),
+                format!("--follow --lines=all {position}")
+                    .trim_end()
+                    .to_string(),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_start_with_a_checkpoint_reads_after_it() {
     let fake = Fake::new();
     fake.push(&[entry(1, KEPT), entry(2, KEPT)]);
