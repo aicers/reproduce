@@ -351,8 +351,17 @@ An entry is kept when one of these rows holds, and dropped otherwise:
   saved before anything is sent, and the collector follows the entries after
   it. It logs a warning
   `Checkpoint <file> is unusable: <reason>; starting after the newest journal
-  entry instead, so unsent earlier entries may be skipped`. With an empty
-  journal it starts at the oldest entry instead.
+  entry instead, so unsent earlier entries may be skipped`.
+- With an empty journal there is no newest entry to save, and the collector
+  reads as it does with no checkpoint: from the installation's start it
+  computed as it started, or from the oldest entry the journal holds only when
+  it could not read the birth time then. It logs a warning
+  `Checkpoint <file> is unusable: <reason>; the journal is empty, so reading
+  starts at the installation's start, Unix second <seconds>` when it has the
+  installation's start, and
+  `Checkpoint <file> is unusable: <reason>; the journal is empty and the
+  installation's start is unknown, so reading starts at the journal's oldest
+  entry` when it has not.
 - The checkpoint `<state-dir>/checkpoints/journal.json` holds the journal
   cursor of the acknowledged entry, with that entry's sequence number ID,
   sequence number and time:

@@ -359,7 +359,8 @@ impl JournalTask {
     /// Sets the acknowledged position the reader's first result says to
     /// start from.
     async fn ready(&mut self, control: &mut Control, start: Start) {
-        let file = checkpoints::journal_file(&self.settings.state_dir);
+        let path = checkpoints::journal_file(&self.settings.state_dir);
+        let file = path.display();
         match start {
             Start::Found(position) => self.acks.load(Some(position)),
             Start::Missing => self.acks.load(None),
@@ -368,18 +369,26 @@ impl JournalTask {
                 tail: Some(tail),
             } => {
                 warn!(
-                    "Checkpoint {} is unusable: {reason}; starting after the newest journal \
-                     entry instead, so unsent earlier entries may be skipped",
-                    file.display()
+                    "Checkpoint {file} is unusable: {reason}; starting after the newest journal \
+                     entry instead, so unsent earlier entries may be skipped"
                 );
                 self.start_at(control, tail).await;
             }
+            // Nothing is saved, so the reader's runs have no predecessor and
+            // read from `Settings::since`, computed as the collector started.
             Start::Corrupt { reason, tail: None } => {
-                warn!(
-                    "Checkpoint {} is unusable: {reason}; the journal is empty, so reading \
-                     starts at its oldest entry",
-                    file.display()
-                );
+                if let Some(since) = self.settings.since {
+                    warn!(
+                        "Checkpoint {file} is unusable: {reason}; the journal is empty, so \
+                         reading starts at the installation's start, Unix second {since}"
+                    );
+                } else {
+                    warn!(
+                        "Checkpoint {file} is unusable: {reason}; the journal is empty and the \
+                         installation's start is unknown, so reading starts at the journal's \
+                         oldest entry"
+                    );
+                }
                 self.acks.load(None);
             }
         }
