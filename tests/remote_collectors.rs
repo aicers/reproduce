@@ -2410,6 +2410,70 @@ mod journal {
     }
 
     #[tokio::test]
+    async fn runs_without_a_predecessor_use_the_installation_start_read_once() -> Result<()> {
+        const WARNING: &str = "cannot read the birth time of";
+        let (logs_capture, _guard) = Logs::capture();
+        let (_pki, giganto, files) = setup()?;
+        let fake = Fake::new()?;
+        fake.push(&[entry(1, KEPT), entry(2, KEPT)])?;
+        let installation = fake.path("installation");
+        std::fs::create_dir(&installation)?;
+        // The collector reads the birth time as `created` does; a filesystem
+        // that records none leaves the runs without `--since`.
+        let since = match std::fs::metadata(&installation)?.created() {
+            Ok(birth) => format!(
+                "--since=@{}",
+                birth
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs()
+                    .saturating_sub(60)
+            ),
+            Err(_) => String::new(),
+        };
+        let warnings = usize::from(since.is_empty());
+        let logs = LogFiles::new()?;
+        let reload = ReloadSignal::new();
+        let mut runtime = fake.runtime(&files.files, &reload, &logs.state());
+        giganto.hold_acks(&[JOURNAL]).await;
+
+        runtime.apply(journal_config(giganto.addr, &[])).await;
+        wait_for_messages(&giganto, 1..=2).await;
+        wait_for("journalctl follows", WAIT, || fake.args().len() >= 2).await;
+        assert_eq!(
+            fake.args()[..2],
+            [
+                since.clone(),
+                format!("--follow --lines=all --after-cursor={}", cursor(2)),
+            ]
+        );
+
+        // Nothing is acknowledged, so the new stream's resume has no
+        // position. The directory is gone by then, but the bound was read as
+        // the collector started.
+        std::fs::remove_dir(&installation)?;
+        giganto.stop_stream_of(JOURNAL)?;
+        wait_for("journalctl runs again", WAIT, || fake.args().len() >= 4).await;
+        assert_eq!(
+            fake.args()[2..4],
+            [
+                since.clone(),
+                format!("--follow --lines=all --after-cursor={}", cursor(2)),
+            ]
+        );
+        assert_eq!(
+            logs_capture.text().matches(WARNING).count(),
+            warnings,
+            "{}",
+            logs_capture.text()
+        );
+        giganto.release_acks().await;
+        wait_for_cursor(&logs.state(), 2).await;
+
+        runtime.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn a_follow_exit_restarts_journalctl_on_the_same_stream() -> Result<()> {
         let (logs_capture, _guard) = Logs::capture();
         let (_pki, giganto, files) = setup()?;
