@@ -1,69 +1,67 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - "**"
   pull_request:
     branches:
       - main
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || (github.run_attempt != '1' && format('-rerun-{0}', github.run_id) || '') }}
+  cancel-in-progress: true
 
 jobs:
   changes:
     name: Change Filter
     runs-on: ubuntu-latest
+    # The filter only reads the checked-out history.
+    permissions:
+      contents: read
     outputs:
-      docs_only: ${{ steps.decide.outputs.docs_only }}
+      docs_only: ${{ steps.scope.outputs.docs-only }}
     steps:
+      # The full history, because the action diffs locally and does not
+      # fetch: a pull request against its merge-base with the base branch,
+      # a push to `main` against `github.event.before`, and a dispatched
+      # branch against its merge-base with `main`.
       - uses: actions/checkout@v5
-
-      # `docs` lists the inert files, the shared-instructions pin among them:
-      # it changes no build or test, and the ungated drift step checks it.
-      # `all` matches every path, so the decision below can tell whether
-      # every changed path is docs.
-      - name: Filter Paths
-        id: filter
-        uses: dorny/paths-filter@v4
         with:
-          filters: |
-            docs:
-              - "docs/**"
-              - "**/*.md"
-              - "mkdocs.yml"
-              - ".markdownlint*"
-              - ".agent-instructions.toml"
-            code:
-              - "src/**"
-              - "tests/**"
-              - "scripts/**"
-              - "Cargo.toml"
-              - "Cargo.lock"
-              - ".clippy.toml"
-              - ".github/workflows/**"
-            all:
-              - "**"
+          fetch-depth: 0
 
-      # Docs-only requires every changed path to be on `docs` (the counts
-      # match) and none on `code`, so a `.md` under `src/` is code. A path on
-      # neither list counts as code: without the count check, a
-      # `.clippy.toml` edit next to a README edit skipped every Rust job. A
-      # failed filter leaves the outputs empty, which lands on false.
-      - name: Decide Docs-Only
-        id: decide
-        env:
-          DOCS: ${{ steps.filter.outputs.docs }}
-          CODE: ${{ steps.filter.outputs.code }}
-          DOCS_COUNT: ${{ steps.filter.outputs.docs_count }}
-          ALL_COUNT: ${{ steps.filter.outputs.all_count }}
-        run: |
-          if [ "${DOCS}" = "true" ] && [ "${CODE}" != "true" ] \
-            && [ -n "${ALL_COUNT}" ] && [ "${DOCS_COUNT}" = "${ALL_COUNT}" ]; then
-            echo "docs_only=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-          fi
+      # `docs-paths` lists the inert files, on top of the action's built-in
+      # list (`*.md`, `LICENSE`, `.agent-instructions.toml`,
+      # `.markdownlint*`), the shared-instructions pin among them: it
+      # changes no build or test, and the ungated drift step checks it.
+      # `not-docs-paths` names what a build or a test reads, and wins over
+      # `docs-paths`.
+      #
+      # Docs-only requires every changed path to be on `docs-paths` or the
+      # built-in list and none on `not-docs-paths`, so a `.md` under `src/`
+      # is code. A path on neither list counts as code: a `.gitignore` edit
+      # next to a README edit runs every Rust job. Anything the action
+      # cannot establish also lands on false.
+      - id: scope
+        uses: aicers/agent-instructions/change-scope@main
+        with:
+          docs-paths: |
+            docs/**
+            **/*.md
+            mkdocs.yml
+            .markdownlint*
+            .agent-instructions.toml
+          not-docs-paths: |
+            src/**
+            tests/**
+            scripts/**
+            Cargo.toml
+            Cargo.lock
+            .clippy.toml
+            .github/workflows/**
 
-  markdownlint:
+  markdown:
+    name: Markdown
     runs-on: ubuntu-latest
     # Read-only, as in the other consumers of aicers/agent-instructions.
     # Nothing here writes: the lint reads the Markdown, and the drift check
@@ -73,10 +71,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         id: checkout
+      # No `globs` input. The `globs` and `ignores` of the root
+      # `.markdownlint-cli2.yaml` are the one place that decides which files
+      # are linted, here and in a local bare `markdownlint-cli2` alike. The
+      # action's default `*.{md,markdown}` is only added to them and changes
+      # nothing.
       - name: markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v24
-        with:
-          globs: '**/*.md'
+        uses: DavidAnson/markdownlint-cli2-action@v25
 
       # Fails when this repository's copy of the shared instruction blocks
       # stops matching the release `.agent-instructions.toml` pins --
@@ -87,7 +88,7 @@ jobs:
       # inherit the `docs_only` gate. `changes` counts `**/*.md` as docs and
       # AGENTS.md is a `.md` file, so a change that edits only a generated
       # region is docs-only by that reckoning -- a gated step would skip the
-      # check on precisely the changes that cause drift. `markdownlint` is
+      # check on precisely the changes that cause drift. `markdown` is
       # ungated, and is already the job that concerns itself with this
       # class of file.
       #
@@ -120,8 +121,14 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     steps:
+      # Three retries and a step timeout, since the 2026-11-11 Ubuntu archive
+      # outage: the image sets `Acquire::Retries "1"`, and an unreachable
+      # archive otherwise fails the step at once or stalls it until the
+      # job's own timeout. 10 minutes is 3x the longest of the last 20
+      # successful runs of this step, at the 10-minute minimum.
       - name: Install libraries
-        run: sudo apt-get install libhyperscan-dev libpcap-dev
+        timeout-minutes: 10
+        run: sudo apt-get -o Acquire::Retries=3 install libhyperscan-dev libpcap-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -139,8 +146,14 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     steps:
+      # Three retries and a step timeout, since the 2026-11-11 Ubuntu archive
+      # outage: the image sets `Acquire::Retries "1"`, and an unreachable
+      # archive otherwise fails the step at once or stalls it until the
+      # job's own timeout. 10 minutes is 3x the longest of the last 20
+      # successful runs of this step, at the 10-minute minimum.
       - name: Install libraries
-        run: sudo apt-get install libhyperscan-dev libpcap-dev
+        timeout-minutes: 10
+        run: sudo apt-get -o Acquire::Retries=3 install libhyperscan-dev libpcap-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -156,8 +169,14 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-24.04
     steps:
+      # Three retries and a step timeout, since the 2026-11-11 Ubuntu archive
+      # outage: the image sets `Acquire::Retries "1"`, and an unreachable
+      # archive otherwise fails the step at once or stalls it until the
+      # job's own timeout. 10 minutes is 3x the longest of the last 20
+      # successful runs of this step, at the 10-minute minimum.
       - name: Install libraries
-        run: sudo apt-get install libhyperscan-dev libpcap-dev
+        timeout-minutes: 10
+        run: sudo apt-get -o Acquire::Retries=3 install libhyperscan-dev libpcap-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
@@ -180,8 +199,14 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     steps:
+      # Three retries and a step timeout, since the 2026-11-11 Ubuntu archive
+      # outage: the image sets `Acquire::Retries "1"`, and an unreachable
+      # archive otherwise fails the step at once or stalls it until the
+      # job's own timeout. 10 minutes is 3x the longest of the last 20
+      # successful runs of this step, at the 10-minute minimum.
       - name: Install libraries
-        run: sudo apt-get install libhyperscan-dev libpcap-dev
+        timeout-minutes: 10
+        run: sudo apt-get -o Acquire::Retries=3 install libhyperscan-dev libpcap-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -198,3 +223,42 @@ jobs:
         with:
           files: lcov.info
           fail_ci_if_error: true
+
+  # `always()`, deliberately, and not `!cancelled()`: a cancelled run would
+  # otherwise skip this job, and GitHub counts a skipped required check as a
+  # pass. Running through cancellation lets the assertions below see the
+  # cancelled results and report red. It needs every other job, so it is
+  # the one check branch protection has to name.
+  gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs: [changes, markdown, check, test, journal-systemd, coverage]
+    if: ${{ always() }}
+    steps:
+      # A filter that errored is a defect, not a tolerable outcome. The gated
+      # jobs did still run -- their `if:` fails closed -- but the breakage has
+      # to be visible rather than absorbed.
+      - name: Assert the change filter succeeded
+        if: ${{ needs.changes.result != 'success' }}
+        run: |
+          echo "Change Filter: ${{ needs.changes.result }}" >&2
+          exit 1
+
+      # `skipped` is a pass here, and only here: it is what a gated job
+      # reports on a docs-only change. `cancelled` is not.
+      - name: Assert every job passed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "${RESULTS}"
+          bad="$(printf '%s' "${RESULTS}" \
+            | jq -r 'to_entries[]
+                     | select(.value.result != "success" and .value.result != "skipped")
+                     | "  \(.key): \(.value.result)"')"
+          if [ -n "${bad}" ]; then
+            echo "Not green:" >&2
+            echo "${bad}" >&2
+            exit 1
+          fi
