@@ -629,7 +629,7 @@ Where the crate handles key material or secrets:
   `CI Gate` job needs every other job, passes a skipped one, fails a
   failed or cancelled one, and fails when `changes` did not succeed.
 - The `Docs` workflow (`.github/workflows/docs.yml`, job `Build Docs`)
-  runs on every pull request to `main` and every push to `main`. It
+  runs on every pull request and every push to `main`. It
   installs `mkdocs-material` and `mkdocs-static-i18n` on Python 3.11, then
   runs `scripts/fetch-theme.sh`, which uses `gh`, and
   `mkdocs build --strict`.
