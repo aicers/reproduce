@@ -90,7 +90,7 @@ fn op_log(object: &Map<String, Value>) -> Option<OpLog> {
         sensor: String::new(),
         service_name: format!("clumit-security/{source}/{name}"),
         log_level: level(field("PRIORITY").as_deref()),
-        contents: contents(field("MESSAGE").map(Cow::into_owned).unwrap_or_default()),
+        contents: contents(field("MESSAGE").map_or_default(Cow::into_owned)),
     })
 }
 
