@@ -513,4 +513,66 @@ mod tests {
             "Appended content should contain the report separator"
         );
     }
+
+    /// Pins the rendering of the report's `Time:` line, which is the
+    /// `Display` of `time_now` in `TimeZone::UTC`. `in_tz("UTC")` yields a
+    /// value in `TimeZone::UTC` and renders as the production call does.
+    #[test]
+    fn report_time_line_rendering_is_pinned() {
+        assert_eq!(
+            Timestamp::new(1_773_586_804, 120_000_000)
+                .unwrap()
+                .in_tz("UTC")
+                .unwrap()
+                .to_string(),
+            "2026-03-15T15:00:04.12+00:00[UTC]"
+        );
+        assert_eq!(
+            Timestamp::new(1_773_586_804, 0)
+                .unwrap()
+                .in_tz("UTC")
+                .unwrap()
+                .to_string(),
+            "2026-03-15T15:00:04+00:00[UTC]"
+        );
+    }
+
+    /// Pins the report's `Elapsed Time:` line: `duration_since` followed by
+    /// `as_millis`, which truncates, then converted to seconds and written
+    /// with two decimals as the report does.
+    #[test]
+    fn report_elapsed_time_line_is_pinned() {
+        let render = |end: Timestamp, start: Timestamp| {
+            let elapsed_ms = end.duration_since(start).as_millis();
+            let elapsed_sec =
+                i128_to_f64(elapsed_ms, "elapsed milliseconds").unwrap() / MILLIS_PER_SECOND;
+            (
+                elapsed_ms,
+                format!(
+                    "{:width$}{:.2} sec\n",
+                    "Elapsed Time:",
+                    elapsed_sec,
+                    width = ARRANGE_VAR,
+                ),
+            )
+        };
+        let start = Timestamp::new(1_773_586_800, 900_000_000).unwrap();
+        let fractional = Timestamp::new(1_773_586_804, 120_999_999).unwrap();
+        let whole = Timestamp::new(1_773_586_804, 900_000_000).unwrap();
+        assert_eq!(
+            render(fractional, start),
+            (3_220, "Elapsed Time:               3.22 sec\n".to_string())
+        );
+        assert_eq!(
+            render(whole, start),
+            (4_000, "Elapsed Time:               4.00 sec\n".to_string())
+        );
+        assert_eq!(
+            render(start, fractional),
+            (
+                -3_220,
+                "Elapsed Time:               -3.22 sec\n".to_string()
+            )
+        );
+    }
 }
