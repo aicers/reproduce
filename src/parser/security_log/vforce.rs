@@ -20,7 +20,7 @@ fn get_vforce_regex() -> &'static Regex {
 }
 
 fn parse_vforce_timestamp_ns(datetime: &str) -> SecurityLogParseResult<i64> {
-    let year = Timestamp::now().to_zoned(TimeZone::UTC).year();
+    let year = Timestamp::now().to_zoned_datetime(TimeZone::UTC).year();
     let datetime_with_year = format!("{year} {datetime} +0900");
     Ok(
         Timestamp::strptime("%Y %b %d %H:%M:%S %z", datetime_with_year)

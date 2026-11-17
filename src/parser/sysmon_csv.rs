@@ -41,7 +41,7 @@ pub fn parse_sysmon_time(time: &str) -> SysmonCsvResult<Timestamp> {
     let dt = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", time)
         .map_err(|_| anyhow!("invalid time: {time}"))?;
     Ok(dt
-        .to_zoned(TimeZone::UTC)
+        .to_zoned_datetime(TimeZone::UTC)
         .map_err(|e| anyhow!("failed to create zoned datetime: {e}"))
         .map(|z| z.timestamp())?)
 }
@@ -90,7 +90,7 @@ mod sysmon_timestamp_tests {
         let result = parse_sysmon_time("2023-01-15 14:30:45.123456");
         assert!(result.is_ok());
         let ts = result.unwrap();
-        let zoned = ts.to_zoned(TimeZone::UTC);
+        let zoned = ts.to_zoned_datetime(TimeZone::UTC);
         assert_eq!(zoned.year(), 2023);
         assert_eq!(zoned.month(), 1);
         assert_eq!(zoned.day(), 15);
@@ -132,7 +132,7 @@ mod sysmon_timestamp_tests {
         let result = parse_sysmon_time("2023-01-15 00:00:00.000000");
         assert!(result.is_ok());
         let ts = result.unwrap();
-        let zoned = ts.to_zoned(TimeZone::UTC);
+        let zoned = ts.to_zoned_datetime(TimeZone::UTC);
         assert_eq!(zoned.hour(), 0);
         assert_eq!(zoned.minute(), 0);
         assert_eq!(zoned.second(), 0);
@@ -144,7 +144,7 @@ mod sysmon_timestamp_tests {
         let result = parse_sysmon_time("2023-01-15 23:59:59.999999");
         assert!(result.is_ok());
         let ts = result.unwrap();
-        let zoned = ts.to_zoned(TimeZone::UTC);
+        let zoned = ts.to_zoned_datetime(TimeZone::UTC);
         assert_eq!(zoned.hour(), 23);
         assert_eq!(zoned.minute(), 59);
         assert_eq!(zoned.second(), 59);
@@ -156,7 +156,7 @@ mod sysmon_timestamp_tests {
         let result = parse_sysmon_time("2024-02-29 12:00:00.000000");
         assert!(result.is_ok());
         let ts = result.unwrap();
-        let zoned = ts.to_zoned(TimeZone::UTC);
+        let zoned = ts.to_zoned_datetime(TimeZone::UTC);
         assert_eq!(zoned.year(), 2024);
         assert_eq!(zoned.month(), 2);
         assert_eq!(zoned.day(), 29);

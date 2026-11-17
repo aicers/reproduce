@@ -135,7 +135,7 @@ impl Report {
         }
 
         report_file.write_all(b"--------------------------------------------------\n")?;
-        let time_now_zoned = self.time_now.to_zoned(TimeZone::UTC);
+        let time_now_zoned = self.time_now.to_zoned_datetime(TimeZone::UTC);
         report_file.write_fmt(format_args!(
             "{:width$}{}\n",
             "Time:",
