@@ -79,8 +79,6 @@ pub fn log_regex(line: &str, service_name: &str) -> OperationLogResult<(OpLog, i
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
-
     use super::{OpLogLevel, log_regex};
 
     #[test]
@@ -101,13 +99,8 @@ mod tests {
         assert!(log_regex(invalid_dt, "service_name").is_err());
         assert!(log_regex(invalid_level, "service_name").is_err());
         assert!(log_regex(no_contents, "service_name").is_err());
-        assert_eq!(
-            dt,
-            Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
-                .unwrap()
-                .timestamp_nanos_opt()
-                .unwrap()
-        );
+        // 2023-01-02T07:36:17Z
+        assert_eq!(dt, 1_672_644_977_000_000_000);
         assert_eq!(res_info.service_name, "service_name".to_string());
         assert!(matches!(res_info.log_level, OpLogLevel::Info));
         assert_eq!(res_info.contents, "infolog".to_string());
@@ -246,36 +239,18 @@ mod tests {
         // Verify timestamp parsing with different precision levels
         let test_cases = [
             // (log line, expected nanoseconds)
-            (
-                "2023-01-02T07:36:17Z  INFO msg",
-                Utc.with_ymd_and_hms(2023, 1, 2, 7, 36, 17)
-                    .unwrap()
-                    .timestamp_nanos_opt()
-                    .unwrap(),
-            ),
+            ("2023-01-02T07:36:17Z  INFO msg", 1_672_644_977_000_000_000),
             (
                 "2023-06-15T12:30:45.123Z  INFO msg",
-                Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 45)
-                    .unwrap()
-                    .timestamp_nanos_opt()
-                    .unwrap()
-                    + 123_000_000, // 123 milliseconds
+                1_686_832_245_000_000_000 + 123_000_000, // 123 milliseconds
             ),
             (
                 "2023-06-15T12:30:45.123456Z  INFO msg",
-                Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 45)
-                    .unwrap()
-                    .timestamp_nanos_opt()
-                    .unwrap()
-                    + 123_456_000, // 123456 microseconds
+                1_686_832_245_000_000_000 + 123_456_000, // 123456 microseconds
             ),
             (
                 "2023-06-15T12:30:45.123456789Z  INFO msg",
-                Utc.with_ymd_and_hms(2023, 6, 15, 12, 30, 45)
-                    .unwrap()
-                    .timestamp_nanos_opt()
-                    .unwrap()
-                    + 123_456_789, // 123456789 nanoseconds
+                1_686_832_245_000_000_000 + 123_456_789, // 123456789 nanoseconds
             ),
         ];
 

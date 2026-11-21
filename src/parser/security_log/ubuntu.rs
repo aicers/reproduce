@@ -64,9 +64,17 @@ impl ParseSecurityLog for Ubuntu {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Datelike, FixedOffset, TimeZone, Utc};
-
     use super::*;
+
+    /// Nanoseconds since the epoch of the given wall-clock time at +09:00.
+    fn kst_nanos(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> i64 {
+        let ts = jiff::civil::date(year, month, day)
+            .at(hour, minute, second, 0)
+            .to_zoned_datetime(TimeZone::fixed(jiff::tz::offset(9)))
+            .unwrap()
+            .timestamp();
+        i64::try_from(ts.as_nanosecond()).unwrap()
+    }
 
     #[test]
     fn parse_ubuntu_rejects_invalid_format() {
@@ -124,39 +132,24 @@ mod tests {
     #[test]
     fn parse_ubuntu_timestamp_ns_returns_expected_nanos() {
         let ns = parse_ubuntu_timestamp_ns("Jan 02 03:04:05").unwrap();
-        let year = Utc::now().year();
-        let expected = FixedOffset::east_opt(9 * 3600)
-            .unwrap()
-            .with_ymd_and_hms(year, 1, 2, 3, 4, 5)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let year = Timestamp::now().to_zoned_datetime(TimeZone::UTC).year();
+        let expected = kst_nanos(year, 1, 2, 3, 4, 5);
         assert_eq!(ns, expected);
     }
 
     #[test]
     fn test_parse_ubuntu_timestamp_midnight() {
         let ns = parse_ubuntu_timestamp_ns("Jan 01 00:00:00").unwrap();
-        let year = Utc::now().year();
-        let expected = FixedOffset::east_opt(9 * 3600)
-            .unwrap()
-            .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let year = Timestamp::now().to_zoned_datetime(TimeZone::UTC).year();
+        let expected = kst_nanos(year, 1, 1, 0, 0, 0);
         assert_eq!(ns, expected);
     }
 
     #[test]
     fn test_parse_ubuntu_timestamp_end_of_day() {
         let ns = parse_ubuntu_timestamp_ns("Dec 31 23:59:59").unwrap();
-        let year = Utc::now().year();
-        let expected = FixedOffset::east_opt(9 * 3600)
-            .unwrap()
-            .with_ymd_and_hms(year, 12, 31, 23, 59, 59)
-            .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+        let year = Timestamp::now().to_zoned_datetime(TimeZone::UTC).year();
+        let expected = kst_nanos(year, 12, 31, 23, 59, 59);
         assert_eq!(ns, expected);
     }
 
