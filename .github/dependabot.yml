@@ -6,3 +6,8 @@ updates:
       - dependency-name: "giganto-client"
     schedule:
       interval: "daily"
+    # `chore(deps): ...`, a Conventional title, which release-plz files
+    # under Other.
+    commit-message:
+      prefix: "chore"
+      include: "scope"
