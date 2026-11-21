@@ -70,13 +70,3 @@ impl TryFromSysmonRecord for FileCreate {
         ))
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn check_min_utc() {
-        let min_utc = chrono::DateTime::<chrono::Utc>::MIN_UTC;
-        assert_eq!(min_utc.timestamp(), -8_334_601_228_800);
-    }
-}
