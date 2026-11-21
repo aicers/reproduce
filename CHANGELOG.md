@@ -4,6 +4,16 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.4](https://github.com/aicers/reproduce/compare/0.28.3...0.28.4) - 2026-11-21
+
+### Other
+
+- drop chrono from tests ([#1095](https://github.com/aicers/reproduce/pull/1095))
+- automate releases with release-plz ([#1088](https://github.com/aicers/reproduce/pull/1088))
+- Upgrade jiff to 1 and re-pin review-protocol 0.27.0
+- Pin the report's time rendering before jiff 1
+- Run CI on pull requests into any branch ([#1082](https://github.com/aicers/reproduce/pull/1082))
+
 ## [0.28.3] - 2026-11-14
 
 ### Security
