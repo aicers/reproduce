@@ -6,18 +6,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.28.4](https://github.com/aicers/reproduce/compare/0.28.3...0.28.4) - 2026-11-22
 
-### Other
+### Changed
 
-- *(deps)* update Cargo.lock ([#1099](https://github.com/aicers/reproduce/pull/1099))
-- update shared instruction blocks to 0.6.4 ([#1097](https://github.com/aicers/reproduce/pull/1097))
-- *(deps)* bump jiff from 1.0.0 to 1.0.1 ([#1090](https://github.com/aicers/reproduce/pull/1090))
-- *(deps)* bump regex from 1.13.1 to 1.13.2 ([#1089](https://github.com/aicers/reproduce/pull/1089))
-- update shared instruction blocks to 0.6.3 ([#1096](https://github.com/aicers/reproduce/pull/1096))
-- drop chrono from tests ([#1095](https://github.com/aicers/reproduce/pull/1095))
-- automate releases with release-plz ([#1088](https://github.com/aicers/reproduce/pull/1088))
-- Upgrade jiff to 1 and re-pin review-protocol 0.27.0
-- Pin the report's time rendering before jiff 1
-- Run CI on pull requests into any branch ([#1082](https://github.com/aicers/reproduce/pull/1082))
+- reproduce now depends on `jiff` 1 in place of 0.2, and on
+  `review-protocol` 0.27. The report, the logs and the timestamps it
+  sends to Giganto are unchanged.
 
 ## [0.28.3] - 2026-11-14
 
