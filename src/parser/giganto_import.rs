@@ -66,6 +66,66 @@ fn parse_comma_separated<T: FromStr>(s: &str) -> std::result::Result<Vec<T>, T::
     Ok(v)
 }
 
+/// Parses an optional value, where `-` stands for `None`.
+fn parse_optional<T: FromStr>(s: &str) -> std::result::Result<Option<T>, T::Err> {
+    if s == "-" {
+        Ok(None)
+    } else {
+        s.parse().map(Some)
+    }
+}
+
+/// Parses a MAC address written as six `:`-separated two-digit hex octets,
+/// where `-` stands for `None`.
+fn parse_mac_address(s: &str) -> GigantoImportResult<Option<[u8; 6]>> {
+    if s == "-" {
+        return Ok(None);
+    }
+    let mut mac = [0_u8; 6];
+    let mut octets = s.split(':');
+    for byte in &mut mac {
+        let octet = octets
+            .next()
+            .with_context(|| format!("too few octets in MAC address {s:?}"))?;
+        // `from_str_radix` also accepts a leading `+`, which is not a hex
+        // digit, so the digits are checked first.
+        if octet.len() != 2 || !octet.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(anyhow!("invalid octet {octet:?} in MAC address {s:?}").into());
+        }
+        *byte = u8::from_str_radix(octet, 16)
+            .with_context(|| format!("invalid octet {octet:?} in MAC address {s:?}"))?;
+    }
+    if octets.next().is_some() {
+        return Err(anyhow!("too many octets in MAC address {s:?}").into());
+    }
+    Ok(Some(mac))
+}
+
+/// Returns whether a record carries the `count` columns appended at
+/// `first`, after the columns an older export ended with.
+///
+/// A record that ends at `first` predates them. One that has only some of
+/// them is an error, since none of their values can be trusted; columns
+/// past them are ignored, like any trailing column the import does not read.
+fn has_appended_columns(
+    rec: &StringRecord,
+    first: usize,
+    count: usize,
+) -> GigantoImportResult<bool> {
+    let len = rec.len();
+    if len <= first {
+        Ok(false)
+    } else if len >= first + count {
+        Ok(true)
+    } else {
+        Err(anyhow!(
+            "record has {len} columns; expected {first}, or at least {}",
+            first + count
+        )
+        .into())
+    }
+}
+
 fn parse_post_body(s: &str) -> Vec<u8> {
     if s != "-" && !s.is_empty() {
         s.as_bytes().to_vec()

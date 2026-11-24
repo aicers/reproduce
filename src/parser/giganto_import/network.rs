@@ -7,12 +7,25 @@ use giganto_client::ingest::network::{
 };
 
 use super::{
-    GigantoImportResult, TryFromGigantoRecord, parse_comma_separated,
+    GigantoImportResult, TryFromGigantoRecord, has_appended_columns, parse_comma_separated,
     parse_giganto_epoch_decimal_timestamp_ns, parse_giganto_rfc3339_timestamp_ns,
-    parse_parenthesized_tuples, parse_post_body,
+    parse_mac_address, parse_optional, parse_parenthesized_tuples, parse_post_body,
 };
 
 type Result<T> = GigantoImportResult<T>;
+
+/// The column the identification fields appended to a Kerberos export line
+/// start at; a line from an older export ends before it.
+const KERBEROS_IDENTIFICATION_FIRST_COLUMN: usize = 22;
+/// The number of Kerberos identification columns: `msg_type`, `preauth`,
+/// `req_etypes`, `enc_part_etype` and `ticket_etype`.
+const KERBEROS_IDENTIFICATION_COLUMNS: usize = 5;
+/// The column the identification fields appended to a DHCP export line
+/// start at; a line from an older export ends before it.
+const DHCP_IDENTIFICATION_FIRST_COLUMN: usize = 32;
+/// The number of DHCP identification columns: `xid`, `chaddr` and
+/// `src_mac`.
+const DHCP_IDENTIFICATION_COLUMNS: usize = 3;
 
 macro_rules! giganto_import_error {
     ($($arg:tt)*) => {
@@ -1205,6 +1218,32 @@ impl TryFromGigantoRecord for Kerberos {
             return Err(giganto_import_error!("missing sname"));
         };
 
+        let (msg_type, preauth, req_etypes, enc_part_etype, ticket_etype) = if has_appended_columns(
+            rec,
+            KERBEROS_IDENTIFICATION_FIRST_COLUMN,
+            KERBEROS_IDENTIFICATION_COLUMNS,
+        )? {
+            let msg_type = rec
+                .get(22)
+                .context("missing msg_type")?
+                .parse::<u8>()
+                .context("invalid msg_type")?;
+            let preauth = rec
+                .get(23)
+                .context("missing preauth")?
+                .parse::<u8>()
+                .context("invalid preauth")?;
+            let req_etypes = parse_comma_separated(rec.get(24).context("missing req_etypes")?)
+                .context("invalid req_etypes")?;
+            let enc_part_etype = parse_optional(rec.get(25).context("missing enc_part_etype")?)
+                .context("invalid enc_part_etype")?;
+            let ticket_etype = parse_optional(rec.get(26).context("missing ticket_etype")?)
+                .context("invalid ticket_etype")?;
+            (msg_type, preauth, req_etypes, enc_part_etype, ticket_etype)
+        } else {
+            (0, 0, Vec::new(), None, None)
+        };
+
         Ok((
             Self {
                 orig_addr,
@@ -1227,6 +1266,11 @@ impl TryFromGigantoRecord for Kerberos {
                 resp_pkts,
                 orig_l2_bytes,
                 resp_l2_bytes,
+                msg_type,
+                preauth,
+                req_etypes,
+                enc_part_etype,
+                ticket_etype,
             },
             time,
         ))
@@ -2657,7 +2701,8 @@ impl TryFromGigantoRecord for Bootp {
 }
 
 impl TryFromGigantoRecord for Dhcp {
-    #[allow(clippy::too_many_lines)]
+    // Network event records intentionally mirror Giganto field names.
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn try_from_giganto_record(rec: &csv::StringRecord) -> Result<(Self, i64)> {
         let time: i64 = if let Some(timestamp) = rec.get(0) {
             parse_giganto_epoch_decimal_timestamp_ns(timestamp)?
@@ -2829,6 +2874,25 @@ impl TryFromGigantoRecord for Dhcp {
         let options = parse_dhcp_options(rec.get(31).context("missing options")?)
             .context("invalid options")?;
 
+        let (xid, chaddr, src_mac) = if has_appended_columns(
+            rec,
+            DHCP_IDENTIFICATION_FIRST_COLUMN,
+            DHCP_IDENTIFICATION_COLUMNS,
+        )? {
+            let xid = rec
+                .get(32)
+                .context("missing xid")?
+                .parse::<u32>()
+                .context("invalid xid")?;
+            let chaddr = parse_comma_separated(rec.get(33).context("missing chaddr")?)
+                .context("invalid chaddr")?;
+            let src_mac = parse_mac_address(rec.get(34).context("missing src_mac")?)
+                .context("invalid src_mac")?;
+            (xid, chaddr, src_mac)
+        } else {
+            (0, Vec::new(), None)
+        };
+
         Ok((
             Self {
                 orig_addr,
@@ -2861,6 +2925,9 @@ impl TryFromGigantoRecord for Dhcp {
                 resp_pkts,
                 orig_l2_bytes,
                 resp_l2_bytes,
+                xid,
+                chaddr,
+                src_mac,
             },
             time,
         ))
