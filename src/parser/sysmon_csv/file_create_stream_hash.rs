@@ -75,6 +75,7 @@ impl TryFromSysmonRecord for FileCreateStreamHash {
                 hash,
                 contents,
                 user,
+                endpoint: None,
             },
             time,
         ))

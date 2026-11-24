@@ -113,6 +113,8 @@ impl TryFromGigantoRecord for ProcessCreate {
                 parent_image,
                 parent_command_line,
                 parent_user,
+                endpoint: None,
+                logon_id_full: None,
             },
             time,
         ))
@@ -144,6 +146,7 @@ impl TryFromGigantoRecord for FileCreationTimeChanged {
                 creation_utc_time,
                 previous_creation_utc_time,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -197,6 +200,7 @@ impl TryFromGigantoRecord for NetworkConnection {
                 destination_hostname,
                 destination_port,
                 destination_port_name,
+                endpoint: None,
             },
             time,
         ))
@@ -221,6 +225,7 @@ impl TryFromGigantoRecord for ProcessTerminated {
                 process_id,
                 image,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -266,6 +271,7 @@ impl TryFromGigantoRecord for ImageLoaded {
                 signature,
                 signature_status,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -294,6 +300,7 @@ impl TryFromGigantoRecord for FileCreate {
                 target_filename,
                 creation_utc_time,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -324,6 +331,7 @@ impl TryFromGigantoRecord for RegistryValueSet {
                 target_object,
                 details,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -354,6 +362,7 @@ impl TryFromGigantoRecord for RegistryKeyValueRename {
                 target_object,
                 new_name,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -387,6 +396,7 @@ impl TryFromGigantoRecord for FileCreateStreamHash {
                 hash,
                 contents,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -415,6 +425,7 @@ impl TryFromGigantoRecord for PipeEvent {
                 pipe_name,
                 image,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -446,6 +457,7 @@ impl TryFromGigantoRecord for DnsEvent {
                 query_results,
                 image,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -479,6 +491,7 @@ impl TryFromGigantoRecord for FileDelete {
                 hashes,
                 is_executable,
                 archived,
+                endpoint: None,
             },
             time,
         ))
@@ -505,6 +518,7 @@ impl TryFromGigantoRecord for ProcessTampering {
                 image,
                 tamper_type,
                 user,
+                endpoint: None,
             },
             time,
         ))
@@ -536,6 +550,7 @@ impl TryFromGigantoRecord for FileDeleteDetected {
                 target_filename,
                 hashes,
                 is_executable,
+                endpoint: None,
             },
             time,
         ))

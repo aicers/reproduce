@@ -67,6 +67,7 @@ impl TryFromSysmonRecord for FileCreationTimeChanged {
                 creation_utc_time,
                 previous_creation_utc_time,
                 user,
+                endpoint: None,
             },
             time,
         ))

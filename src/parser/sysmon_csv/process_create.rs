@@ -172,6 +172,8 @@ impl TryFromSysmonRecord for ProcessCreate {
                 parent_image,
                 parent_command_line,
                 parent_user,
+                endpoint: None,
+                logon_id_full: None,
             },
             time,
         ))

@@ -67,6 +67,7 @@ impl TryFromSysmonRecord for RegistryValueSet {
                 target_object,
                 details,
                 user,
+                endpoint: None,
             },
             time,
         ))

@@ -49,6 +49,7 @@ impl TryFromSysmonRecord for ProcessTerminated {
                 process_id,
                 image,
                 user,
+                endpoint: None,
             },
             time,
         ))
