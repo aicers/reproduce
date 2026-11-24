@@ -4,6 +4,16 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0](https://github.com/aicers/reproduce/compare/0.28.4...0.29.0) - 2026-11-24
+
+### Added
+
+- [**breaking**] send and import Dhcp and Kerberos identification fields ([#1105](https://github.com/aicers/reproduce/pull/1105))
+
+### Other
+
+- *(deps)* update Cargo.lock before the 0.29.0 release ([#1108](https://github.com/aicers/reproduce/pull/1108))
+
 ## [0.28.4](https://github.com/aicers/reproduce/compare/0.28.3...0.28.4) - 2026-11-22
 
 ### Changed
