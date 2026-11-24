@@ -61,6 +61,7 @@ impl TryFromSysmonRecord for PipeEvent {
                 pipe_name,
                 image,
                 user,
+                endpoint: None,
             },
             time,
         ))

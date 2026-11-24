@@ -88,6 +88,7 @@ impl TryFromSysmonRecord for FileDelete {
                 hashes,
                 is_executable,
                 archived,
+                endpoint: None,
             },
             time,
         ))

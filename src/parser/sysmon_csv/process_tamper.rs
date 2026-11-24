@@ -55,6 +55,7 @@ impl TryFromSysmonRecord for ProcessTampering {
                 image,
                 tamper_type,
                 user,
+                endpoint: None,
             },
             time,
         ))

@@ -67,6 +67,7 @@ impl TryFromSysmonRecord for RegistryKeyValueRename {
                 target_object,
                 new_name,
                 user,
+                endpoint: None,
             },
             time,
         ))

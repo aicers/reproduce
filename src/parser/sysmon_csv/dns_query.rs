@@ -76,6 +76,7 @@ impl TryFromSysmonRecord for DnsEvent {
                 query_results,
                 image,
                 user,
+                endpoint: None,
             },
             time,
         ))

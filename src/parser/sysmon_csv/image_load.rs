@@ -119,6 +119,7 @@ impl TryFromSysmonRecord for ImageLoaded {
                 signature,
                 signature_status,
                 user,
+                endpoint: None,
             },
             time,
         ))

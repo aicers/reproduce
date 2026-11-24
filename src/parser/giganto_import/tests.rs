@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::{
@@ -631,4 +633,265 @@ fn sysmon_file_delete_detected_sample() {
     let data = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	DOMAIN\\User	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\deleted.txt	SHA256=ABCDEF,MD5=123456	false";
     let rec = stringrecord(data);
     assert!(FileDeleteDetected::try_from_giganto_record(&rec).is_ok());
+}
+
+// Giganto export lines of the 14 Sysmon kinds without the endpoint header
+// columns, as in the `sysmon_*_sample` tests above.
+const SYSMON_PROCESS_CREATE_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{11111111-2222-3333-4444-555555555555}	1234	C:\\Windows\\System32\\cmd.exe	10.0.0.1	Test description	Test product	Test company	cmd.exe	\"C:\\Windows\\System32\\cmd.exe\" /c dir	C:\\Windows\\System32\\	DOMAIN\\User	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	1001	2	High	SHA256=ABCDEF,MD5=123456	{99999999-8888-7777-6666-555555555555}	4321	C:\\Windows\\explorer.exe	explorer.exe /something	DOMAIN\\User";
+const SYSMON_FILE_CREATE_TIME_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{11111111-2222-3333-4444-555555555555}	1234	C:\\Windows\\System32\\cmd.exe	C:\\Temp\\file.txt	2023-08-07T23:58:20.000000000+00:00	2023-08-07T23:56:40.000000000+00:00	DOMAIN\\User";
+const SYSMON_NETWORK_CONNECT_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User	TCP	true	false	192.168.0.10	desktop	51515	-	false	10.0.0.1	server	443	https";
+const SYSMON_PROCESS_TERMINATE_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User";
+const SYSMON_IMAGE_LOAD_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	C:\\Windows\\System32\\kernel32.dll	10.0.0.0	Test description	Test product	Test company	kernel32.dll	SHA256=ABCDEF,MD5=123456	true	Microsoft	Valid	DOMAIN\\User";
+const SYSMON_FILE_CREATE_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\created.txt	2023-08-07T23:58:20.000000000+00:00	DOMAIN\\User";
+const SYSMON_REGISTRY_VALUE_SET_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	RenameValue	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\reg.exe	HKLM\\Software\\Test	DWORD (0x1)	DOMAIN\\User";
+const SYSMON_REGISTRY_KEY_RENAME_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	RenameValue	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\reg.exe	HKLM\\Software\\Test	HKLM\\Software\\TestNew	DOMAIN\\User";
+const SYSMON_FILE_CREATE_STREAM_HASH_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\created.txt	2023-08-07T23:58:20.000000000+00:00	SHA256=ABCDEF,MD5=123456	contents	DOMAIN\\User";
+const SYSMON_PIPE_EVENT_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	CreatePipe	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	\\\\.\\pipe\\testpipe	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User";
+const SYSMON_DNS_QUERY_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	example.com	0	1.1.1.1;8.8.8.8	C:\\Windows\\System32\\svchost.exe	DOMAIN\\User";
+const SYSMON_FILE_DELETE_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	DOMAIN\\User	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\deleted.txt	SHA256=ABCDEF,MD5=123456	true	false";
+const SYSMON_PROCESS_TAMPER_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	C:\\Windows\\System32\\svchost.exe	OpenProcess	DOMAIN\\User";
+const SYSMON_FILE_DELETE_DETECTED_LINE: &str = "1691452807.978000000	sensor1	agent-a	agent-id-1	{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}	4321	DOMAIN\\User	C:\\Windows\\System32\\svchost.exe	C:\\Temp\\deleted.txt	SHA256=ABCDEF,MD5=123456	false";
+
+/// The 15 endpoint header columns giganto-client writes for a record without
+/// an endpoint header, each preceded by its tab separator.
+const SYSMON_DASH_HEADER: &str = "\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-";
+
+/// The 15 endpoint header columns giganto-client writes for a filled endpoint
+/// header, each preceded by its tab separator.
+const SYSMON_FILLED_HEADER: &str = concat!(
+    "\t0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+    "\tf0e9d8c7-b6a5-4493-8271-605f4e3d2c1b",
+    "\t42",
+    "\t1970-01-01T00:00:01.000000001+00:00",
+    "\t1970-01-01T00:00:02+00:00",
+    "\t-15,3,1970-01-01T00:00:01.5+00:00",
+    "\thost-01",
+    "\t192.0.2.10,2001:db8::1",
+    "\t192.0.2.10",
+    "\tobserved",
+    "\twindows",
+    "\t10.0.19045",
+    "\textended",
+    "\t00ab0fff",
+    "\t3",
+);
+
+const SYSMON_HEADER_COLUMNS: usize = 15;
+
+/// Imports `line`, and `line` followed by each of `trailing`, and asserts that
+/// all of them import to the same record and time and that the record has no
+/// endpoint header. Returns the record and time imported from `line`.
+fn assert_sysmon_ignores_trailing<T>(
+    line: &str,
+    trailing: &[&str],
+    has_endpoint: impl Fn(&T) -> bool,
+) -> (T, i64)
+where
+    T: TryFromGigantoRecord + PartialEq + Debug,
+{
+    let expected = T::try_from_giganto_record(&stringrecord(line)).unwrap();
+    assert!(!has_endpoint(&expected.0));
+    for suffix in trailing {
+        let data = format!("{line}{suffix}");
+        let imported = T::try_from_giganto_record(&stringrecord(&data)).unwrap();
+        assert_eq!(imported, expected, "trailing columns: {suffix:?}");
+    }
+    expected
+}
+
+/// Asserts that a line of a Sysmon kind other than `ProcessCreate` imports
+/// the same with the 15 endpoint header columns appended, all `-` or filled.
+fn assert_sysmon_ignores_header<T>(line: &str, has_endpoint: impl Fn(&T) -> bool)
+where
+    T: TryFromGigantoRecord + PartialEq + Debug,
+{
+    assert_sysmon_ignores_trailing(
+        line,
+        &[SYSMON_DASH_HEADER, SYSMON_FILLED_HEADER],
+        has_endpoint,
+    );
+}
+
+/// Returns the first `n` filled endpoint header columns, each preceded by its
+/// tab separator.
+fn sysmon_partial_header(n: usize) -> String {
+    // The header starts with a separator, so the first piece is empty.
+    let partial = SYSMON_FILLED_HEADER
+        .split('\t')
+        .take(n + 1)
+        .collect::<Vec<_>>()
+        .join("\t");
+    assert_eq!(partial.matches('\t').count(), n);
+    partial
+}
+
+#[test]
+fn sysmon_header_fixtures_have_expected_column_counts() {
+    assert_eq!(
+        SYSMON_DASH_HEADER.matches('\t').count(),
+        SYSMON_HEADER_COLUMNS
+    );
+    assert_eq!(
+        SYSMON_FILLED_HEADER.matches('\t').count(),
+        SYSMON_HEADER_COLUMNS
+    );
+    // The number of columns the import reads for each kind, counting the
+    // leading time and sensor columns.
+    for (line, columns) in [
+        (SYSMON_PROCESS_CREATE_LINE, 25),
+        (SYSMON_FILE_CREATE_TIME_LINE, 11),
+        (SYSMON_NETWORK_CONNECT_LINE, 20),
+        (SYSMON_PROCESS_TERMINATE_LINE, 8),
+        (SYSMON_IMAGE_LOAD_LINE, 18),
+        (SYSMON_FILE_CREATE_LINE, 10),
+        (SYSMON_REGISTRY_VALUE_SET_LINE, 11),
+        (SYSMON_REGISTRY_KEY_RENAME_LINE, 11),
+        (SYSMON_FILE_CREATE_STREAM_HASH_LINE, 12),
+        (SYSMON_PIPE_EVENT_LINE, 10),
+        (SYSMON_DNS_QUERY_LINE, 11),
+        (SYSMON_FILE_DELETE_LINE, 12),
+        (SYSMON_PROCESS_TAMPER_LINE, 9),
+        (SYSMON_FILE_DELETE_DETECTED_LINE, 11),
+    ] {
+        assert_eq!(stringrecord(line).len(), columns, "{line}");
+        let with_header = format!("{line}{SYSMON_FILLED_HEADER}");
+        assert_eq!(
+            stringrecord(&with_header).len(),
+            columns + SYSMON_HEADER_COLUMNS
+        );
+    }
+}
+
+#[test]
+fn sysmon_process_create_ignores_header_and_logon_id_full() {
+    let dash_with_logon_id_full = format!("{SYSMON_DASH_HEADER}\t-");
+    let filled_with_logon_id_full = format!("{SYSMON_FILLED_HEADER}\t4294967297");
+    let (event, record_time) = assert_sysmon_ignores_trailing(
+        SYSMON_PROCESS_CREATE_LINE,
+        &[
+            SYSMON_DASH_HEADER,
+            SYSMON_FILLED_HEADER,
+            &dash_with_logon_id_full,
+            &filled_with_logon_id_full,
+        ],
+        |r: &ProcessCreate| r.endpoint.is_some(),
+    );
+    assert_eq!(record_time, 1_691_452_807_978_000_000);
+    // `logon_id` comes from column 16; `logon_id_full` is never read.
+    assert_eq!(event.logon_id, 1001);
+    assert_eq!(event.logon_id_full, None);
+}
+
+#[test]
+fn sysmon_process_create_ignores_partial_or_extra_trailing_columns() {
+    let partial = sysmon_partial_header(7);
+    let extra = format!("{SYSMON_FILLED_HEADER}\t4294967297\textra");
+    let (event, _) = assert_sysmon_ignores_trailing(
+        SYSMON_PROCESS_CREATE_LINE,
+        &[&partial, &extra],
+        |r: &ProcessCreate| r.endpoint.is_some(),
+    );
+    assert_eq!(event.logon_id_full, None);
+}
+
+#[test]
+fn sysmon_network_connect_ignores_partial_or_extra_trailing_columns() {
+    let partial = sysmon_partial_header(7);
+    let extra = format!("{SYSMON_FILLED_HEADER}\textra");
+    assert_sysmon_ignores_trailing(
+        SYSMON_NETWORK_CONNECT_LINE,
+        &[&partial, &extra],
+        |r: &NetworkConnection| r.endpoint.is_some(),
+    );
+}
+
+#[test]
+fn sysmon_file_create_time_ignores_header() {
+    assert_sysmon_ignores_header(
+        SYSMON_FILE_CREATE_TIME_LINE,
+        |r: &FileCreationTimeChanged| r.endpoint.is_some(),
+    );
+}
+
+#[test]
+fn sysmon_network_connect_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_NETWORK_CONNECT_LINE, |r: &NetworkConnection| {
+        r.endpoint.is_some()
+    });
+}
+
+#[test]
+fn sysmon_process_terminate_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_PROCESS_TERMINATE_LINE, |r: &ProcessTerminated| {
+        r.endpoint.is_some()
+    });
+}
+
+#[test]
+fn sysmon_image_load_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_IMAGE_LOAD_LINE, |r: &ImageLoaded| {
+        r.endpoint.is_some()
+    });
+}
+
+#[test]
+fn sysmon_file_create_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_FILE_CREATE_LINE, |r: &FileCreate| {
+        r.endpoint.is_some()
+    });
+}
+
+#[test]
+fn sysmon_registry_value_set_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_REGISTRY_VALUE_SET_LINE, |r: &RegistryValueSet| {
+        r.endpoint.is_some()
+    });
+}
+
+#[test]
+fn sysmon_registry_key_rename_ignores_header() {
+    assert_sysmon_ignores_header(
+        SYSMON_REGISTRY_KEY_RENAME_LINE,
+        |r: &RegistryKeyValueRename| r.endpoint.is_some(),
+    );
+}
+
+#[test]
+fn sysmon_file_create_stream_hash_ignores_header() {
+    assert_sysmon_ignores_header(
+        SYSMON_FILE_CREATE_STREAM_HASH_LINE,
+        |r: &FileCreateStreamHash| r.endpoint.is_some(),
+    );
+}
+
+#[test]
+fn sysmon_pipe_event_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_PIPE_EVENT_LINE, |r: &PipeEvent| r.endpoint.is_some());
+}
+
+#[test]
+fn sysmon_dns_query_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_DNS_QUERY_LINE, |r: &DnsEvent| r.endpoint.is_some());
+}
+
+#[test]
+fn sysmon_file_delete_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_FILE_DELETE_LINE, |r: &FileDelete| {
+        r.endpoint.is_some()
+    });
+}
+
+#[test]
+fn sysmon_process_tamper_ignores_header() {
+    assert_sysmon_ignores_header(SYSMON_PROCESS_TAMPER_LINE, |r: &ProcessTampering| {
+        r.endpoint.is_some()
+    });
+}
+
+#[test]
+fn sysmon_file_delete_detected_ignores_header() {
+    assert_sysmon_ignores_header(
+        SYSMON_FILE_DELETE_DETECTED_LINE,
+        |r: &FileDeleteDetected| r.endpoint.is_some(),
+    );
 }

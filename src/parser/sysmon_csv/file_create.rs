@@ -65,6 +65,7 @@ impl TryFromSysmonRecord for FileCreate {
                 target_filename,
                 creation_utc_time,
                 user,
+                endpoint: None,
             },
             time,
         ))

@@ -162,6 +162,7 @@ impl TryFromSysmonRecord for NetworkConnection {
                 destination_hostname,
                 destination_port,
                 destination_port_name,
+                endpoint: None,
             },
             time,
         ))

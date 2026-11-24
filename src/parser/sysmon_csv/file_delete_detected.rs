@@ -76,6 +76,7 @@ impl TryFromSysmonRecord for FileDeleteDetected {
                 target_filename,
                 hashes,
                 is_executable,
+                endpoint: None,
             },
             time,
         ))

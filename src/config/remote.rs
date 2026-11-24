@@ -641,10 +641,28 @@ start = "end"
             "netflow5",
             "secu_log",
             "malformed_dns",
+            "driver_load",
+            "create_remote_thread",
+            "raw_access_read",
+            "process_access",
+            "registry_object_add_del",
+            "endpoint_windows_event_log",
+            "endpoint_journald",
+            "endpoint_auditd",
         ] {
             let (key, reason) = invalid_key(&with_collector(kind, "/var/log/app.log"));
             assert_eq!(key, "collectors[0].kind", "kind {kind:?}");
             assert!(reason.contains("named Giganto kind"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn host_log_kinds_are_accepted() {
+        // Giganto's endpoint log kinds are prefixed with `endpoint_`, so the
+        // plain host log names stay free for remote-mode logs.
+        for kind in ["journald", "auditd", "windows_event_log"] {
+            parse(&with_collector(kind, "/var/log/app.log"))
+                .unwrap_or_else(|error| panic!("kind {kind:?} should be accepted: {error}"));
         }
     }
 
