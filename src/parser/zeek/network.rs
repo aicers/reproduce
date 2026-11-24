@@ -583,6 +583,11 @@ impl TryFromZeekRecord for Kerberos {
                 resp_pkts: 0,
                 orig_l2_bytes: 0,
                 resp_l2_bytes: 0,
+                msg_type: 0,
+                preauth: 0,
+                req_etypes: Vec::new(),
+                enc_part_etype: None,
+                ticket_etype: None,
             },
             time,
         ))

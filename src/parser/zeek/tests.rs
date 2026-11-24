@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use giganto_client::ingest::network::{
@@ -74,7 +76,27 @@ fn zeek_kerberos() {
 
     let rec = stringrecord(data);
 
-    assert!(Kerberos::try_from_zeek_record(&rec).is_ok());
+    let (kerberos, time) = Kerberos::try_from_zeek_record(&rec).unwrap();
+    assert_eq!(time, 1_669_773_412_689_790_000);
+    assert_eq!(
+        kerberos.orig_addr,
+        "192.168.1.31".parse::<IpAddr>().unwrap()
+    );
+    assert_eq!(kerberos.orig_port, 64889);
+    assert_eq!(
+        kerberos.resp_addr,
+        "192.168.1.32".parse::<IpAddr>().unwrap()
+    );
+    assert_eq!(kerberos.resp_port, 88);
+    assert_eq!(kerberos.start_time, time);
+
+    // Zeek's kerberos.log does not carry the identification fields, so they
+    // keep their unknown values.
+    assert_eq!(kerberos.msg_type, 0);
+    assert_eq!(kerberos.preauth, 0);
+    assert_eq!(kerberos.req_etypes, [] as [i32; 0]);
+    assert_eq!(kerberos.enc_part_etype, None);
+    assert_eq!(kerberos.ticket_etype, None);
 }
 
 #[test]

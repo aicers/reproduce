@@ -119,6 +119,124 @@ fn giganto_kerberos_rfc3339_datetimes() {
     assert_eq!(kerberos.server_time, 1_781_240_772_000_000_000);
 }
 
+/// A Kerberos export line as written before the identification columns
+/// were appended: 22 columns, ending at `sname`.
+const KERBEROS_LEGACY_LINE: &str = "1562093132.125665000\tlocalhost\t89.248.167.131\t24067\t\
+    210.117.142.55\t88\t0\t1970-01-01T00:00:00.000000000+00:00\t0\t1\t0\t21515\t27889\t\
+    1970-01-01T00:00:00.000000000+00:00\t1970-01-01T00:00:00.000000000+00:00\t1\t\
+    client_realm\t1\tcname1,cname2\trealm\t1\tsname1,sname2";
+
+fn kerberos_from_line(line: &str) -> Kerberos {
+    Kerberos::try_from_giganto_record(&stringrecord(line))
+        .unwrap()
+        .0
+}
+
+#[test]
+fn giganto_kerberos_identification_columns() {
+    let legacy = kerberos_from_line(KERBEROS_LEGACY_LINE);
+    assert_eq!(stringrecord(KERBEROS_LEGACY_LINE).len(), 22);
+
+    let filled = format!("{KERBEROS_LEGACY_LINE}\t11\t2\t18,-128,23\t-135\t18");
+    assert_eq!(stringrecord(&filled).len(), 27);
+    assert_eq!(
+        kerberos_from_line(&filled),
+        Kerberos {
+            msg_type: 11,
+            preauth: 2,
+            req_etypes: vec![18, -128, 23],
+            enc_part_etype: Some(-135),
+            ticket_etype: Some(18),
+            ..legacy.clone()
+        }
+    );
+
+    let dashes = format!("{KERBEROS_LEGACY_LINE}\t12\t0\t-\t-\t-");
+    assert_eq!(
+        kerberos_from_line(&dashes),
+        Kerberos {
+            msg_type: 12,
+            req_etypes: Vec::new(),
+            enc_part_etype: None,
+            ticket_etype: None,
+            ..legacy.clone()
+        }
+    );
+
+    let single_negative = format!("{KERBEROS_LEGACY_LINE}\t10\t1\t-1\t-\t-2147483648");
+    let kerberos = kerberos_from_line(&single_negative);
+    assert_eq!(kerberos.req_etypes, vec![-1]);
+    assert_eq!(kerberos.enc_part_etype, None);
+    assert_eq!(kerberos.ticket_etype, Some(i32::MIN));
+}
+
+#[test]
+fn giganto_kerberos_without_identification_columns() {
+    let kerberos = kerberos_from_line(KERBEROS_LEGACY_LINE);
+    assert_eq!(kerberos.msg_type, 0);
+    assert_eq!(kerberos.preauth, 0);
+    assert_eq!(kerberos.req_etypes, [] as [i32; 0]);
+    assert_eq!(kerberos.enc_part_etype, None);
+    assert_eq!(kerberos.ticket_etype, None);
+    assert_eq!(kerberos.sname, vec!["sname1", "sname2"]);
+    assert_eq!(kerberos.resp_l2_bytes, 27889);
+}
+
+#[test]
+fn giganto_kerberos_partial_identification_columns() {
+    let new_columns = ["10", "2", "18,17", "18", "18"];
+    for count in 1..new_columns.len() {
+        let line = format!(
+            "{KERBEROS_LEGACY_LINE}\t{}",
+            new_columns.get(..count).unwrap().join("\t")
+        );
+        assert!(
+            Kerberos::try_from_giganto_record(&stringrecord(&line)).is_err(),
+            "{count} of the identification columns were accepted"
+        );
+    }
+}
+
+#[test]
+fn giganto_kerberos_malformed_identification_columns() {
+    for columns in [
+        "256\t2\t18\t18\t18",
+        "-1\t2\t18\t18\t18",
+        "AS-REQ\t2\t18\t18\t18",
+        "10\t256\t18\t18\t18",
+        "10\tx\t18\t18\t18",
+        "10\t2\t18,x\t18\t18",
+        "10\t2\t\t18\t18",
+        "10\t2\t2147483648\t18\t18",
+        "10\t2\t18\t2147483648\t18",
+        "10\t2\t18\t-2147483649\t18",
+        "10\t2\t18\t\t18",
+        "10\t2\t18\t18\tx",
+        "10\t2\t18\t18\t18,17",
+    ] {
+        let line = format!("{KERBEROS_LEGACY_LINE}\t{columns}");
+        assert!(
+            Kerberos::try_from_giganto_record(&stringrecord(&line)).is_err(),
+            "malformed identification columns {columns:?} were accepted"
+        );
+    }
+}
+
+#[test]
+fn giganto_kerberos_identification_values_outside_known_meanings() {
+    let line = format!("{KERBEROS_LEGACY_LINE}\t14\t7\t-\t-\t-");
+    let kerberos = kerberos_from_line(&line);
+    assert_eq!(kerberos.msg_type, 14);
+    assert_eq!(kerberos.preauth, 7);
+}
+
+#[test]
+fn giganto_kerberos_ignores_columns_after_identification() {
+    let line = format!("{KERBEROS_LEGACY_LINE}\t13\t0\t-\t17\t23");
+    let extra = format!("{line}\textra");
+    assert_eq!(kerberos_from_line(&extra), kerberos_from_line(&line));
+}
+
 #[test]
 fn giganto_ssh() {
     let data = "1562093121.802019000	localhost	114.249.237.38	41260	203.254.132.18	22	0	1970-01-01T00:00:00.000000000+00:00	0	1	0	21515	27889	SSH-2.0-Go	SSH-1.99-Cisco-1.25	aes128-cbc	hmac-sha1	none	diffie-hellman-group1-sha1	ssh-rsa	-	-	-	-	-	-";
@@ -269,6 +387,108 @@ fn giganto_dhcp_invalid_options() {
     // Invalid hex characters
     let rec = stringrecord(&format!("{base}53:ZZZZ"));
     assert!(Dhcp::try_from_giganto_record(&rec).is_err());
+}
+
+/// A DHCP export line as written before the identification columns were
+/// appended: 32 columns, ending at `options`.
+const DHCP_LEGACY_LINE: &str = "1614130373.991064000\tlocalhost\t192.168.0.111\t58459\t\
+    192.168.0.7\t49670\t6\t1970-01-01T00:00:00.000000000+00:00\t0\t1\t0\t21515\t27889\t0\t\
+    192.168.4.1\t192.168.4.2\t192.168.4.3\t192.168.4.4\t192.168.4.5\t\
+    192.168.4.11,192.168.4.22\t192.168.4.33,192.168.4.44\t192.168.4.6\t1\t192.168.4.7\t\
+    0,1,2\tmessage\t1\t1\t0,1,2\t1\t0,1,2\t53:05,51:00015180";
+
+fn dhcp_from_line(line: &str) -> Dhcp {
+    Dhcp::try_from_giganto_record(&stringrecord(line))
+        .unwrap()
+        .0
+}
+
+#[test]
+fn giganto_dhcp_identification_columns() {
+    let legacy = dhcp_from_line(DHCP_LEGACY_LINE);
+    assert_eq!(stringrecord(DHCP_LEGACY_LINE).len(), 32);
+
+    let filled = format!("{DHCP_LEGACY_LINE}\t3735928559\t0,26,43,60,77,255\t00:aa:BB:cc:Dd:ef");
+    assert_eq!(stringrecord(&filled).len(), 35);
+    assert_eq!(
+        dhcp_from_line(&filled),
+        Dhcp {
+            xid: 0xDEAD_BEEF,
+            chaddr: vec![0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0xff],
+            src_mac: Some([0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xef]),
+            ..legacy.clone()
+        }
+    );
+
+    let dashes = format!("{DHCP_LEGACY_LINE}\t4294967295\t-\t-");
+    assert_eq!(
+        dhcp_from_line(&dashes),
+        Dhcp {
+            xid: u32::MAX,
+            chaddr: Vec::new(),
+            src_mac: None,
+            ..legacy.clone()
+        }
+    );
+}
+
+#[test]
+fn giganto_dhcp_without_identification_columns() {
+    let dhcp = dhcp_from_line(DHCP_LEGACY_LINE);
+    assert_eq!(dhcp.xid, 0);
+    assert_eq!(dhcp.chaddr, [] as [u8; 0]);
+    assert_eq!(dhcp.src_mac, None);
+    assert_eq!(
+        dhcp.options,
+        vec![(53, vec![0x05]), (51, vec![0x00, 0x01, 0x51, 0x80])]
+    );
+}
+
+#[test]
+fn giganto_dhcp_partial_identification_columns() {
+    for columns in ["1", "1\t0,26,43,60,77,94"] {
+        let line = format!("{DHCP_LEGACY_LINE}\t{columns}");
+        assert!(
+            Dhcp::try_from_giganto_record(&stringrecord(&line)).is_err(),
+            "partial identification columns {columns:?} were accepted"
+        );
+    }
+}
+
+#[test]
+fn giganto_dhcp_malformed_identification_columns() {
+    for columns in [
+        "4294967296\t-\t-",
+        "-1\t-\t-",
+        "x\t-\t-",
+        "1\t0,256\t-",
+        "1\t0,x\t-",
+        "1\t\t-",
+        "1\t-\t",
+        "1\t-\t00:11:22:33:44",
+        "1\t-\t00:11:22:33:44:55:66",
+        "1\t-\t00:11:22:33:44:55:",
+        "1\t-\t0:11:22:33:44:55",
+        "1\t-\t000:11:22:33:44:55",
+        "1\t-\t+a:11:22:33:44:55",
+        "1\t-\tgg:11:22:33:44:55",
+        "1\t-\t00-11-22-33-44-55",
+        "1\t-\t001122334455",
+        "1\t-\t0,17,34,51,68,85",
+    ] {
+        let line = format!("{DHCP_LEGACY_LINE}\t{columns}");
+        assert!(
+            Dhcp::try_from_giganto_record(&stringrecord(&line)).is_err(),
+            "malformed identification columns {columns:?} were accepted"
+        );
+    }
+}
+
+#[test]
+fn giganto_dhcp_ignores_columns_after_identification() {
+    let line = format!("{DHCP_LEGACY_LINE}\t7\t1,2,3\t00:11:22:33:44:55");
+    let extra = format!("{line}\textra");
+    assert_eq!(dhcp_from_line(&extra), dhcp_from_line(&line));
 }
 
 #[test]
