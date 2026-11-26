@@ -31,8 +31,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Identity, Pki, server_config_trusting};
 
-/// The version requirement Giganto 0.31.0 accepts.
-pub const GIGANTO_VERSION_REQ: &str = ">=0.28.0";
+/// The version requirement Giganto 0.39.0 accepts.
+pub const GIGANTO_VERSION_REQ: &str = ">=0.39.0,<0.40.0";
 /// What the server keys the journal collector's stream by, in place of a
 /// kind; no log kind can contain `@`.
 pub const JOURNAL: &str = "@journal";
