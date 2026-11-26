@@ -1767,8 +1767,8 @@ dependencies = [
 
 [[package]]
 name = "review-protocol"
-version = "0.27.0"
-source = "git+https://github.com/aicers/review-protocol.git?tag=0.27.0#4b35f3e115c54a57cdc3115d8d7594bcd9071be0"
+version = "0.29.0"
+source = "git+https://github.com/aicers/review-protocol.git?tag=0.29.0#76827de9c7cf8c9e630800627e17b52af44e283f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1782,7 +1782,6 @@ dependencies = [
  "rustls-pemfile",
  "semver",
  "serde",
- "serde_bytes",
  "serde_repr",
  "structured",
  "thiserror",
@@ -1994,16 +1993,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_bytes"
-version = "0.11.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
-dependencies = [
- "serde",
- "serde_core",
-]
-
-[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2079,7 +2068,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.3.15",
+ "errno 0.2.8",
  "libc",
 ]
 
