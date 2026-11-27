@@ -686,6 +686,14 @@ impl TryFromGigantoRecord for Http {
         } else {
             return Err(giganto_import_error!("missing state"));
         };
+        let request_header_names =
+            parse_comma_separated(rec.get(33).context("missing request_header_names")?)
+                .context("invalid request_header_names")?;
+        let accept = rec.get(34).context("missing accept")?.to_string();
+        let connection = rec.get(35).context("missing connection")?.to_string();
+        let accept_encoding = rec.get(36).context("missing accept_encoding")?.to_string();
+        let accept_language = rec.get(37).context("missing accept_language")?.to_string();
+        let pragma = rec.get(38).context("missing pragma")?.to_string();
 
         Ok((
             Self {
@@ -716,6 +724,12 @@ impl TryFromGigantoRecord for Http {
                 mime_types,
                 body,
                 state,
+                request_header_names,
+                accept,
+                connection,
+                accept_encoding,
+                accept_language,
+                pragma,
                 orig_pkts,
                 resp_pkts,
                 orig_l2_bytes,

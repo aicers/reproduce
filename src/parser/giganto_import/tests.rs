@@ -39,13 +39,65 @@ fn giganto_conn_rfc3339_start_time() {
     assert_eq!(conn.start_time, 1_781_240_770_522_174_019);
 }
 
+/// An HTTP export line up to and including `state`: the 33 columns that
+/// precede the request header columns.
+const HTTP_LINE_TO_STATE: &str = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	1970-01-01T00:00:00.000000000+00:00	0	1	0	21515	27889	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-	10,10,10	-";
+
 #[test]
 fn giganto_http() {
-    let data = "1669773412.241856000	localhost	129.204.40.54	47697	218.144.35.150	80	0	1970-01-01T00:00:00.000000000+00:00	0	1	0	21515	27889	GET	218.144.35.150	/root11.php	-	1.1	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36	0	286	302	Found	-	-	-	-	-	-	-	-	10,10,10	-";
+    let data = format!("{HTTP_LINE_TO_STATE}\t-\t-\t-\t-\t-\t-");
 
-    let rec = stringrecord(data);
+    let rec = stringrecord(&data);
 
-    assert!(Http::try_from_giganto_record(&rec).is_ok());
+    let (http, _) = Http::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(http.request_header_names, Vec::<String>::new());
+    assert_eq!(http.accept, "-");
+    assert_eq!(http.connection, "-");
+    assert_eq!(http.accept_encoding, "-");
+    assert_eq!(http.accept_language, "-");
+    assert_eq!(http.pragma, "-");
+}
+
+#[test]
+fn giganto_http_request_header_columns() {
+    let data = format!(
+        "{HTTP_LINE_TO_STATE}\tHost,User-Agent,Accept,accept,Cookie,Cookie\t\
+         text/html,*/*;q=0.8\tkeep-alive\tgzip, deflate\ten-US,en;q=0.9\tno-cache"
+    );
+
+    let rec = stringrecord(&data);
+
+    let (http, _) = Http::try_from_giganto_record(&rec).unwrap();
+    assert_eq!(
+        http.request_header_names,
+        ["Host", "User-Agent", "Accept", "accept", "Cookie", "Cookie"]
+    );
+    assert_eq!(http.accept, "text/html,*/*;q=0.8");
+    assert_eq!(http.connection, "keep-alive");
+    assert_eq!(http.accept_encoding, "gzip, deflate");
+    assert_eq!(http.accept_language, "en-US,en;q=0.9");
+    assert_eq!(http.pragma, "no-cache");
+    assert_eq!(http.state, "-");
+}
+
+#[test]
+fn giganto_http_without_request_header_columns_is_refused() {
+    const COLUMNS: [&str; 6] = [
+        "request_header_names",
+        "accept",
+        "connection",
+        "accept_encoding",
+        "accept_language",
+        "pragma",
+    ];
+    for (present, missing) in COLUMNS.iter().enumerate() {
+        let mut line = HTTP_LINE_TO_STATE.to_string();
+        for _ in 0..present {
+            line.push_str("\t-");
+        }
+        let err = Http::try_from_giganto_record(&stringrecord(&line)).unwrap_err();
+        assert_eq!(err.to_string(), format!("missing {missing}"));
+    }
 }
 
 #[test]
