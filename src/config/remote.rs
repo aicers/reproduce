@@ -633,7 +633,6 @@ start = "end"
             "dns",
             "dns_event",
             "dns_query",
-            "timeseries",
             "periodic_time_series",
             "conn",
             "http",

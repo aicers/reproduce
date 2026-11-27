@@ -26,7 +26,13 @@ fn zeek_http() {
 
     let rec = stringrecord(data);
 
-    assert!(Http::try_from_zeek_record(&rec).is_ok());
+    let (http, _) = Http::try_from_zeek_record(&rec).unwrap();
+    assert_eq!(http.request_header_names, Vec::<String>::new());
+    assert_eq!(http.accept, "");
+    assert_eq!(http.connection, "");
+    assert_eq!(http.accept_encoding, "");
+    assert_eq!(http.accept_language, "");
+    assert_eq!(http.pragma, "");
 }
 
 #[test]
