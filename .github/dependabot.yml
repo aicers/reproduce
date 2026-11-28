@@ -11,3 +11,7 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    cooldown:
+      default-days: 3
+      exclude:
+        - "review-protocol"
