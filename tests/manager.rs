@@ -354,6 +354,31 @@ async fn ipv6_manager_connects_with_legacy_agent_claims() -> Result<()> {
 
 #[tokio::test]
 async fn failed_fetch_keeps_the_applied_configuration() -> Result<()> {
+    const CHILD: &str = "REPRODUCE_FAILED_FETCH_LOG_TEST";
+
+    // Isolate the thread-local subscriber from concurrent tests registering
+    // the same tracing callsites without a subscriber.
+    if std::env::var_os(CHILD).is_none() {
+        let output = tokio::process::Command::new(
+            std::env::current_exe().context("locating the Manager test binary")?,
+        )
+        .args([
+            "--exact",
+            "failed_fetch_keeps_the_applied_configuration",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .await
+        .context("running the failed-fetch log test in an isolated process")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(stdout.contains("running 1 test"), "{stdout}");
+        assert!(stdout.contains("1 passed"), "{stdout}");
+        return Ok(());
+    }
+
     let (logs, _guard) = Logs::capture();
     let (_pki, mock, _files, client) = start_applied(CONFIG).await?;
     let fetched = mock.get_configs();
@@ -363,15 +388,12 @@ async fn failed_fetch_keeps_the_applied_configuration() -> Result<()> {
         mock.get_configs() == fetched + 1
     })
     .await;
-    timeout(WAIT, async {
-        while !logs.text().contains(
+    wait_until("the failed fetch is logged", || {
+        logs.text().contains(
             "Cannot fetch the configuration from the Central Manager, keeping the applied configuration",
-        ) {
-            tokio::task::yield_now().await;
-        }
+        )
     })
-    .await
-    .with_context(|| format!("waiting for the failed fetch log; captured logs:\n{}", logs.text()))?;
+    .await;
     assert_eq!(client.handoffs(), [parsed(CONFIG), parsed(CONFIG)]);
 
     // A failed fetch must not clear the configuration used to choose status.
