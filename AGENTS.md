@@ -558,10 +558,10 @@ Where the crate handles key material or secrets:
     client configuration over the root store `to_root_cert` there builds.
     `create_endpoint` there is its one caller, reached outside tests
     through `build_endpoint` in `src/sender/connection.rs`.
-  - The Central Manager: the `ConnectionBuilder` of `review-protocol`
+  - The Central Manager: `client_config_from_pem` of `review-protocol`
     (its `client` feature) builds the client configuration, from the files
     `TlsMaterial` in `src/manager.rs` reads and checks
-    (`TlsMaterial::read`) and passes to it (`TlsMaterial::builder`). The
+    (`TlsMaterial::read`) and passes to it in `connect_with`. The
     certificate is verified against `Manager::server_name`, the
     `<server_name>` of the command line.
 - There is no Elasticsearch client. The `elastic` input was removed

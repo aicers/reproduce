@@ -12,14 +12,20 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use quinn::Endpoint;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose,
 };
 use reproduce::manager::TlsFiles;
 use review_protocol::AgentInfo;
+use review_protocol::auth::{
+    AuthorizationContext, AuthorizerV2Adapter, NoopAuthorizer, PeerContext,
+};
 use review_protocol::server;
+use review_protocol::session::{
+    ApplicationCode, PendingSession, ProtocolWindow, ServerHandle, ServerListener,
+    ServerListenerOptions, ServerStream, ServerTransportOptions, SessionError, SessionOptions,
+};
 use review_protocol::types::Status;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tempfile::TempDir;
@@ -28,9 +34,9 @@ use tokio::time::{Instant, sleep};
 
 pub const SERVER_NAME: &str = "localhost";
 
-/// The versions `REview` 0.61.0 accepts.
+/// The protocol window accepted by the mock Central Manager.
 pub const VERSION_REQ: &str = ">=0.48.0";
-pub const HIGHEST_PROTOCOL_VERSION: &str = "0.49.0";
+pub const HIGHEST_PROTOCOL_VERSION: &str = "0.54.0";
 
 #[allow(dead_code)]
 pub const WAIT: Duration = Duration::from_secs(10);
@@ -102,13 +108,21 @@ pub fn issue(
     })
 }
 
-pub fn server_config(pki: &Pki) -> Result<quinn::ServerConfig> {
-    server_config_trusting(&pki.server, &pki.ca)
+pub fn server_config(pki: &Pki) -> Result<rustls::ServerConfig> {
+    tls_config_trusting(&pki.server, &pki.ca)
 }
 
 /// Builds a server configuration presenting `server` and verifying client
 /// certificates against `client_ca`, with the aws-lc-rs provider.
 pub fn server_config_trusting(server: &Identity, client_ca: &str) -> Result<quinn::ServerConfig> {
+    // Giganto still takes a transport-specific configuration.
+    let crypto = tls_config_trusting(server, client_ca)?;
+    Ok(quinn::ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?,
+    )))
+}
+
+fn tls_config_trusting(server: &Identity, client_ca: &str) -> Result<rustls::ServerConfig> {
     let certs = rustls_pemfile::certs(&mut server.cert.as_bytes())
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let key: PrivateKeyDer<'static> =
@@ -123,13 +137,10 @@ pub fn server_config_trusting(server: &Identity, client_ca: &str) -> Result<quin
         provider.clone(),
     )
     .build()?;
-    let crypto = rustls::ServerConfig::builder_with_provider(provider)
+    Ok(rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .with_client_cert_verifier(verifier)
-        .with_single_cert(certs, key)?;
-    Ok(quinn::ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?,
-    )))
+        .with_single_cert(certs, key)?)
 }
 
 /// A handshake the mock accepted.
@@ -150,15 +161,15 @@ pub struct State {
     pub handshakes: Mutex<Vec<Handshake>>,
     pub get_configs: AtomicUsize,
     /// The connection of the last accepted handshake.
-    pub connection: Mutex<Option<quinn::Connection>>,
+    pub connection: Mutex<Option<ServerHandle>>,
 }
 
 /// A mock Central Manager.
 pub struct Mock {
     pub addr: SocketAddr,
-    pub server_config: quinn::ServerConfig,
+    pub server_config: rustls::ServerConfig,
     pub state: Arc<State>,
-    pub running: Option<(Endpoint, JoinHandle<()>)>,
+    pub running: Option<(Arc<ServerListener>, JoinHandle<()>)>,
 }
 
 impl Mock {
@@ -185,7 +196,17 @@ impl Mock {
 
     /// Starts serving again on the same address after [`Mock::stop`].
     pub fn restart(&mut self) -> Result<()> {
-        let endpoint = Endpoint::server(self.server_config.clone(), self.addr)?;
+        let version_req = self.state.version_req.lock().expect("lock").clone();
+        let endpoint = Arc::new(ServerListener::bind(
+            self.addr,
+            Arc::new(self.server_config.clone()),
+            ServerListenerOptions {
+                transport: ServerTransportOptions::default(),
+                session: SessionOptions::legacy_compatible(),
+                protocol: ProtocolWindow::new(&version_req, HIGHEST_PROTOCOL_VERSION)?,
+                handshake_timeout: WAIT,
+            },
+        )?);
         self.addr = endpoint.local_addr()?;
         let task = tokio::spawn(accept(endpoint.clone(), self.state.clone()));
         self.running = Some((endpoint, task));
@@ -199,7 +220,7 @@ impl Mock {
             task.abort();
             let _ = task.await;
             self.state.connection.lock().expect("lock").take();
-            endpoint.close(0u32.into(), b"stopped");
+            endpoint.close(b"stopped");
             endpoint.wait_idle().await;
         }
     }
@@ -214,8 +235,28 @@ impl Mock {
     }
 
     #[allow(dead_code)]
-    pub fn set_version_req(&self, version_req: &str) {
+    pub async fn set_version_req(&mut self, version_req: &str) -> Result<()> {
+        // The session listener fixes its protocol window at bind time.
+        self.stop().await;
         *self.state.version_req.lock().expect("lock") = version_req.to_string();
+        // The transport driver releases its socket asynchronously after drop.
+        let deadline = Instant::now() + WAIT;
+        loop {
+            match self.restart() {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if Instant::now() < deadline
+                        && error.chain().any(|cause| {
+                            cause
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse)
+                        }) =>
+                {
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -247,74 +288,87 @@ impl Mock {
     }
 
     #[allow(dead_code)]
-    pub fn connection(&self) -> server::Connection {
-        let connection = self.state.connection.lock().expect("lock");
-        server::Connection::from_quinn(connection.clone().expect("a connection"))
-    }
-
-    #[allow(dead_code)]
-    pub fn quinn_connection(&self) -> quinn::Connection {
-        let connection = self.state.connection.lock().expect("lock");
-        connection.clone().expect("a connection")
+    pub fn connection(&self) -> ServerHandle {
+        self.state
+            .connection
+            .lock()
+            .expect("lock")
+            .clone()
+            .expect("a connection")
     }
 
     /// Closes the current connection, so the client reconnects.
     #[allow(dead_code)]
     pub fn drop_connection(&self) {
         if let Some(connection) = self.state.connection.lock().expect("lock").take() {
-            connection.close(0u32.into(), b"dropped");
+            connection.close(
+                ApplicationCode::new(0).expect("zero is a valid code"),
+                b"dropped",
+            );
         }
     }
 
     #[allow(dead_code)]
     pub async fn send_update(&self) -> Result<()> {
-        self.connection().send_config_update_cmd().await
+        Ok(self.connection().send_config_update_cmd().await?)
     }
 }
 
-pub async fn accept(endpoint: Endpoint, state: Arc<State>) {
+impl Drop for Mock {
+    fn drop(&mut self) {
+        if let Some((listener, task)) = self.running.take() {
+            task.abort();
+            listener.close(b"stopped");
+        }
+    }
+}
+
+async fn accept(listener: Arc<ServerListener>, state: Arc<State>) {
     let mut connections = JoinSet::new();
-    while let Some(incoming) = endpoint.accept().await {
+    while let Ok(Some(incoming)) = listener.accept().await {
+        while connections.try_join_next().is_some() {}
         connections.spawn(serve(incoming, state.clone()));
     }
 }
 
-pub async fn serve(incoming: quinn::Incoming, state: Arc<State>) {
-    let Ok(connection) = incoming.await else {
-        return;
+async fn serve(incoming: PendingSession, state: Arc<State>) {
+    let session = match incoming.handshake().await {
+        Ok(session) => session,
+        Err(SessionError::IncompatibleProtocol { .. }) => {
+            state.attempts.fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+        Err(_) => return,
     };
     state.attempts.fetch_add(1, Ordering::SeqCst);
-    let version_req = state.version_req.lock().expect("lock").clone();
-    let Ok(info) = server::handshake(
-        &connection,
-        connection.remote_address(),
-        &version_req,
-        HIGHEST_PROTOCOL_VERSION,
-    )
-    .await
-    else {
-        return;
-    };
-    let cert = connection
-        .peer_identity()
-        .and_then(|identity| identity.downcast::<Vec<CertificateDer<'static>>>().ok())
-        .and_then(|certs| certs.first().cloned())
+    let info = session.agent_claims().clone();
+    let cert = session
+        .peer_certificates()
+        .and_then(|certs| certs.chain().first())
+        .cloned()
+        .map(CertificateDer::from)
         .expect("a client certificate");
     state
         .handshakes
         .lock()
         .expect("lock")
         .push(Handshake { info, cert });
-    *state.connection.lock().expect("lock") = Some(connection.clone());
+    let context = AuthorizationContext::from_peer_context(&PeerContext::new("reproduce.test"));
+    let (connection, mut incoming) =
+        session.admit(context, Arc::new(AuthorizerV2Adapter::new(NoopAuthorizer)));
+    *state.connection.lock().expect("lock") = Some(connection);
 
     let mut requests = JoinSet::new();
-    while let Ok((mut send, mut recv)) = connection.accept_bi().await {
-        let mut handler = Handler {
-            state: state.clone(),
-        };
-        requests.spawn(async move {
-            let _ = server::handle(&mut handler, &mut send, &mut recv, "reproduce.test").await;
-        });
+    while let Ok(stream) = incoming.accept().await {
+        while requests.try_join_next().is_some() {}
+        if let ServerStream::Requests(stream) = stream {
+            let handler = Arc::new(Handler {
+                state: state.clone(),
+            });
+            requests.spawn(async move {
+                let _ = stream.run(handler).await;
+            });
+        }
     }
 }
 

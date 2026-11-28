@@ -6,14 +6,20 @@
 //! `update_config` schedules a fetch, and a lost connection is reconnected,
 //! after which the configuration is fetched again.
 
+use std::collections::BTreeSet;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use review_protocol::client::{Connection, ConnectionBuilder};
-use review_protocol::request::{self, HandlerError};
+use review_protocol::AgentInfo;
+use review_protocol::request;
+use review_protocol::session::{
+    AgentConnector, AgentHandle, AgentIncoming, AgentTransportOptions, SessionOptions,
+    client_config_from_pem,
+};
 use review_protocol::types::Status;
 use thiserror::Error;
 use tokio::sync::watch;
@@ -118,20 +124,10 @@ impl TlsMaterial {
             Err(error) => return Err(invalid(KEY_KIND, &files.key, error)),
         }
 
-        // Neither builder call names a file, so each file is checked on its
-        // own; `root_certs` replaces the roots on every call. The manager
-        // endpoint and status play no part in what the builder accepts.
-        let mut builder = ConnectionBuilder::new(
-            "localhost",
-            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
-            AGENT_NAME,
-            AGENT_VERSION,
-            review_protocol::PROTOCOL_VERSION,
-            Status::Idle,
-            &cert,
-            &key,
-        )
-        .map_err(|error| invalid(CERT_KIND, &files.cert, error))?;
+        // Validate the certificate and key independently of the configured CA
+        // files, then check each CA in order so every refusal names its file.
+        client_config_from_pem(&cert, &key, &[&cert])
+            .map_err(|error| invalid(CERT_KIND, &files.cert, error))?;
         let mut ca_certs = Vec::with_capacity(files.ca_certs.len());
         for path in &files.ca_certs {
             let ca_cert = read_file(CA_KIND, path)?;
@@ -141,8 +137,7 @@ impl TlsMaterial {
             if certs.is_empty() {
                 return Err(invalid(CA_KIND, path, "no certificate"));
             }
-            builder
-                .root_certs([&ca_cert])
+            client_config_from_pem(&cert, &key, &[&ca_cert])
                 .map_err(|error| invalid(CA_KIND, path, error))?;
             ca_certs.push(ca_cert);
         }
@@ -152,21 +147,6 @@ impl TlsMaterial {
             key,
             ca_certs,
         })
-    }
-
-    fn builder(&self, manager: &Manager, status: Status) -> io::Result<ConnectionBuilder> {
-        let mut builder = ConnectionBuilder::new(
-            &manager.server_name,
-            manager.addr,
-            AGENT_NAME,
-            AGENT_VERSION,
-            review_protocol::PROTOCOL_VERSION,
-            status,
-            &self.cert,
-            &self.key,
-        )?;
-        builder.root_certs(&self.ca_certs)?;
-        Ok(builder)
     }
 }
 
@@ -270,7 +250,7 @@ impl Client {
     }
 
     /// Connects, retrying every `retry_interval` until a connect succeeds.
-    async fn connect(&mut self, status: Status) -> Connection {
+    async fn connect(&mut self, status: Status) -> (AgentHandle, AgentIncoming) {
         info!("Connecting to the Central Manager at {}", self.manager.addr);
         loop {
             match self.try_connect(status).await {
@@ -283,7 +263,7 @@ impl Client {
                 }
                 Err(error) => {
                     warn!(
-                        "Cannot connect to the Central Manager at {}, retrying in {:?}: {error}",
+                        "Cannot connect to the Central Manager at {}, retrying in {:?}: {error:#}",
                         self.manager.addr, self.retry_interval
                     );
                     tokio::time::sleep(self.retry_interval).await;
@@ -298,7 +278,7 @@ impl Client {
     /// with them; if they are not valid or that connect fails, the same
     /// attempt connects with the last-known-good material, and the reload
     /// stays pending.
-    async fn try_connect(&mut self, status: Status) -> io::Result<Connection> {
+    async fn try_connect(&mut self, status: Status) -> Result<(AgentHandle, AgentIncoming)> {
         if self.tls_reload.is_pending() {
             let ticket = self.tls_reload.ticket();
             match TlsMaterial::read(&self.files) {
@@ -312,12 +292,12 @@ impl Client {
                     Err(error) => {
                         warn!(
                             "Cannot connect with the reloaded TLS material, \
-                             using the last known good: {error}"
+                             using the last known good: {error:#}"
                         );
                     }
                 },
                 Err(error) => {
-                    warn!("Cannot reload the TLS material, using the last known good: {error}");
+                    warn!("Cannot reload the TLS material, using the last known good: {error:#}");
                 }
             }
         }
@@ -331,7 +311,7 @@ impl Client {
     /// return.
     async fn session<R>(
         &mut self,
-        connection: Connection,
+        connection: (AgentHandle, AgentIncoming),
         runtime: &mut R,
         applied: &mut Option<RemoteConfig>,
     ) where
@@ -340,7 +320,8 @@ impl Client {
         // Kept for the whole session, so `updates` never sees it closed.
         let (update, mut updates) = watch::channel(());
         let mut streams = JoinSet::new();
-        streams.spawn(accept_requests(connection.clone(), update.clone()));
+        let (connection, incoming) = connection;
+        streams.spawn(accept_requests(incoming, update.clone()));
 
         loop {
             // A fetch serves every `update_config` and `SIGHUP` before it
@@ -374,14 +355,45 @@ async fn connect_with(
     material: &TlsMaterial,
     manager: &Manager,
     status: Status,
-) -> io::Result<Connection> {
-    material.builder(manager, status)?.connect().await
+) -> Result<(AgentHandle, AgentIncoming)> {
+    let roots: Vec<_> = material.ca_certs.iter().map(Vec::as_slice).collect();
+    let tls = client_config_from_pem(&material.cert, &material.key, &roots)
+        .context("building Central Manager client TLS configuration")?;
+    let ip = if manager.addr.is_ipv6() {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    } else {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    };
+    let addr = SocketAddr::new(ip, 0);
+    let connector = AgentConnector::bind(
+        addr,
+        tls,
+        AgentTransportOptions::default(),
+        SessionOptions::legacy_compatible(),
+    )
+    .with_context(|| format!("binding Central Manager client to {addr}"))?;
+    let agent = AgentInfo {
+        agent_name: AGENT_NAME.to_string(),
+        agent_version: AGENT_VERSION.to_string(),
+        protocol_version: review_protocol::PROTOCOL_VERSION.to_string(),
+        status,
+        addr,
+        capabilities: BTreeSet::new(),
+        active_trust_epoch: None,
+        manifest_formats: None,
+        provisioning_fingerprint: None,
+        audit_health: None,
+    };
+    connector
+        .connect(manager.addr, &manager.server_name, &agent)
+        .await
+        .with_context(|| format!("connecting to Central Manager at {}", manager.addr))
 }
 
 /// Fetches, validates and hands off the configuration.
 ///
 /// A failed fetch or an invalid configuration keeps `applied`.
-async fn apply<R>(connection: &Connection, runtime: &mut R, applied: &mut Option<RemoteConfig>)
+async fn apply<R>(connection: &AgentHandle, runtime: &mut R, applied: &mut Option<RemoteConfig>)
 where
     R: ConfigRuntime + ?Sized,
 {
@@ -414,10 +426,10 @@ where
 /// until the connection is lost.
 ///
 /// Dropping the future aborts the tasks serving the streams.
-async fn accept_requests(connection: Connection, update: watch::Sender<()>) {
+async fn accept_requests(mut incoming: AgentIncoming, update: watch::Sender<()>) {
     let mut requests = JoinSet::new();
     loop {
-        let (mut send, mut recv) = match connection.accept_bi().await {
+        let stream = match incoming.accept().await {
             Ok(streams) => streams,
             Err(error) => {
                 warn!("Cannot accept a request from the Central Manager: {error}");
@@ -429,9 +441,8 @@ async fn accept_requests(connection: Connection, update: watch::Sender<()>) {
             update: update.clone(),
         };
         requests.spawn(async move {
-            if let Err(error) = request::handle(&mut handler, &mut send, &mut recv).await {
-                let (HandlerError::RecvError(source) | HandlerError::SendError(source)) = &error;
-                warn!("Cannot serve a request from the Central Manager: {error}: {source}");
+            if let Err(error) = stream.run(&mut handler, |_| Ok(())).await {
+                warn!("Cannot serve a request from the Central Manager: {error}");
             }
         });
     }

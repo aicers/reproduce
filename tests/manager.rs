@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use reproduce::config::remote::RemoteConfig;
 use reproduce::manager::{Client, ConfigRuntime, Manager, TlsError, TlsFiles, TlsMaterial};
 use reproduce::reload::ReloadSignal;
-use review_protocol::types::{HostNetworkGroup, Status};
+use review_protocol::types::Status;
 #[cfg(unix)]
 use support::send_signal;
 use support::{Files, Logs, Mock, Pki, SERVER_NAME, VERSION_REQ, WAIT, wait_until};
@@ -224,8 +224,8 @@ async fn configuration_stored_while_disconnected_is_applied_after_reconnect() ->
 #[tokio::test]
 async fn protocol_version_refusal_is_retried() -> Result<()> {
     let pki = Pki::new()?;
-    let mock = Mock::start(&pki)?;
-    mock.set_version_req(">=0.50.0");
+    let mut mock = Mock::start(&pki)?;
+    mock.set_version_req(">=0.55.0").await?;
     let files = Files::new(&pki, &pki.client()?)?;
     let client = Running::start(mock.addr, &files.files)?;
 
@@ -236,7 +236,7 @@ async fn protocol_version_refusal_is_retried() -> Result<()> {
         "a refusal does not end the client"
     );
 
-    mock.set_version_req(VERSION_REQ);
+    mock.set_version_req(VERSION_REQ).await?;
     wait_until("the client connects", || mock.handshakes() == 1).await;
 
     client.stop().await;
@@ -278,9 +278,9 @@ async fn other_requests_are_not_supported() -> Result<()> {
 
     let error = mock
         .connection()
-        .send_allowlist(&HostNetworkGroup::default())
+        .send_exclusion_list(&[])
         .await
-        .expect_err("allowlist is not supported");
+        .expect_err("exclusion list is not supported");
     assert!(error.to_string().contains("not supported"), "{error}");
 
     client.stop().await;
@@ -468,7 +468,7 @@ async fn shutdown_ends_an_apply_and_drops_the_connection() -> Result<()> {
     let files = Files::new(&pki, &pki.client()?)?;
     let client = Running::start(mock.addr, &files.files)?;
     wait_until("the fetch starts", || mock.get_configs() == 1).await;
-    let connection = mock.quinn_connection();
+    let connection = mock.connection();
 
     let started = Instant::now();
     client.stop().await;
@@ -615,6 +615,43 @@ fn tls_material_errors_name_the_file() -> Result<()> {
         ..files.files.clone()
     };
     assert_refused(&no_ca, &no_ca.ca_certs[1], "no certificate");
+    Ok(())
+}
+
+#[test]
+fn tls_material_rustls_rejections_name_the_file() -> Result<()> {
+    use review_protocol::session::{ClientPemError, client_config_from_pem};
+
+    let pki = Pki::new()?;
+    let identity = pki.client()?;
+    let files = Files::new(&pki, &identity)?;
+    let other = pki.client()?;
+    // Both PEM inputs parse, but rustls rejects a key that does not match.
+    assert!(matches!(
+        client_config_from_pem(
+            identity.cert.as_bytes(),
+            other.key.as_bytes(),
+            &[pki.ca.as_bytes()]
+        ),
+        Err(ClientPemError::Rustls(_))
+    ));
+    std::fs::write(&files.files.key, &other.key)?;
+    assert_refused(&files.files, &files.files.cert, "invalid certificate file");
+
+    // A PEM certificate with invalid DER passes the per-file PEM check.
+    files.write_identity(&identity)?;
+    let malformed = b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+    assert!(matches!(
+        client_config_from_pem(
+            identity.cert.as_bytes(),
+            identity.key.as_bytes(),
+            &[malformed]
+        ),
+        Err(ClientPemError::Rustls(_))
+    ));
+    let ca = files.files.ca_certs.first().context("a CA file")?;
+    std::fs::write(ca, malformed)?;
+    assert_refused(&files.files, ca, "invalid CA certificate file");
     Ok(())
 }
 
