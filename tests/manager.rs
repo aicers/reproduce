@@ -7,7 +7,7 @@
 
 mod support;
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,7 +21,7 @@ use review_protocol::types::Status;
 #[cfg(unix)]
 use support::send_signal;
 use support::{Files, Logs, Mock, Pki, SERVER_NAME, VERSION_REQ, WAIT, wait_until};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
 
@@ -288,6 +288,99 @@ async fn other_requests_are_not_supported() -> Result<()> {
 }
 
 #[tokio::test]
+async fn node_requests_are_not_supported() -> Result<()> {
+    use review_protocol::session::SessionError;
+    use review_protocol::types::node::NodeHostnameRequest;
+
+    let pki = Pki::new()?;
+    let mock = Mock::start(&pki)?;
+    let files = Files::new(&pki, &pki.client()?)?;
+    let client = Running::start(mock.addr, &files.files)?;
+    wait_until("the configuration is fetched", || mock.get_configs() == 1).await;
+
+    let error = timeout(
+        WAIT,
+        mock.connection().node_hostname(NodeHostnameRequest::Get),
+    )
+    .await?
+    .expect_err("node requests are not supported");
+    assert!(
+        matches!(error, SessionError::RemoteRejection(ref reason) if reason.contains("not supported")),
+        "{error}"
+    );
+
+    // Refusing a node command leaves the session able to serve updates.
+    mock.set_config(Some(CONFIG));
+    mock.send_update().await?;
+    wait_until("the configuration is applied after reconnect", || {
+        client.handoffs().len() == 2
+    })
+    .await;
+    client.stop().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ipv6_manager_connects_with_legacy_agent_claims() -> Result<()> {
+    let pki = Pki::new()?;
+    let mut mock = Mock::start(&pki)?;
+    mock.stop().await;
+    mock.addr = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
+    mock.restart()?;
+    let files = Files::new(&pki, &pki.client()?)?;
+    let client = Running::start(mock.addr, &files.files)?;
+    wait_until("the configuration is fetched over IPv6", || {
+        mock.get_configs() == 1
+    })
+    .await;
+    {
+        let handshakes = mock.state.handshakes.lock().expect("lock");
+        let info = &handshakes.first().expect("an accepted handshake").info;
+        // The Manager replaces the advertised bind address with the peer address.
+        assert_eq!(info.addr.ip(), Ipv6Addr::LOCALHOST);
+        assert_eq!(info.agent_name, "reproduce");
+        assert_eq!(info.agent_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(info.protocol_version, review_protocol::PROTOCOL_VERSION);
+        assert_eq!(info.status, Status::Idle);
+        assert!(info.capabilities.is_empty());
+        assert!(info.active_trust_epoch.is_none());
+        assert!(info.manifest_formats.is_none());
+        assert!(info.provisioning_fingerprint.is_none());
+        assert!(info.audit_health.is_none());
+    }
+    client.stop().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_fetch_keeps_the_applied_configuration() -> Result<()> {
+    let (logs, _guard) = Logs::capture();
+    let (_pki, mock, _files, client) = start_applied(CONFIG).await?;
+    mock.set_config(None);
+    mock.send_update().await?;
+    wait_until("the failed fetch is logged", || {
+        logs.text().contains(
+            "Cannot fetch the configuration from the Central Manager, keeping the applied configuration",
+        )
+    })
+    .await;
+    assert_eq!(client.handoffs(), [parsed(CONFIG), parsed(CONFIG)]);
+
+    // A failed fetch must not clear the configuration used to choose status.
+    mock.drop_connection();
+    wait_until("the client reconnects ready", || mock.handshakes() == 3).await;
+    assert_eq!(mock.statuses().last(), Some(&Status::Ready));
+    mock.set_config(Some(OTHER_CONFIG));
+    mock.send_update().await?;
+    wait_until("a later valid configuration is handed off", || {
+        client.handoffs().contains(&parsed(OTHER_CONFIG))
+    })
+    .await;
+    client.stop().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_configuration_keeps_the_applied_one() -> Result<()> {
     let (logs, _guard) = Logs::capture();
     let (_pki, mock, _files, client) = start_applied(CONFIG).await?;
@@ -476,6 +569,59 @@ async fn shutdown_ends_an_apply_and_drops_the_connection() -> Result<()> {
     timeout(WAIT, connection.closed())
         .await
         .expect("the client drops the connection");
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_cancels_the_runtime_apply() -> Result<()> {
+    struct BlockingRuntime {
+        entered: Option<oneshot::Sender<oneshot::Receiver<()>>>,
+    }
+
+    #[async_trait]
+    impl ConfigRuntime for BlockingRuntime {
+        async fn apply(&mut self, _config: RemoteConfig) {
+            let (in_progress, dropped) = oneshot::channel::<()>();
+            self.entered
+                .take()
+                .expect("only the first apply is reached")
+                .send(dropped)
+                .expect("the test waits for apply to start");
+            let _in_progress = in_progress;
+            std::future::pending::<()>().await;
+        }
+    }
+
+    let pki = Pki::new()?;
+    let mock = Mock::start(&pki)?;
+    mock.set_config(Some(CONFIG));
+    let files = Files::new(&pki, &pki.client()?)?;
+    let signal = ReloadSignal::new();
+    let client = Client::new(
+        Manager {
+            server_name: SERVER_NAME.to_string(),
+            addr: mock.addr,
+        },
+        files.files.clone(),
+        TlsMaterial::read(&files.files)?,
+        signal.subscribe(),
+        signal.subscribe(),
+    );
+    let (entered, started) = oneshot::channel();
+    let mut runtime = BlockingRuntime {
+        entered: Some(entered),
+    };
+    let (shutdown, receiver) = watch::channel(false);
+    let task = tokio::spawn(async move { client.run(&mut runtime, receiver).await });
+    let dropped = timeout(WAIT, started).await??;
+    let connection = mock.connection();
+
+    let started = Instant::now();
+    shutdown.send(true)?;
+    timeout(WAIT, task).await??;
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(timeout(WAIT, dropped).await?.is_err(), "apply was dropped");
+    timeout(WAIT, connection.closed()).await?;
     Ok(())
 }
 
