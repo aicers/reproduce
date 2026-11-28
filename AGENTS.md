@@ -579,7 +579,7 @@ Where the crate handles key material or secrets:
   client `build_short_idle_client_endpoint` in `src/sender.rs`, use
   `rustls`'s stock builders over fixture or `rcgen` certificates:
   `with_no_client_auth`, or `WebPkiClientVerifier` where a test needs
-  mutual TLS (in `src/sender.rs` and `server_config_trusting` in
+  mutual TLS (in `src/sender.rs` and `tls_config_trusting` in
   `tests/support/mod.rs`). Tests keep stock verifiers, with no hand-written
   verifier and no `dangerous()`.
 - Do not verify anywhere else. A new verification path (a

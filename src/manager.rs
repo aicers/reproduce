@@ -384,10 +384,9 @@ async fn connect_with(
         provisioning_fingerprint: None,
         audit_health: None,
     };
-    connector
+    Ok(connector
         .connect(manager.addr, &manager.server_name, &agent)
-        .await
-        .with_context(|| format!("connecting to Central Manager at {}", manager.addr))
+        .await?)
 }
 
 /// Fetches, validates and hands off the configuration.
