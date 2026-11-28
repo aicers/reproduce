@@ -30,7 +30,7 @@ pub const SERVER_NAME: &str = "localhost";
 
 /// The versions `REview` 0.61.0 accepts.
 pub const VERSION_REQ: &str = ">=0.48.0";
-pub const HIGHEST_PROTOCOL_VERSION: &str = "0.49.0";
+pub const HIGHEST_PROTOCOL_VERSION: &str = review_protocol::PROTOCOL_VERSION;
 
 #[allow(dead_code)]
 pub const WAIT: Duration = Duration::from_secs(10);

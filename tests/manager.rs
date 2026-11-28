@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use reproduce::config::remote::RemoteConfig;
 use reproduce::manager::{Client, ConfigRuntime, Manager, TlsError, TlsFiles, TlsMaterial};
 use reproduce::reload::ReloadSignal;
-use review_protocol::types::{HostNetworkGroup, Status};
+use review_protocol::types::Status;
 #[cfg(unix)]
 use support::send_signal;
 use support::{Files, Logs, Mock, Pki, SERVER_NAME, VERSION_REQ, WAIT, wait_until};
@@ -225,7 +225,7 @@ async fn configuration_stored_while_disconnected_is_applied_after_reconnect() ->
 async fn protocol_version_refusal_is_retried() -> Result<()> {
     let pki = Pki::new()?;
     let mock = Mock::start(&pki)?;
-    mock.set_version_req(">=0.50.0");
+    mock.set_version_req(">=0.51.0");
     let files = Files::new(&pki, &pki.client()?)?;
     let client = Running::start(mock.addr, &files.files)?;
 
@@ -278,7 +278,7 @@ async fn other_requests_are_not_supported() -> Result<()> {
 
     let error = mock
         .connection()
-        .send_allowlist(&HostNetworkGroup::default())
+        .send_allowlist(&[])
         .await
         .expect_err("allowlist is not supported");
     assert!(error.to_string().contains("not supported"), "{error}");
