@@ -4,6 +4,23 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0](https://github.com/aicers/reproduce/compare/0.29.0...0.30.0) - 2026-11-28
+
+### Added
+
+- [**breaking**] send and import the Http request header fields ([#1115](https://github.com/aicers/reproduce/pull/1115))
+
+### Fixed
+
+- [**breaking**] announce version 0.39.0 so Giganto 0.39.0 accepts the connection ([#1114](https://github.com/aicers/reproduce/pull/1114))
+
+### Other
+
+- *(deps)* update Cargo.lock before the 0.30.0 release ([#1125](https://github.com/aicers/reproduce/pull/1125))
+- *(dependabot)* exclude git-tag dependencies from the cooldown ([#1118](https://github.com/aicers/reproduce/pull/1118))
+- refresh the apt index before installing packages ([#1120](https://github.com/aicers/reproduce/pull/1120))
+- *(deps)* [**breaking**] send Sysmon records in the endpoint-header format with no header ([#1109](https://github.com/aicers/reproduce/pull/1109))
+
 ## [0.29.0](https://github.com/aicers/reproduce/compare/0.28.4...0.29.0) - 2026-11-24
 
 ### Added
