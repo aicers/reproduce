@@ -356,14 +356,22 @@ async fn ipv6_manager_connects_with_legacy_agent_claims() -> Result<()> {
 async fn failed_fetch_keeps_the_applied_configuration() -> Result<()> {
     let (logs, _guard) = Logs::capture();
     let (_pki, mock, _files, client) = start_applied(CONFIG).await?;
+    let fetched = mock.get_configs();
     mock.set_config(None);
     mock.send_update().await?;
-    wait_until("the failed fetch is logged", || {
-        logs.text().contains(
-            "Cannot fetch the configuration from the Central Manager, keeping the applied configuration",
-        )
+    wait_until("the failed configuration is fetched", || {
+        mock.get_configs() == fetched + 1
     })
     .await;
+    timeout(WAIT, async {
+        while !logs.text().contains(
+            "Cannot fetch the configuration from the Central Manager, keeping the applied configuration",
+        ) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .with_context(|| format!("waiting for the failed fetch log; captured logs:\n{}", logs.text()))?;
     assert_eq!(client.handoffs(), [parsed(CONFIG), parsed(CONFIG)]);
 
     // A failed fetch must not clear the configuration used to choose status.
