@@ -2919,7 +2919,9 @@ mod journal {
 
     /// The bytes process `pid` has written.
     fn written(pid: u32) -> Result<u64> {
-        let io = std::fs::read_to_string(format!("/proc/{pid}/io"))?;
+        let path = format!("/proc/{pid}/io");
+        let io = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading journalctl I/O counters from {path}"))?;
         io.lines()
             .find_map(|line| line.strip_prefix("wchar: "))
             .context("a wchar line")?
