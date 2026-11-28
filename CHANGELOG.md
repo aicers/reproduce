@@ -4,6 +4,12 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0](https://github.com/aicers/reproduce/compare/0.30.0...0.31.0) - 2026-11-28
+
+### Added
+
+- [**breaking**] announce protocol 0.54.0 to the Central Manager ([#1123](https://github.com/aicers/reproduce/pull/1123))
+
 ## [0.30.0](https://github.com/aicers/reproduce/compare/0.29.0...0.30.0) - 2026-11-28
 
 ### Added
